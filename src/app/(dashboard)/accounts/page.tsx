@@ -129,7 +129,7 @@ export default function AccountsPage() {
     try {
       const [proxyRes, accountRes, warmupRes] = await Promise.all([
         fetch("/api/proxy-groups").then(r => r.json()),
-        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get_accounts" }) }).then(r => r.json()),
+        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get_accounts", limit: 1000 }) }).then(r => r.json()),
         fetch("/api/warmup").then(r => r.json()),
       ])
       setProxies(proxyRes.data || [])
