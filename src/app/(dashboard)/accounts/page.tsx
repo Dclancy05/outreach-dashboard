@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { motion, AnimatePresence } from "framer-motion"
@@ -17,12 +18,14 @@ import {
   Server, ChevronDown, ChevronUp, Settings, Zap, Calendar,
   Activity, RefreshCw, Trash2, Edit2, ExternalLink, MapPin, Sparkles,
   Monitor, Layers, Pencil, Check, X, Eye, Link2, CheckCircle2, AlertTriangle,
-  ArrowRight,
+  ArrowRight, Info,
 } from "lucide-react"
 import { ALL_PLATFORMS, SOCIAL_PLATFORMS, getPlatform } from "@/lib/platforms"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import VncLoginFlow from "@/components/vnc-login-flow"
+import AccountDetailDialog from "@/components/account-detail-dialog"
+import BulkImportDialog from "@/components/bulk-import-dialog"
 
 // ── Animation variants ──────────────────────────────────────────────
 
@@ -36,6 +39,7 @@ interface ProxyGroup {
   location_city: string; location_state: string; location_country: string;
   status: string; monthly_cost: number; health_check_at: string; business_id: string;
   name: string;
+  is_dummy?: boolean;
 }
 
 interface Account {
@@ -82,6 +86,189 @@ function PulseDot({ color }: { color: string }) {
   )
 }
 
+// Number input that allows temporary empty state while editing — no auto-jump on backspace.
+// Falls back to `fallback` only on blur if left empty.
+function NumberField({
+  value, onChange, fallback, min, className, placeholder,
+}: {
+  value: number
+  onChange: (n: number) => void
+  fallback: number
+  min?: number
+  className?: string
+  placeholder?: string
+}) {
+  const [local, setLocal] = useState<string>(String(value))
+  const lastExternal = useRef<number>(value)
+  useEffect(() => {
+    if (value !== lastExternal.current) {
+      lastExternal.current = value
+      setLocal(String(value))
+    }
+  }, [value])
+  return (
+    <Input
+      type="number"
+      min={min}
+      placeholder={placeholder}
+      className={className}
+      value={local}
+      onChange={(e) => {
+        const v = e.target.value
+        setLocal(v)
+        if (v === "" || v === "-") return
+        const n = parseInt(v)
+        if (!isNaN(n)) {
+          lastExternal.current = n
+          onChange(n)
+        }
+      }}
+      onBlur={() => {
+        if (local === "" || isNaN(parseInt(local))) {
+          setLocal(String(fallback))
+          lastExternal.current = fallback
+          onChange(fallback)
+        }
+      }}
+    />
+  )
+}
+
+// Redesigned ramp preview — stepped area with gridlines, axis labels, stat pills.
+function RampChart({
+  steps, currentDay,
+}: {
+  steps: { day_start: number; day_end: number; daily_limit: number }[]
+  currentDay?: number
+}) {
+  const finiteSteps = steps.filter(s => s.day_end !== 999)
+  const totalDays = Math.max(1, finiteSteps.reduce((m, s) => Math.max(m, s.day_end), 0))
+  const maxLimit = Math.max(1, ...steps.map(s => s.daily_limit))
+  const finalLimit = steps[steps.length - 1]?.daily_limit || 0
+  const totalSends = finiteSteps.reduce(
+    (sum, s) => sum + Math.max(0, s.day_end - s.day_start + 1) * s.daily_limit, 0
+  )
+
+  const W = 400
+  const H = 130
+  const padL = 30
+  const padR = 14
+  const padT = 10
+  const padB = 22
+  const plotW = W - padL - padR
+  const plotH = H - padT - padB
+  const bottom = padT + plotH
+
+  const xScale = (day: number) => padL + ((day - 1) / totalDays) * plotW
+  const yScale = (limit: number) => padT + plotH - (limit / maxLimit) * plotH
+
+  const areaPath: string[] = []
+  const linePoints: string[] = []
+  if (finiteSteps.length > 0) {
+    const first = finiteSteps[0]
+    areaPath.push(`M ${xScale(first.day_start)} ${bottom}`)
+    areaPath.push(`L ${xScale(first.day_start)} ${yScale(first.daily_limit)}`)
+    linePoints.push(`${xScale(first.day_start)},${yScale(first.daily_limit)}`)
+    for (let i = 0; i < finiteSteps.length; i++) {
+      const s = finiteSteps[i]
+      areaPath.push(`L ${xScale(s.day_end + 1)} ${yScale(s.daily_limit)}`)
+      linePoints.push(`${xScale(s.day_end + 1)},${yScale(s.daily_limit)}`)
+      const next = finiteSteps[i + 1]
+      if (next) {
+        areaPath.push(`L ${xScale(next.day_start)} ${yScale(next.daily_limit)}`)
+        linePoints.push(`${xScale(next.day_start)},${yScale(next.daily_limit)}`)
+      }
+    }
+    const last = finiteSteps[finiteSteps.length - 1]
+    areaPath.push(`L ${xScale(last.day_end + 1)} ${bottom}`)
+    areaPath.push("Z")
+  }
+
+  const gridValues = [0.25, 0.5, 0.75]
+  const currentLimit = currentDay !== undefined
+    ? (steps.find(s => currentDay >= s.day_start && currentDay <= s.day_end)?.daily_limit ?? finalLimit)
+    : undefined
+
+  return (
+    <div className="rounded-2xl bg-gradient-to-b from-orange-500/5 to-transparent border border-border/40 p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <Label className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Ramp Preview</Label>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-muted/40 text-foreground/80 border border-border/40 font-medium">
+            {totalDays}d
+          </span>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-300 border border-orange-500/30 font-medium">
+            Final {finalLimit}/d
+          </span>
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 font-medium">
+            {totalSends.toLocaleString()} sends
+          </span>
+        </div>
+      </div>
+
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: H }} preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="rampFillV2" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#fb923c" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#fb923c" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {gridValues.map((g, i) => {
+          const y = padT + plotH - g * plotH
+          return (
+            <line key={i} x1={padL} y1={y} x2={W - padR} y2={y}
+              stroke="currentColor" strokeWidth="0.5" className="text-border/40" strokeDasharray="2,3" />
+          )
+        })}
+        <line x1={padL} y1={bottom} x2={W - padR} y2={bottom}
+          stroke="currentColor" strokeWidth="0.5" className="text-border/60" />
+
+        <text x={padL - 6} y={padT} textAnchor="end" fontSize="9" dominantBaseline="middle"
+          className="fill-muted-foreground/70">{maxLimit}</text>
+        <text x={padL - 6} y={padT + plotH / 2} textAnchor="end" fontSize="9" dominantBaseline="middle"
+          className="fill-muted-foreground/40">{Math.round(maxLimit / 2)}</text>
+        <text x={padL - 6} y={bottom} textAnchor="end" fontSize="9" dominantBaseline="middle"
+          className="fill-muted-foreground/70">0</text>
+
+        {areaPath.length > 0 && <path d={areaPath.join(" ")} fill="url(#rampFillV2)" />}
+        {linePoints.length > 0 && (
+          <polyline fill="none" stroke="#fb923c" strokeWidth="1.75" strokeLinejoin="round" strokeLinecap="round"
+            points={linePoints.join(" ")} />
+        )}
+
+        {finiteSteps.map((s, i) => {
+          const x = (xScale(s.day_start) + xScale(s.day_end + 1)) / 2
+          const y = yScale(s.daily_limit) - 4
+          return (
+            <text key={i} x={x} y={y} textAnchor="middle" fontSize="9"
+              className="fill-orange-300" fontWeight="600">{s.daily_limit}</text>
+          )
+        })}
+
+        {finiteSteps.map((s, i) => (
+          <text key={i} x={xScale(s.day_start)} y={H - 6} textAnchor="middle" fontSize="8"
+            className="fill-muted-foreground/70">d{s.day_start}</text>
+        ))}
+        {finiteSteps.length > 0 && (
+          <text x={xScale(totalDays + 1)} y={H - 6} textAnchor="middle" fontSize="8"
+            className="fill-muted-foreground/70">d{totalDays + 1}</text>
+        )}
+
+        {currentDay !== undefined && currentLimit !== undefined && currentDay >= 1 && currentDay <= totalDays && (
+          <g>
+            <line x1={xScale(currentDay)} y1={padT} x2={xScale(currentDay)} y2={bottom}
+              stroke="#ef4444" strokeWidth="1" strokeDasharray="3,2" opacity="0.7" />
+            <circle cx={xScale(currentDay)} cy={yScale(currentLimit)} r="3.5" fill="#ef4444" stroke="#0a0a0a" strokeWidth="1.5" />
+            <text x={xScale(currentDay)} y={padT - 3} textAnchor="middle" fontSize="8" fontWeight="600"
+              className="fill-red-400">Day {currentDay}</text>
+          </g>
+        )}
+      </svg>
+    </div>
+  )
+}
+
 function HealthRing({ score, size = 36 }: { score: number; size?: number }) {
   const radius = (size - 6) / 2
   const circumference = 2 * Math.PI * radius
@@ -111,8 +298,46 @@ export default function AccountsPage() {
   const [editingName, setEditingName] = useState<string | null>(null)
   const [editNameValue, setEditNameValue] = useState("")
   const [proxyForm, setProxyForm] = useState({ provider: "", ip: "", port: "", username: "", password: "", location_city: "", location_state: "", location_country: "US", monthly_cost: "" })
-  const [accountForm, setAccountForm] = useState({ platform: "instagram", username: "", display_name: "", connection_type: "novnc", daily_limit: "40", proxy_group_id: "" })
+  const [accountForm, setAccountForm] = useState({
+    platform: "instagram",
+    username: "",
+    display_name: "",
+    password: "",
+    tfa_codes: "",
+    email: "",
+    email_username: "",
+    email_password: "",
+    connection_type: "novnc",
+    daily_limit: "40",
+    warmup_sequence_id: "",
+    proxy_group_id: "",
+  })
+  const [limitMode, setLimitMode] = useState<"daily" | "warmup">("daily")
+  const [activeTab, setActiveTab] = useState("groups")
   const [warmupForm, setWarmupForm] = useState({ name: "", platform: "", steps: [{ day_start: 1, day_end: 5, daily_limit: 5 }, { day_start: 6, day_end: 10, daily_limit: 10 }, { day_start: 11, day_end: 20, daily_limit: 20 }, { day_start: 21, day_end: 999, daily_limit: 40 }] })
+  const [editingWarmupId, setEditingWarmupId] = useState<string | null>(null)
+  const [warmupAccountsFor, setWarmupAccountsFor] = useState<WarmupSequence | null>(null)
+  const [shiftDays, setShiftDays] = useState("0")
+  const [scalePct, setScalePct] = useState("0")
+  const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set())
+  const [quickFill, setQuickFill] = useState({ days: 3, start: 5, inc: 1, max: 30 })
+  const [showQuickFillHelp, setShowQuickFillHelp] = useState(false)
+  function applyQuickFill(daysPerStep: number, start: number, increment: number, max: number) {
+    const d = Math.max(1, daysPerStep)
+    const s = Math.max(1, start)
+    const inc = Math.max(1, increment)
+    const m = Math.max(s, max)
+    const stepCount = Math.max(1, Math.floor((m - s) / inc) + 1)
+    const steps: { day_start: number; day_end: number; daily_limit: number }[] = []
+    for (let i = 0; i < stepCount; i++) {
+      const day_start = i * d + 1
+      const day_end = (i + 1) * d
+      const daily_limit = Math.min(m, s + inc * i)
+      steps.push({ day_start, day_end, daily_limit })
+    }
+    steps.push({ day_start: stepCount * d + 1, day_end: 999, daily_limit: m })
+    setWarmupForm(f => ({ ...f, steps }))
+  }
   const [vncFlowOpen, setVncFlowOpen] = useState(false)
   const [vncProxyGroupId, setVncProxyGroupId] = useState("")
   const [vncProxyIp, setVncProxyIp] = useState("")
@@ -122,6 +347,10 @@ export default function AccountsPage() {
   const [editingGroupName, setEditingGroupName] = useState("")
   const [showEditProxyDialog, setShowEditProxyDialog] = useState(false)
   const [editProxyForm, setEditProxyForm] = useState({ id: "", provider: "", ip: "", port: "", username: "", password: "", location_city: "", location_state: "", location_country: "US", monthly_cost: "" })
+  const [detailAccountId, setDetailAccountId] = useState<string | null>(null)
+  const [showBulkImport, setShowBulkImport] = useState(false)
+  const [testingProxyId, setTestingProxyId] = useState<string | null>(null)
+  const [proxyTestResults, setProxyTestResults] = useState<Record<string, { ok: boolean; ip?: string; country?: string; city?: string; latency_ms?: number; error?: string }>>({})
   const router = useRouter()
 
   const fetchAll = useCallback(async () => {
@@ -163,6 +392,49 @@ export default function AccountsPage() {
     })
     if (res.ok) { toast.success("Group renamed"); setEditingGroupId(null); fetchAll() }
     else toast.error("Failed to rename group")
+  }
+
+  async function toggleDummy(id: string, nextVal: boolean) {
+    // Optimistic update so the badge/switch flips instantly and only one group shows as dummy.
+    setProxies(prev => prev.map(p => ({ ...p, is_dummy: p.id === id ? nextVal : (nextVal ? false : p.is_dummy) })))
+    const res = await fetch("/api/proxy-groups", {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, is_dummy: nextVal }),
+    })
+    if (res.ok) {
+      toast.success(nextVal ? "Marked as dummy group" : "Removed dummy flag")
+      fetchAll()
+    } else {
+      toast.error("Failed to update dummy flag")
+      fetchAll()
+    }
+  }
+
+  async function testProxy(id: string) {
+    setTestingProxyId(id)
+    setProxyTestResults(prev => { const next = { ...prev }; delete next[id]; return next })
+    try {
+      const res = await fetch("/api/proxy-groups/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      })
+      const j = await res.json()
+      if (j.ok) {
+        const d = j.data || {}
+        setProxyTestResults(prev => ({ ...prev, [id]: { ok: true, ip: d.ip, country: d.country, city: d.city, latency_ms: j.latency_ms } }))
+        toast.success(`Proxy OK — ${d.ip || "unknown"} (${d.city || ""}${d.country ? ", " + d.country : ""})`)
+      } else {
+        setProxyTestResults(prev => ({ ...prev, [id]: { ok: false, error: j.error, latency_ms: j.latency_ms } }))
+        toast.error(`Proxy failed: ${j.error}`)
+      }
+    } catch (e: any) {
+      setProxyTestResults(prev => ({ ...prev, [id]: { ok: false, error: e.message } }))
+      toast.error("Test failed")
+    } finally {
+      setTestingProxyId(null)
+      fetchAll()
+    }
   }
 
   async function deleteGroup(id: string) {
@@ -228,14 +500,55 @@ export default function AccountsPage() {
   }
 
   async function createAccount() {
-    if (accountForm.proxy_group_id && !canAssignProxy(accountForm.proxy_group_id, accountForm.platform)) {
-      toast.error(`This proxy already has a ${accountForm.platform} account. Each proxy can only have one account per platform.`)
+    const platform = accountForm.platform
+    if (!platform) {
+      toast.error("Pick a platform")
       return
     }
-    const accountId = `${accountForm.platform}_${Date.now().toString(36)}`
-    await fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "update_account", account_id: accountId, ...accountForm, status: "pending_setup", sends_today: "0", business_id: "default" }) })
-    toast.success("Account added — set it up via noVNC to activate"); setShowAccountForm(false); setAccountForm({ platform: "instagram", username: "", display_name: "", connection_type: "novnc", daily_limit: "40", proxy_group_id: "" }); fetchAll()
+    if (accountForm.proxy_group_id && !canAssignProxy(accountForm.proxy_group_id, platform)) {
+      toast.error(`This proxy already has a ${platform} account. Each proxy can only hold one account per platform.`)
+      return
+    }
+    const username = accountForm.username.replace(/^@/, "").toLowerCase()
+    if (username) {
+      const dup = accounts.find(a => a.platform === platform && (a.username || "").toLowerCase() === username)
+      if (dup) {
+        toast.error(`@${username} already exists on ${platform}`)
+        return
+      }
+    }
+
+    const accountId = `${platform}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`
+    const payload = {
+      action: "update_account",
+      account_id: accountId,
+      ...accountForm,
+      daily_limit: limitMode === "daily" ? (accountForm.daily_limit || "40") : "",
+      warmup_sequence_id: limitMode === "warmup" ? accountForm.warmup_sequence_id : "",
+      warmup_day: limitMode === "warmup" && accountForm.warmup_sequence_id ? 1 : 0,
+      status: "pending_setup",
+      sends_today: "0",
+      business_id: "default",
+    }
+    const res = await fetch("/api/dashboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok || json?.success === false) {
+      toast.error(`Failed to add account — ${json?.error || "failed"}`)
+      return
+    }
+    toast.success("Account added — set it up via noVNC to activate")
+    setShowAccountForm(false)
+    setAccountForm({
+      platform: "instagram", username: "", display_name: "",
+      password: "", tfa_codes: "", email: "", email_username: "", email_password: "",
+      connection_type: "novnc", daily_limit: "40", warmup_sequence_id: "", proxy_group_id: "",
+    })
+    setLimitMode("daily")
+    fetchAll()
   }
 
   async function assignProxy(accountId: string, proxyGroupId: string) {
@@ -258,15 +571,82 @@ export default function AccountsPage() {
   }
 
   async function createWarmup() {
+    if (editingWarmupId) {
+      const res = await fetch("/api/warmup", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update", id: editingWarmupId, ...warmupForm }) })
+      if (res.ok) { toast.success("Warmup sequence updated"); closeWarmupDialog(); fetchAll() }
+      return
+    }
     const res = await fetch("/api/warmup", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "create", ...warmupForm }) })
-    if (res.ok) { toast.success("Warmup sequence created"); setShowWarmupForm(false); fetchAll() }
+    if (res.ok) { toast.success("Warmup sequence created"); closeWarmupDialog(); fetchAll() }
+  }
+
+  function closeWarmupDialog() {
+    setShowWarmupForm(false)
+    setEditingWarmupId(null)
+    setShiftDays("0")
+    setScalePct("0")
+  }
+
+  function startEditWarmup(w: WarmupSequence) {
+    setEditingWarmupId(w.id)
+    setWarmupForm({ name: w.name || "", platform: w.platform || "", steps: (w.steps || []).map(s => ({ ...s })) })
+    setShowWarmupForm(true)
+  }
+
+  async function duplicateWarmup(w: WarmupSequence) {
+    await fetch("/api/warmup", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create", name: `${w.name || "Sequence"} (copy)`, platform: w.platform || "", steps: w.steps || [] }) })
+    toast.success("Duplicated"); fetchAll()
+  }
+
+  function applyShift(days: number) {
+    if (!days) return
+    setWarmupForm(f => ({
+      ...f,
+      steps: f.steps.map(s => ({
+        ...s,
+        day_start: Math.max(1, s.day_start + days),
+        day_end: s.day_end === 999 ? 999 : Math.max(s.day_start + days, s.day_end + days),
+      })),
+    }))
+  }
+
+  function applyScale(pct: number) {
+    if (!pct) return
+    const factor = 1 + pct / 100
+    setWarmupForm(f => ({
+      ...f,
+      steps: f.steps.map(s => ({ ...s, daily_limit: Math.max(1, Math.round(s.daily_limit * factor)) })),
+    }))
   }
 
   async function deleteWarmup(id: string) {
     if (!confirm("Delete this warmup sequence?")) return
     await fetch("/api/warmup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "delete", id }) })
     toast.success("Warmup deleted"); fetchAll()
+  }
+
+  async function bulkPauseAccounts(pause: boolean) {
+    const ids = Array.from(selectedAccounts)
+    if (ids.length === 0) return
+    const newStatus = pause ? "paused" : "warming"
+    await Promise.all(ids.map(id =>
+      fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update_account", account_id: id, status: newStatus }) })
+    ))
+    toast.success(`${ids.length} account${ids.length === 1 ? "" : "s"} ${pause ? "paused" : "resumed"}`)
+    setSelectedAccounts(new Set())
+    fetchAll()
+  }
+
+  function toggleSelectAccount(id: string) {
+    setSelectedAccounts(s => {
+      const next = new Set(s)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
   }
 
   const grouped = accounts.reduce<Record<string, Account[]>>((acc, a) => {
@@ -316,7 +696,7 @@ export default function AccountsPage() {
         </div>
       </motion.div>
 
-      <Tabs defaultValue="groups">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="flex gap-1 p-1 rounded-xl bg-muted/30 backdrop-blur-sm w-fit">
           <TabsList className="bg-transparent p-0 h-auto">
             <TabsTrigger value="groups" className="gap-1.5 rounded-lg px-4 py-2 text-sm font-medium data-[state=active]:bg-card data-[state=active]:shadow-sm data-[state=active]:text-foreground text-muted-foreground hover:text-foreground transition-all"><Layers className="h-4 w-4" /> Groups</TabsTrigger>
@@ -391,6 +771,9 @@ export default function AccountsPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
+                          {proxy.is_dummy && (
+                            <Badge className="text-[10px] tracking-wide bg-violet-500/20 text-violet-300 border-violet-500/30">DUMMY</Badge>
+                          )}
                           {groupStatus === "active" && (
                             <Badge className="text-xs bg-green-500/20 text-green-400 border-green-500/30 gap-1">
                               <CheckCircle2 className="h-3 w-3" /> Active
@@ -404,6 +787,29 @@ export default function AccountsPage() {
                           {groupStatus === "empty" && (
                             <Badge className="text-xs bg-muted/30 text-muted-foreground border-border/50">No Accounts</Badge>
                           )}
+                          {proxyTestResults[proxy.id] && (
+                            proxyTestResults[proxy.id].ok ? (
+                              <Badge className="text-[10px] bg-emerald-500/20 text-emerald-300 border-emerald-500/30 gap-1">
+                                <CheckCircle2 className="h-3 w-3" />
+                                {proxyTestResults[proxy.id].ip || "OK"}
+                                {proxyTestResults[proxy.id].latency_ms ? ` · ${proxyTestResults[proxy.id].latency_ms}ms` : ""}
+                              </Badge>
+                            ) : (
+                              <Badge className="text-[10px] bg-red-500/20 text-red-300 border-red-500/30 gap-1">
+                                <AlertTriangle className="h-3 w-3" /> Failed
+                              </Badge>
+                            )
+                          )}
+                          <button
+                            onClick={() => testProxy(proxy.id)}
+                            disabled={testingProxyId === proxy.id}
+                            className="text-muted-foreground hover:text-emerald-400 transition-colors p-1 rounded-lg hover:bg-emerald-500/10 disabled:opacity-50"
+                            title="Test proxy — sends a live request and reports the returned IP/geo"
+                          >
+                            {testingProxyId === proxy.id
+                              ? <RefreshCw className="h-4 w-4 animate-spin" />
+                              : <Activity className="h-4 w-4" />}
+                          </button>
                           <button
                             onClick={() => openEditProxy(proxy)}
                             className="text-muted-foreground hover:text-blue-400 transition-colors p-1 rounded-lg hover:bg-blue-500/10"
@@ -421,6 +827,14 @@ export default function AccountsPage() {
                           <PulseDot color={health === "green" ? "bg-green-500" : health === "yellow" ? "bg-amber-500" : "bg-zinc-500"} />
                         </div>
                       </div>
+                      <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                        <Switch
+                          checked={!!proxy.is_dummy}
+                          onCheckedChange={(v) => toggleDummy(proxy.id, !!v)}
+                          aria-label="Dummy group toggle"
+                        />
+                        <span>Dummy group (used only for automations)</span>
+                      </div>
                     </div>
 
                     <div className="p-4 space-y-3">
@@ -433,13 +847,21 @@ export default function AccountsPage() {
                               const warmupLimit = ws ? getWarmupLimit(ws, a.warmup_day || 0) : parseInt(a.daily_limit || "40")
                               const isActive = a.status === "active"
                               return (
-                                <div key={a.account_id} className={cn("rounded-xl border border-border/40 p-3 space-y-2 bg-card/40", platformBorders[a.platform] || "border-l-muted", "border-l-4")}>
+                                <div
+                                  key={a.account_id}
+                                  className={cn("rounded-xl border border-border/40 p-3 space-y-2 bg-card/40 cursor-pointer hover:bg-card/60 hover:border-border transition-all", platformBorders[a.platform] || "border-l-muted", "border-l-4")}
+                                  onClick={() => setDetailAccountId(a.account_id)}
+                                  title="Click for full details"
+                                >
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                       <Icon className={cn("h-4 w-4", platformColors[a.platform])} />
                                       <span className="text-sm font-medium text-foreground">@{a.username || a.display_name || a.account_id}</span>
+                                      {(a as any).session_cookie && <CheckCircle2 className="h-3 w-3 text-green-400 shrink-0" />}
+                                      {(a as any).twofa_secret && <Shield className="h-3 w-3 text-violet-400 shrink-0" />}
+                                      {(a.status === "banned" || a.status === "flagged") && <AlertTriangle className="h-3 w-3 text-red-400 shrink-0" />}
                                     </div>
-                                    <div className="flex items-center gap-1.5">
+                                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
                                       <Badge className={cn("text-[10px]", statusColors[a.status] || "bg-muted/30")}>{a.status}</Badge>
                                       {isActive && (
                                         <button
@@ -574,13 +996,28 @@ export default function AccountsPage() {
 
         {/* ═══ ACCOUNTS TAB ═══ */}
         <TabsContent value="accounts" className="space-y-6 mt-6">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">{accounts.length} accounts across {Object.keys(grouped).length} platforms</p>
-            <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
-              <Button onClick={() => setShowAccountForm(true)} size="sm" className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-500/20 rounded-xl">
-                <Plus className="h-4 w-4 mr-1" /> Add Account
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <p className="text-sm text-muted-foreground">{accounts.length} accounts across {Object.keys(grouped).length} platforms · click the checkbox to multi-select, click the card for details</p>
+            <div className="flex items-center gap-2">
+              {selectedAccounts.size === 0 && accounts.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="rounded-xl text-xs"
+                  onClick={() => setSelectedAccounts(new Set(accounts.map(a => a.account_id)))}
+                >
+                  <Check className="h-3 w-3 mr-1" /> Select All
+                </Button>
+              )}
+              <Button onClick={() => setShowBulkImport(true)} size="sm" variant="outline" className="rounded-xl">
+                <Layers className="h-4 w-4 mr-1" /> Bulk Import
               </Button>
-            </motion.div>
+              <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
+                <Button onClick={() => setShowAccountForm(true)} size="sm" className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-lg shadow-emerald-500/20 rounded-xl">
+                  <Plus className="h-4 w-4 mr-1" /> Add Account
+                </Button>
+              </motion.div>
+            </div>
           </div>
 
           {Object.entries(grouped).map(([platform, accts]) => {
@@ -609,12 +1046,13 @@ export default function AccountsPage() {
                       >
                         <div
                           className={cn(
-                            "relative rounded-2xl border-l-4 border border-border/50 backdrop-blur-xl cursor-pointer",
+                            "relative rounded-2xl border-l-4 border backdrop-blur-xl cursor-pointer",
                             "bg-card/60 shadow-lg",
                             "hover:shadow-xl hover:border-border transition-all duration-300",
-                            platformBorders[platform] || "border-l-muted-foreground"
+                            platformBorders[platform] || "border-l-muted-foreground",
+                            selectedAccounts.has(a.account_id) ? "border-emerald-500/60 ring-2 ring-emerald-500/30" : "border-border/50"
                           )}
-                          onClick={() => setExpandedAccount(expanded ? null : a.account_id)}
+                          onClick={() => setDetailAccountId(a.account_id)}
                         >
                           {/* Subtle platform gradient overlay */}
                           <div className={cn("absolute inset-0 rounded-2xl bg-gradient-to-r opacity-30 pointer-events-none", platformGradients[platform])} />
@@ -622,8 +1060,30 @@ export default function AccountsPage() {
                           <div className="relative p-4 space-y-3">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2.5">
+                                <button
+                                  type="button"
+                                  onClick={e => { e.stopPropagation(); toggleSelectAccount(a.account_id) }}
+                                  className={cn(
+                                    "h-4 w-4 rounded border flex items-center justify-center transition-all shrink-0",
+                                    selectedAccounts.has(a.account_id)
+                                      ? "bg-emerald-500 border-emerald-500 text-white"
+                                      : "border-border/60 hover:border-emerald-500/60 bg-background"
+                                  )}
+                                  title={selectedAccounts.has(a.account_id) ? "Deselect" : "Select"}
+                                >
+                                  {selectedAccounts.has(a.account_id) && <Check className="h-3 w-3" />}
+                                </button>
                                 <div className="flex items-center gap-1.5">
                                   <span className="font-semibold text-sm text-foreground">@{a.username || a.display_name || a.account_id}</span>
+                                  {(a as any).session_cookie && (
+                                    <span title="Session saved"><CheckCircle2 className="h-3.5 w-3.5 text-green-400" /></span>
+                                  )}
+                                  {(a as any).twofa_secret && (
+                                    <span title="2FA configured"><Shield className="h-3.5 w-3.5 text-violet-400" /></span>
+                                  )}
+                                  {(a.status === "banned" || a.status === "flagged") && (
+                                    <span title={a.status}><AlertTriangle className="h-3.5 w-3.5 text-red-400" /></span>
+                                  )}
                                 </div>
                                 <Badge className={cn("text-[10px] border", statusColors[a.status] || "bg-muted/30 text-muted-foreground")}>
                                   {a.status === "active" && <PulseDot color="bg-green-400" />}
@@ -632,7 +1092,7 @@ export default function AccountsPage() {
                               </div>
                               <div className="flex items-center gap-2">
                                 {a.health_score > 0 && <HealthRing score={healthScore} size={32} />}
-                                {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+                                <ExternalLink className="h-4 w-4 text-muted-foreground" />
                               </div>
                             </div>
 
@@ -764,7 +1224,7 @@ export default function AccountsPage() {
           </div>
 
           <Dialog open={showAccountForm} onOpenChange={setShowAccountForm}>
-            <DialogContent className="max-w-md">
+            <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
               <DialogHeader><DialogTitle>Add Account</DialogTitle></DialogHeader>
               <div className="grid gap-3">
                 <div>
@@ -776,15 +1236,37 @@ export default function AccountsPage() {
                         const taken = accountForm.proxy_group_id ? !canAssignProxy(accountForm.proxy_group_id, p.id) : false
                         return (
                           <SelectItem key={p.id} value={p.id} disabled={taken}>
-                            {p.label} {taken && "(already on this proxy)"}
+                            {p.label}{taken ? " — already on this proxy" : ""}
                           </SelectItem>
                         )
                       })}
                     </SelectContent>
                   </Select>
                 </div>
-                <div><Label>Username</Label><Input placeholder="@username" value={accountForm.username} onChange={e => setAccountForm(f => ({ ...f, username: e.target.value }))} /></div>
-                <div><Label>Display Name</Label><Input placeholder="John Doe" value={accountForm.display_name} onChange={e => setAccountForm(f => ({ ...f, display_name: e.target.value }))} /></div>
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Account Credentials <span className="text-muted-foreground/60 normal-case tracking-normal">(all optional)</span></p>
+                  <div><Label className="text-xs">Username</Label><Input placeholder="@username" value={accountForm.username} onChange={e => setAccountForm(f => ({ ...f, username: e.target.value }))} /></div>
+                  <div><Label className="text-xs">Display Name</Label><Input placeholder="John Doe" value={accountForm.display_name} onChange={e => setAccountForm(f => ({ ...f, display_name: e.target.value }))} /></div>
+                  <div><Label className="text-xs">Password</Label><Input type="password" placeholder="••••••••" value={accountForm.password} onChange={e => setAccountForm(f => ({ ...f, password: e.target.value }))} /></div>
+                  <div>
+                    <Label className="text-xs">2FA Backup Codes</Label>
+                    <textarea
+                      className="w-full min-h-[60px] rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
+                      placeholder="Paste your backup codes, one per line"
+                      value={accountForm.tfa_codes}
+                      onChange={e => setAccountForm(f => ({ ...f, tfa_codes: e.target.value }))}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Recovery Email <span className="text-muted-foreground/60 normal-case tracking-normal">(optional)</span></p>
+                  <div><Label className="text-xs">Email Address</Label><Input type="email" placeholder="recovery@example.com" value={accountForm.email} onChange={e => setAccountForm(f => ({ ...f, email: e.target.value }))} /></div>
+                  <div><Label className="text-xs">Email Login Username</Label><Input placeholder="email username" value={accountForm.email_username} onChange={e => setAccountForm(f => ({ ...f, email_username: e.target.value }))} /></div>
+                  <div><Label className="text-xs">Email Login Password</Label><Input type="password" placeholder="••••••••" value={accountForm.email_password} onChange={e => setAccountForm(f => ({ ...f, email_password: e.target.value }))} /></div>
+                </div>
+
                 {!accountForm.proxy_group_id && (
                   <div>
                     <Label>Assign to Proxy Group</Label>
@@ -799,7 +1281,69 @@ export default function AccountsPage() {
                     </Select>
                   </div>
                 )}
-                <div><Label>Daily Limit</Label><Input type="number" value={accountForm.daily_limit} onChange={e => setAccountForm(f => ({ ...f, daily_limit: e.target.value }))} /></div>
+
+                <div className="space-y-2 rounded-xl border border-border/50 bg-muted/20 p-3">
+                  <div className="flex items-center gap-1 p-0.5 rounded-lg bg-muted/50 w-fit">
+                    <button
+                      type="button"
+                      onClick={() => setLimitMode("daily")}
+                      className={cn("px-3 py-1 text-xs font-medium rounded-md transition-all", limitMode === "daily" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}
+                    >Daily Limit</button>
+                    <button
+                      type="button"
+                      onClick={() => setLimitMode("warmup")}
+                      className={cn("px-3 py-1 text-xs font-medium rounded-md transition-all", limitMode === "warmup" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}
+                    >Warmup Sequence</button>
+                  </div>
+
+                  {limitMode === "daily" ? (
+                    <div>
+                      <Label className="text-xs">Daily Send Limit</Label>
+                      <Input
+                        type="number"
+                        placeholder="40"
+                        value={accountForm.daily_limit}
+                        onChange={e => setAccountForm(f => ({ ...f, daily_limit: e.target.value }))}
+                      />
+                      <p className="text-[10px] text-muted-foreground mt-1">Fixed daily send cap — use this for established accounts.</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <Label className="text-xs">Warmup Sequence</Label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAccountForm(false)
+                            setActiveTab("warmup")
+                            setTimeout(() => setShowWarmupForm(true), 250)
+                          }}
+                          className="flex items-center gap-1 text-[11px] text-orange-400 hover:text-orange-300 transition-colors"
+                        >
+                          <Plus className="h-3 w-3" /> Make new sequence
+                        </button>
+                      </div>
+                      <Select
+                        value={accountForm.warmup_sequence_id || "none"}
+                        onValueChange={v => setAccountForm(f => ({ ...f, warmup_sequence_id: v === "none" ? "" : v }))}
+                      >
+                        <SelectTrigger><SelectValue placeholder={warmupSeqs.length === 0 ? "No sequences yet — click + above" : "Select a sequence"} /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          {warmupSeqs
+                            .filter(w => !w.platform || w.platform === accountForm.platform)
+                            .map(w => (
+                              <SelectItem key={w.id} value={w.id}>
+                                {w.name}{w.platform ? ` — ${w.platform}` : ""}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[10px] text-muted-foreground mt-1">Gradually ramps daily limit over time — use for new accounts.</p>
+                    </div>
+                  )}
+                </div>
+
                 <Button onClick={createAccount} className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl">Add Account</Button>
               </div>
             </DialogContent>
@@ -915,14 +1459,27 @@ export default function AccountsPage() {
           </div>
 
           <motion.div variants={container} initial="hidden" animate="show" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {warmupSeqs.map((w) => (
+            {warmupSeqs.map((w) => {
+              const usingCount = accounts.filter(a => a.warmup_sequence_id === w.id).length
+              return (
               <motion.div key={w.id} variants={item} whileHover={{ y: -3, scale: 1.01 }}>
-                <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg hover:shadow-xl hover:border-border transition-all duration-300">
+                <div
+                  className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg hover:shadow-xl hover:border-border transition-all duration-300 cursor-pointer"
+                  onClick={() => setWarmupAccountsFor(w)}
+                >
                   <div className="p-4 pb-2 flex items-center justify-between">
                     <h3 className="font-semibold text-sm text-foreground">{w.name}</h3>
-                    <Button variant="ghost" size="sm" className="h-6 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-xl" onClick={() => deleteWarmup(w.id)}>
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
+                    <div className="flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-blue-400 hover:bg-blue-500/10 rounded-lg" onClick={() => startEditWarmup(w)} title="Edit">
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg" onClick={() => duplicateWarmup(w)} title="Duplicate">
+                        <Layers className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-red-400/70 hover:text-red-300 hover:bg-red-500/10 rounded-lg" onClick={() => deleteWarmup(w.id)} title="Delete">
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="px-4 pb-4 space-y-3">
                     {w.platform && <Badge variant="outline" className="text-xs capitalize">{w.platform}</Badge>}
@@ -945,13 +1502,15 @@ export default function AccountsPage() {
                         )
                       })}
                     </div>
-                    <p className="text-[10px] text-muted-foreground">
-                      {accounts.filter(a => a.warmup_sequence_id === w.id).length} accounts using this
+                    <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                      <Shield className="h-3 w-3" /> {usingCount} {usingCount === 1 ? "account" : "accounts"} using this
+                      <span className="ml-auto text-orange-400/70">Click to view</span>
                     </p>
                   </div>
                 </div>
               </motion.div>
-            ))}
+              )
+            })}
 
             {warmupSeqs.length === 0 && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="col-span-full">
@@ -969,9 +1528,9 @@ export default function AccountsPage() {
             )}
           </motion.div>
 
-          <Dialog open={showWarmupForm} onOpenChange={setShowWarmupForm}>
-            <DialogContent className="max-w-lg">
-              <DialogHeader><DialogTitle>Create Warmup Sequence</DialogTitle></DialogHeader>
+          <Dialog open={showWarmupForm} onOpenChange={(o) => { if (!o) closeWarmupDialog(); else setShowWarmupForm(true) }}>
+            <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+              <DialogHeader><DialogTitle>{editingWarmupId ? "Edit Warmup Sequence" : "Create Warmup Sequence"}</DialogTitle></DialogHeader>
               <div className="space-y-3">
                 <div><Label>Name</Label><Input placeholder="My Warmup" value={warmupForm.name} onChange={e => setWarmupForm(f => ({ ...f, name: e.target.value }))} /></div>
                 <div>
@@ -986,23 +1545,152 @@ export default function AccountsPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <Label>Steps</Label>
-                  <div className="space-y-2">
-                    {warmupForm.steps.map((step, i) => (
-                      <div key={i} className="grid grid-cols-4 gap-2 items-end">
-                        <div><Label className="text-[10px]">Day Start</Label><Input type="number" value={step.day_start} onChange={e => { const s = [...warmupForm.steps]; s[i] = { ...s[i], day_start: parseInt(e.target.value) || 1 }; setWarmupForm(f => ({ ...f, steps: s })) }} /></div>
-                        <div><Label className="text-[10px]">Day End</Label><Input type="number" value={step.day_end} onChange={e => { const s = [...warmupForm.steps]; s[i] = { ...s[i], day_end: parseInt(e.target.value) || 999 }; setWarmupForm(f => ({ ...f, steps: s })) }} /></div>
-                        <div><Label className="text-[10px]">Daily Limit</Label><Input type="number" value={step.daily_limit} onChange={e => { const s = [...warmupForm.steps]; s[i] = { ...s[i], daily_limit: parseInt(e.target.value) || 5 }; setWarmupForm(f => ({ ...f, steps: s })) }} /></div>
-                        <Button variant="ghost" size="sm" className="h-8 text-red-400" onClick={() => { const s = warmupForm.steps.filter((_, j) => j !== i); setWarmupForm(f => ({ ...f, steps: s })) }}><Trash2 className="h-3 w-3" /></Button>
-                      </div>
+
+                <div className="rounded-xl border border-border/50 bg-muted/20 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <Label className="text-xs">Quick Fill</Label>
+                      <button
+                        type="button"
+                        onClick={() => setShowQuickFillHelp(v => !v)}
+                        className={cn(
+                          "h-4 w-4 rounded-full border flex items-center justify-center transition-colors",
+                          showQuickFillHelp
+                            ? "border-orange-500/60 bg-orange-500/20 text-orange-300"
+                            : "border-muted-foreground/40 text-muted-foreground hover:border-orange-500/50 hover:text-orange-400"
+                        )}
+                        aria-label="How Quick Fill works"
+                        title="How Quick Fill works"
+                      >
+                        <Info className="h-2.5 w-2.5" />
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">Auto-generates ramp — customize after</span>
+                  </div>
+
+                  {showQuickFillHelp && (
+                    <div className="rounded-lg bg-orange-500/5 border border-orange-500/30 p-2.5 text-[11px] text-foreground/80 leading-relaxed space-y-1">
+                      <p className="font-medium text-orange-300">How it works</p>
+                      <p>Starts at <span className="font-semibold text-foreground">Start</span>, goes up by <span className="font-semibold text-foreground">Increase</span> each step, stops at <span className="font-semibold text-foreground">Max</span>. Each step lasts <span className="font-semibold text-foreground">Days per step</span> days.</p>
+                      <p className="text-muted-foreground pt-0.5">
+                        Example: Start 5 · Increase +1 · Max 30 · 3 days each →
+                        <span className="font-mono text-orange-300"> 5 → 6 → 7 → ... → 30</span>
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
+                    <div>
+                      <Label className="text-[10px]">Days per step</Label>
+                      <NumberField value={quickFill.days} fallback={1} min={1}
+                        onChange={(n) => setQuickFill(q => ({ ...q, days: n }))} />
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Start limit</Label>
+                      <NumberField value={quickFill.start} fallback={1} min={1}
+                        onChange={(n) => setQuickFill(q => ({ ...q, start: n }))} />
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Increase by</Label>
+                      <NumberField value={quickFill.inc} fallback={1} min={1}
+                        onChange={(n) => setQuickFill(q => ({ ...q, inc: n }))} />
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Max limit</Label>
+                      <NumberField value={quickFill.max} fallback={1} min={1}
+                        onChange={(n) => setQuickFill(q => ({ ...q, max: n }))} />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[1, 2, 3, 5, 7].map(d => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => applyQuickFill(d, quickFill.start, quickFill.inc, quickFill.max)}
+                        className="text-[11px] px-2 py-1 rounded-md bg-background border border-border/50 text-muted-foreground hover:text-foreground hover:border-orange-500/50 transition-colors"
+                      >{d}-day blocks</button>
                     ))}
+                    <button
+                      type="button"
+                      onClick={() => applyQuickFill(quickFill.days, quickFill.start, quickFill.inc, quickFill.max)}
+                      className="text-[11px] px-2 py-1 rounded-md bg-orange-500/20 text-orange-300 border border-orange-500/40 hover:bg-orange-500/30 transition-colors font-medium ml-auto"
+                    >Apply</button>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between">
+                    <Label>Steps <span className="text-[10px] text-muted-foreground font-normal">({warmupForm.steps.length})</span></Label>
+                    {warmupForm.steps.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setWarmupForm(f => ({ ...f, steps: [] }))}
+                        className="text-[11px] text-muted-foreground hover:text-red-400 transition-colors"
+                      >Clear all</button>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    {warmupForm.steps.map((step, i) => {
+                      const prev = i > 0 ? warmupForm.steps[i - 1] : null
+                      const overlap = prev && step.day_start <= prev.day_end
+                      const gap = prev && step.day_start > prev.day_end + 1
+                      const invalid = step.day_end !== 999 && step.day_end < step.day_start
+                      return (
+                        <div key={i} className="space-y-1">
+                          <div className="grid grid-cols-4 gap-2 items-end">
+                            <div><Label className="text-[10px]">Day Start</Label><NumberField value={step.day_start} fallback={1} min={1} onChange={(n) => { const s = [...warmupForm.steps]; s[i] = { ...s[i], day_start: n }; setWarmupForm(f => ({ ...f, steps: s })) }} /></div>
+                            <div><Label className="text-[10px]">Day End</Label><NumberField value={step.day_end} fallback={999} min={1} onChange={(n) => { const s = [...warmupForm.steps]; s[i] = { ...s[i], day_end: n }; setWarmupForm(f => ({ ...f, steps: s })) }} /></div>
+                            <div><Label className="text-[10px]">Daily Limit</Label><NumberField value={step.daily_limit} fallback={5} min={1} onChange={(n) => { const s = [...warmupForm.steps]; s[i] = { ...s[i], daily_limit: n }; setWarmupForm(f => ({ ...f, steps: s })) }} /></div>
+                            <Button variant="ghost" size="sm" className="h-8 text-red-400" onClick={() => { const s = warmupForm.steps.filter((_, j) => j !== i); setWarmupForm(f => ({ ...f, steps: s })) }}><Trash2 className="h-3 w-3" /></Button>
+                          </div>
+                          {(overlap || gap || invalid) && (
+                            <p className={cn("text-[10px] flex items-center gap-1", invalid || overlap ? "text-red-400" : "text-amber-400")}>
+                              <AlertTriangle className="h-3 w-3" />
+                              {invalid && `End day (${step.day_end}) is before start (${step.day_start})`}
+                              {!invalid && overlap && `Overlaps previous step (ends day ${prev!.day_end})`}
+                              {!invalid && gap && `Gap from day ${prev!.day_end + 1} to ${step.day_start - 1} — no limit defined`}
+                            </p>
+                          )}
+                        </div>
+                      )
+                    })}
                     <Button variant="outline" size="sm" className="rounded-xl" onClick={() => setWarmupForm(f => ({ ...f, steps: [...f.steps, { day_start: (f.steps[f.steps.length - 1]?.day_end || 0) + 1, day_end: 999, daily_limit: 40 }] }))}>
                       <Plus className="h-3 w-3 mr-1" /> Add Step
                     </Button>
                   </div>
                 </div>
-                <Button onClick={createWarmup} className="w-full bg-gradient-to-r from-orange-600 to-amber-600 rounded-xl">Create Sequence</Button>
+
+                {warmupForm.steps.length > 0 && (
+                  <>
+                    <RampChart steps={warmupForm.steps} />
+
+                    {/* Optional Shift & Scale tools */}
+                    <div className="rounded-lg bg-muted/20 border border-border/30 p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[10px] text-muted-foreground uppercase tracking-wider">Optional Bulk Edits</Label>
+                        <span className="text-[10px] text-muted-foreground">Click to apply</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="flex items-end gap-1">
+                          <div className="flex-1">
+                            <Label className="text-[10px]">Shift all by (days)</Label>
+                            <Input type="number" value={shiftDays} onChange={e => setShiftDays(e.target.value)} className="h-8" />
+                          </div>
+                          <Button type="button" size="sm" variant="outline" className="h-8 text-xs rounded-lg" onClick={() => { applyShift(parseInt(shiftDays) || 0); setShiftDays("0") }}>Shift</Button>
+                        </div>
+                        <div className="flex items-end gap-1">
+                          <div className="flex-1">
+                            <Label className="text-[10px]">Scale limits by (%)</Label>
+                            <Input type="number" value={scalePct} onChange={e => setScalePct(e.target.value)} className="h-8" />
+                          </div>
+                          <Button type="button" size="sm" variant="outline" className="h-8 text-xs rounded-lg" onClick={() => { applyScale(parseInt(scalePct) || 0); setScalePct("0") }}>Scale</Button>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <Button onClick={createWarmup} className="w-full bg-gradient-to-r from-orange-600 to-amber-600 rounded-xl">{editingWarmupId ? "Save Changes" : "Create Sequence"}</Button>
               </div>
             </DialogContent>
           </Dialog>
@@ -1045,6 +1733,143 @@ export default function AccountsPage() {
         proxyLocation={vncProxyLocation}
         existingAccount={vncExistingAccount}
       />
+
+      <AccountDetailDialog
+        open={Boolean(detailAccountId)}
+        accountId={detailAccountId}
+        onClose={() => setDetailAccountId(null)}
+        onChanged={fetchAll}
+        onLoginClick={(account) => {
+          if (!account.proxy_group_id) {
+            toast.error("Assign a proxy group to this account first — VNC login needs a proxy to route through.")
+            return
+          }
+          const proxy = proxies.find(p => p.id === account.proxy_group_id)
+          setVncProxyGroupId(account.proxy_group_id)
+          setVncProxyIp(proxy?.ip || "")
+          setVncProxyLocation(proxy?.location_city || "")
+          setVncExistingAccount({
+            account_id: account.account_id,
+            platform: account.platform,
+            username: account.username || account.display_name || "",
+          })
+          setDetailAccountId(null)
+          setVncFlowOpen(true)
+        }}
+      />
+
+      <BulkImportDialog
+        open={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        onImported={fetchAll}
+        proxies={proxies.map(p => ({ id: p.id, ip: p.ip, location_city: p.location_city || "" }))}
+      />
+
+      {/* Floating bulk-action bar */}
+      <AnimatePresence>
+        {selectedAccounts.size > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 40 }}
+            transition={{ duration: 0.2 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50"
+          >
+            <div className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-card/95 backdrop-blur-xl border border-border shadow-2xl">
+              <div className="flex items-center gap-2 pr-2 border-r border-border/50">
+                <div className="h-6 w-6 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                  <Check className="h-3 w-3 text-emerald-400" />
+                </div>
+                <span className="text-sm font-medium">
+                  {selectedAccounts.size} selected
+                </span>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="rounded-xl text-xs"
+                onClick={() => bulkPauseAccounts(true)}
+              >
+                Pause Warmup
+              </Button>
+              <Button
+                size="sm"
+                className="rounded-xl text-xs bg-gradient-to-r from-emerald-600 to-teal-600"
+                onClick={() => bulkPauseAccounts(false)}
+              >
+                Resume Warmup
+              </Button>
+              <button
+                onClick={() => setSelectedAccounts(new Set())}
+                className="text-muted-foreground hover:text-foreground p-1 rounded-lg"
+                title="Clear selection"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <Dialog open={Boolean(warmupAccountsFor)} onOpenChange={(o) => { if (!o) setWarmupAccountsFor(null) }}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Activity className="h-4 w-4 text-orange-400" />
+              {warmupAccountsFor?.name}
+              {warmupAccountsFor?.platform && (
+                <Badge variant="outline" className="text-[10px] capitalize ml-1">{warmupAccountsFor.platform}</Badge>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          {warmupAccountsFor && (() => {
+            const using = accounts.filter(a => a.warmup_sequence_id === warmupAccountsFor.id)
+            return (
+              <div className="space-y-4">
+                <RampChart steps={warmupAccountsFor.steps || []} />
+
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-muted-foreground">
+                    {using.length === 0 ? "No accounts assigned yet" : `${using.length} account${using.length === 1 ? "" : "s"} assigned`}
+                  </p>
+                </div>
+
+                {using.length > 0 && (
+                  <div className="space-y-2">
+                    {using.map(a => {
+                      const Icon = platformIcons[a.platform] || Shield
+                      const proxy = proxies.find(p => p.id === a.proxy_group_id)
+                      const day = a.warmup_day || 0
+                      const currentLimit = getWarmupLimit(warmupAccountsFor, day)
+                      return (
+                        <div key={a.account_id} className={cn("rounded-lg border border-border/40 p-2.5 bg-card/40 flex items-center gap-2", platformBorders[a.platform] || "border-l-muted", "border-l-4")}>
+                          <Icon className={cn("h-4 w-4", platformColors[a.platform])} />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">@{a.username || a.display_name || a.account_id}</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              Day {day} · {currentLimit}/d · {proxy?.location_city || "no proxy"}
+                            </p>
+                          </div>
+                          <Badge className={cn("text-[10px]", statusColors[a.status] || "bg-muted/30")}>{a.status}</Badge>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-2 border-t border-border/30">
+                  <Button size="sm" variant="outline" className="flex-1 rounded-lg" onClick={() => { const w = warmupAccountsFor; setWarmupAccountsFor(null); if (w) startEditWarmup(w) }}>
+                    <Pencil className="h-3 w-3 mr-1" /> Edit Sequence
+                  </Button>
+                  <Button size="sm" variant="outline" className="flex-1 rounded-lg" onClick={() => { const w = warmupAccountsFor; setWarmupAccountsFor(null); if (w) duplicateWarmup(w) }}>
+                    <Layers className="h-3 w-3 mr-1" /> Duplicate
+                  </Button>
+                </div>
+              </div>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
     </motion.div>
   )
 }
