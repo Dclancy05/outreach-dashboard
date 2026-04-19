@@ -18,7 +18,7 @@ import {
 import { SOCIAL_PLATFORMS, getPlatform } from "@/lib/platforms"
 
 const VNC_WS_HOST = process.env.NEXT_PUBLIC_VNC_WS_HOST || "srv1197943.taild42583.ts.net"
-const VNC_API_BASE = `https://${VNC_WS_HOST}:9443`
+const VNC_API_BASE = `https://${VNC_WS_HOST}`
 const VNC_API_KEY = "vnc-mgr-2026-dylan"
 
 const platformIcons: Record<string, typeof Instagram> = {
@@ -85,6 +85,12 @@ const MAIN_PLATFORMS = ["instagram", "facebook", "linkedin"]
 interface ProxyGroup {
   id: string; provider: string; ip: string; port: string; username: string; password: string;
   location_city: string; location_state: string; monthly_cost: number; status: string;
+  name?: string;
+}
+
+interface AccountRow {
+  account_id: string; platform: string; username: string; display_name: string;
+  status: string; proxy_group_id: string; session_cookie?: unknown;
 }
 
 type WizardStep = "proxy" | "platforms" | "setup" | "done"
@@ -96,6 +102,7 @@ export default function SetupWizardPage() {
 
   const [wizardStep, setWizardStep] = useState<WizardStep>("proxy")
   const [proxies, setProxies] = useState<ProxyGroup[]>([])
+  const [accounts, setAccounts] = useState<AccountRow[]>([])
   const [loading, setLoading] = useState(true)
 
   // Step 1: Proxy
@@ -103,8 +110,10 @@ export default function SetupWizardPage() {
   const [showNewProxy, setShowNewProxy] = useState(false)
   const [newProxy, setNewProxy] = useState({ provider: "", ip: "", port: "", username: "", password: "", location_city: "", location_state: "", location_country: "US", monthly_cost: "" })
 
-  // Step 2: Platforms
+  // Step 2: Platforms + per-platform account pick
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([])
+  const [accountByPlatform, setAccountByPlatform] = useState<Record<string, string>>({})
+  const [useChromeProfile, setUseChromeProfile] = useState(true)
 
   // Step 3: VNC login
   const [vncSessionId, setVncSessionId] = useState("")
@@ -113,6 +122,7 @@ export default function SetupWizardPage() {
   const [currentLoginIndex, setCurrentLoginIndex] = useState(0)
   const [loginUsernames, setLoginUsernames] = useState<Record<string, string>>({})
   const [completedLogins, setCompletedLogins] = useState<Set<string>>(new Set())
+  const [chromeProfileDone, setChromeProfileDone] = useState(false)
   const [captureError, setCaptureError] = useState("")
   const [capturing, setCapturing] = useState(false)
   const [finishing, setFinishing] = useState(false)
@@ -136,8 +146,12 @@ export default function SetupWizardPage() {
     async function load() {
       setLoading(true)
       try {
-        const proxyRes = await fetch("/api/proxy-groups").then(r => r.json())
+        const [proxyRes, accountRes] = await Promise.all([
+          fetch("/api/proxy-groups").then(r => r.json()),
+          fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get_accounts", limit: 1000 }) }).then(r => r.json()),
+        ])
         setProxies(proxyRes.data || [])
+        setAccounts(accountRes.data || [])
         if (existingProxyId) {
           setSelectedProxy(existingProxyId)
           setWizardStep("platforms")
@@ -150,10 +164,25 @@ export default function SetupWizardPage() {
     load()
   }, [existingProxyId])
 
-  function togglePlatform(platformId: string) {
-    setSelectedPlatforms(prev =>
-      prev.includes(platformId) ? prev.filter(p => p !== platformId) : [...prev, platformId]
+  function accountsForPicker(platformId: string): AccountRow[] {
+    return accounts.filter(a =>
+      a.platform === platformId
+      && a.status !== "active"
+      && (!a.proxy_group_id || a.proxy_group_id === selectedProxy)
     )
+  }
+
+  function togglePlatform(platformId: string) {
+    setSelectedPlatforms(prev => {
+      const next = prev.includes(platformId) ? prev.filter(p => p !== platformId) : [...prev, platformId]
+      if (!next.includes(platformId)) {
+        setAccountByPlatform(cur => {
+          const { [platformId]: _drop, ...rest } = cur
+          return rest
+        })
+      }
+      return next
+    })
   }
 
   async function createProxy() {
@@ -184,6 +213,18 @@ export default function SetupWizardPage() {
       toast.error("Select a proxy and at least one platform")
       return
     }
+    const missing = selectedPlatforms.filter(p => !accountByPlatform[p])
+    if (missing.length) {
+      toast.error(`Pick which account to log in for: ${missing.join(", ")}`)
+      return
+    }
+    // Prefill the "username you logged in with" field from the picked account
+    const prefill: Record<string, string> = {}
+    for (const p of selectedPlatforms) {
+      const acc = accounts.find(a => a.account_id === accountByPlatform[p])
+      if (acc) prefill[p] = acc.username || acc.display_name || ""
+    }
+    setLoginUsernames(prev => ({ ...prefill, ...prev }))
 
     setWizardStep("setup")
     setCaptureError("")
@@ -204,11 +245,13 @@ export default function SetupWizardPage() {
           proxy_group_id: selectedProxy,
           platform: firstPlatform,
           proxy_config: proxyConfig,
+          use_chrome_profile: useChromeProfile,
         }),
       })
 
       setVncSessionId(data.data.id)
-      setVncUrl(`${VNC_API_BASE}/novnc/vnc_lite.html?path=websockify/${data.data.id}&autoconnect=true&resize=scale`)
+      const pwd = data.data.vncPassword ? `&password=${encodeURIComponent(data.data.vncPassword)}` : ""
+      setVncUrl(`${VNC_API_BASE}/novnc/vnc_lite.html?path=websockify/${data.data.id}&autoconnect=true&resize=scale${pwd}`)
       setCurrentLoginIndex(0)
     } catch (e: any) {
       toast.error(`Failed to start browser: ${e.message}`)
@@ -235,15 +278,18 @@ export default function SetupWizardPage() {
       toast.error("Enter the username you logged in with")
       return
     }
+    const pickedAccountId = accountByPlatform[platform]
+    if (!pickedAccountId) {
+      toast.error("No account selected for this platform")
+      return
+    }
 
     setCapturing(true)
     try {
-      const accountId = `${platform}_${Date.now().toString(36)}`
-
       await vncFetch(`/api/sessions/${vncSessionId}/capture`, {
         method: "POST",
         body: JSON.stringify({
-          account_id: null,
+          account_id: pickedAccountId,
           platform,
           username: username.replace(/^@/, ""),
           display_name: username.replace(/^@/, ""),
@@ -255,14 +301,12 @@ export default function SetupWizardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "update_account",
-          account_id: accountId,
+          account_id: pickedAccountId,
           platform,
           username: username.replace(/^@/, ""),
           display_name: username.replace(/^@/, ""),
           proxy_group_id: selectedProxy,
           status: "active",
-          daily_limit: "40",
-          sends_today: "0",
           connection_type: "chrome_direct",
           business_id: "default",
         }),
@@ -554,15 +598,118 @@ export default function SetupWizardPage() {
 
             {selectedPlatforms.length > 0 && (
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+                {/* Per-platform account picker */}
+                <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg p-5 space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="h-9 w-9 rounded-xl bg-violet-500/20 flex items-center justify-center">
+                      <Shield className="h-4 w-4 text-violet-400" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-sm">Pick the account for each platform</h3>
+                      <p className="text-[11px] text-muted-foreground">We'll log each one into Chrome on this proxy.</p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {selectedPlatforms.map(platformId => {
+                      const p = getPlatform(platformId)
+                      const Icon = platformIcons[platformId] || Globe
+                      const picks = accountsForPicker(platformId)
+                      const pickedId = accountByPlatform[platformId] || ""
+                      return (
+                        <div
+                          key={platformId}
+                          className="rounded-xl border border-border/40 bg-card/40 p-3 flex items-center gap-3"
+                        >
+                          <div className={cn("h-9 w-9 rounded-xl flex items-center justify-center shrink-0", p?.bgClass || "bg-muted/30")}>
+                            <Icon className={cn("h-4 w-4", p?.textClass || "text-muted-foreground")} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <span className="text-sm font-medium">{p?.label || platformId}</span>
+                              {!pickedId && (
+                                <span className="text-[10px] text-amber-400">Required</span>
+                              )}
+                            </div>
+                            {picks.length === 0 ? (
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[11px] text-muted-foreground">No {p?.label || platformId} accounts yet.</span>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="rounded-lg h-7 text-[11px]"
+                                  onClick={() => router.push("/accounts?tab=accounts")}
+                                >
+                                  <Plus className="h-3 w-3 mr-1" /> Add Account
+                                </Button>
+                              </div>
+                            ) : (
+                              <Select
+                                value={pickedId || undefined}
+                                onValueChange={(v) => setAccountByPlatform(cur => ({ ...cur, [platformId]: v }))}
+                              >
+                                <SelectTrigger className="h-8 text-xs">
+                                  <SelectValue placeholder={`Pick a ${p?.label || platformId} account`} />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {picks.map(a => {
+                                    const proxy = proxies.find(pr => pr.id === a.proxy_group_id)
+                                    const onThisProxy = a.proxy_group_id === selectedProxy
+                                    return (
+                                      <SelectItem key={a.account_id} value={a.account_id}>
+                                        @{a.username || a.display_name || a.account_id}
+                                        {a.status && a.status !== "pending_setup" ? ` · ${a.status}` : ""}
+                                        {proxy && !onThisProxy ? ` · ${proxy.location_city || proxy.ip}` : ""}
+                                      </SelectItem>
+                                    )
+                                  })}
+                                </SelectContent>
+                              </Select>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Stealth toggle — sign into Chrome profile first */}
+                <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg p-5">
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useChromeProfile}
+                      onChange={(e) => setUseChromeProfile(e.target.checked)}
+                      className="mt-1 h-4 w-4 rounded accent-violet-500 cursor-pointer"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Chrome className="h-4 w-4 text-violet-400" />
+                        <span className="text-sm font-semibold">Sign into a Chrome profile first</span>
+                        <Badge className="bg-violet-500/20 text-violet-400 border-violet-500/30 text-[10px]">Stealth</Badge>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        Recommended. Sign into any Google account so Chrome looks like a real user's browser before you touch any social platform. Cuts down the "fresh browser" fingerprint that triggers bans.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+
                 <div className="rounded-2xl bg-gradient-to-r from-violet-500/10 to-emerald-500/10 border border-violet-500/30 p-4 shadow-lg">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-medium text-foreground">Setting up:</span>
+                    {useChromeProfile && (
+                      <Badge variant="outline" className="gap-1.5 py-1 border-violet-500/30">
+                        <Chrome className="h-3 w-3 text-violet-400" /> Chrome profile
+                      </Badge>
+                    )}
                     {selectedPlatforms.map(id => {
                       const p = getPlatform(id)
                       const Icon = platformIcons[id] || Globe
+                      const acc = accounts.find(a => a.account_id === accountByPlatform[id])
                       return (
                         <Badge key={id} variant="outline" className="gap-1.5 py-1">
                           <Icon className={cn("h-3 w-3", p?.textClass)} /> {p?.label}
+                          {acc ? <span className="text-[10px] text-muted-foreground">@{acc.username || acc.display_name}</span> : null}
                         </Badge>
                       )
                     })}
@@ -571,7 +718,8 @@ export default function SetupWizardPage() {
                 <Button
                   onClick={startSetup}
                   size="lg"
-                  className="w-full bg-gradient-to-r from-violet-600 to-emerald-600 rounded-xl shadow-lg shadow-violet-500/20 h-14 text-base"
+                  disabled={selectedPlatforms.some(p => !accountByPlatform[p])}
+                  className="w-full bg-gradient-to-r from-violet-600 to-emerald-600 rounded-xl shadow-lg shadow-violet-500/20 h-14 text-base disabled:opacity-50"
                 >
                   Set Up ({selectedPlatforms.length} platform{selectedPlatforms.length > 1 ? "s" : ""}) <ArrowRight className="h-5 w-5 ml-2" />
                 </Button>
@@ -612,18 +760,83 @@ export default function SetupWizardPage() {
                     </p>
                   </div>
 
+                  {/* Chrome profile step (when stealth toggle is on) */}
+                  {useChromeProfile && (
+                    <div>
+                      <div className={cn(
+                        "w-full rounded-xl border p-3 text-left transition-all",
+                        chromeProfileDone ? "border-emerald-500/30 bg-emerald-500/5" :
+                        "border-violet-500 bg-violet-500/10 shadow-md"
+                      )}>
+                        <div className="flex items-center gap-2.5">
+                          {chromeProfileDone
+                            ? <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                            : <Chrome className="h-4 w-4 text-violet-400" />}
+                          <span className="text-sm font-medium">Chrome profile</span>
+                          {chromeProfileDone
+                            ? <Badge className="ml-auto text-[10px] bg-emerald-500/20 text-emerald-400 border-emerald-500/30">Done</Badge>
+                            : <Badge className="ml-auto text-[10px] bg-violet-500/20 text-violet-400 border-violet-500/30">Current</Badge>}
+                        </div>
+                      </div>
+                      {!chromeProfileDone && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: "auto" }}
+                          className="mt-2 ml-2 rounded-xl border border-violet-500/20 bg-violet-500/5 p-3 space-y-3"
+                        >
+                          <ol className="space-y-1.5">
+                            <li className="flex items-start gap-2 text-[11px] text-muted-foreground">
+                              <span className="h-4 w-4 rounded-full bg-violet-500/20 text-violet-400 flex items-center justify-center shrink-0 text-[9px] font-bold mt-0.5">1</span>
+                              Sign into any Google account on the Google Sign-in page
+                            </li>
+                            <li className="flex items-start gap-2 text-[11px] text-muted-foreground">
+                              <span className="h-4 w-4 rounded-full bg-violet-500/20 text-violet-400 flex items-center justify-center shrink-0 text-[9px] font-bold mt-0.5">2</span>
+                              Enter password and complete any 2FA
+                            </li>
+                            <li className="flex items-start gap-2 text-[11px] text-muted-foreground">
+                              <span className="h-4 w-4 rounded-full bg-violet-500/20 text-violet-400 flex items-center justify-center shrink-0 text-[9px] font-bold mt-0.5">3</span>
+                              Wait until you see the Google account dashboard
+                            </li>
+                          </ol>
+
+                          <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-2">
+                            <p className="text-[10px] text-emerald-400 font-medium">
+                              Why: a signed-in Chrome profile makes the browser look real. Dramatically fewer Instagram/FB bans.
+                            </p>
+                          </div>
+
+                          <Button
+                            onClick={() => {
+                              setChromeProfileDone(true)
+                              const firstPlatform = selectedPlatforms[0]
+                              const guide = firstPlatform ? PLATFORM_LOGIN_GUIDES[firstPlatform] : undefined
+                              if (guide) navigateToUrl(guide.url)
+                            }}
+                            size="sm"
+                            className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl text-xs"
+                          >
+                            <CheckCircle2 className="h-3 w-3 mr-1" /> I'm signed in — continue to platforms
+                          </Button>
+                        </motion.div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Platform steps */}
                   {selectedPlatforms.map((platformId, i) => {
                     const Icon = platformIcons[platformId] || Globe
                     const platInfo = getPlatform(platformId)
                     const isCompleted = completedLogins.has(platformId)
-                    const isCurrent = currentLoginIndex === i && !isCompleted
+                    const isLocked = useChromeProfile && !chromeProfileDone
+                    const isCurrent = !isLocked && currentLoginIndex === i && !isCompleted
                     const guide = PLATFORM_LOGIN_GUIDES[platformId]
 
                     return (
                       <div key={platformId}>
                         <button
+                          disabled={isLocked}
                           onClick={() => {
+                            if (isLocked) return
                             if (!isCompleted && i <= Math.max(currentLoginIndex, [...completedLogins].length)) {
                               setCurrentLoginIndex(i)
                               if (guide) navigateToUrl(guide.url)
