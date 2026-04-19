@@ -1,6 +1,42 @@
 import { supabase, throwOnError } from "./helpers"
 import type { ActionHandler } from "../types"
 
+// Per-platform auth cookies. If a named cookie exists with a non-empty value
+// and hasn't expired, we treat the account as actually logged in on that
+// platform — same logic the VNC capture path uses.
+const AUTH_COOKIE_NAMES: Record<string, string[]> = {
+  instagram: ["sessionid", "ds_user_id"],
+  facebook: ["c_user", "xs"],
+  linkedin: ["li_at", "JSESSIONID"],
+  tiktok: ["sessionid", "sid_tt"],
+  youtube: ["SID", "SAPISID", "__Secure-1PSID"],
+  snapchat: ["sc-a-session", "sc-a-nonce"],
+  x: ["auth_token"],
+  twitter: ["auth_token"],
+  pinterest: ["_auth", "_pinterest_sess"],
+  threads: ["sessionid"],
+}
+
+// Cookie jars show up in three shapes depending on source:
+// (1) array of {name, value, expires} — from account_sessions.cookies
+// (2) JSON string of that array — from accounts.session_cookie (new captures)
+// (3) legacy empty string — pre-noVNC imports
+// Normalize all three to the array form so the caller has one thing to scan.
+function parseCookies(raw: unknown): Array<{ name: string; value?: string; expires?: number }> {
+  if (!raw) return []
+  if (Array.isArray(raw)) return raw as Array<{ name: string; value?: string; expires?: number }>
+  if (typeof raw === "string") {
+    if (!raw.trim()) return []
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
 const handlers: Record<string, ActionHandler> = {
   get_accounts: async (action, body) => {
     const businessId = body.business_id as string | undefined
@@ -11,7 +47,94 @@ const handlers: Record<string, ActionHandler> = {
     query = query.range(offset, offset + limit - 1)
     const { data, error, count } = await query
     if (error) throw new Error(error.message)
-    return { success: true, action, data: data || [], count: count || (data || []).length }
+    const accounts = (data || []) as Array<Record<string, unknown>>
+
+    // Pull the freshest active account_sessions row per account so the UI can
+    // compute a REAL login state instead of trusting the stale accounts.status
+    // column (which never gets downgraded when cookies expire).
+    const accountIds = accounts.map(a => String((a as Record<string, unknown>).account_id || "")).filter(Boolean)
+    const sessionByAccount: Record<string, { cookies: unknown; last_verified_at: string | null; created_at: string | null }> = {}
+    if (accountIds.length > 0) {
+      const { data: sessRows } = await supabase
+        .from("account_sessions")
+        .select("account_id, cookies, last_verified_at, created_at, status")
+        .in("account_id", accountIds)
+        .eq("status", "active")
+        .order("created_at", { ascending: false })
+      for (const row of (sessRows || []) as Array<{
+        account_id: string; cookies: unknown; last_verified_at: string | null; created_at: string | null
+      }>) {
+        if (!sessionByAccount[row.account_id]) {
+          sessionByAccount[row.account_id] = {
+            cookies: row.cookies,
+            last_verified_at: row.last_verified_at,
+            created_at: row.created_at,
+          }
+        }
+      }
+    }
+
+    const now = Date.now()
+    const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000    // 7d — still considered logged in
+    const EXPIRED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000  // 7-30d — "expired", very likely needs sign-in
+
+    const enriched = accounts.map(acct => {
+      const a = acct as Record<string, unknown> & { account_id?: string; platform?: string; status?: string; session_cookie?: unknown }
+      const platform = String(a.platform || "").toLowerCase()
+      const wanted = AUTH_COOKIE_NAMES[platform] || []
+
+      const sess = a.account_id ? sessionByAccount[String(a.account_id)] : undefined
+      const sessionCookies = sess ? parseCookies(sess.cookies) : []
+      const mirrorCookies = parseCookies(a.session_cookie)
+      const allCookies = sessionCookies.length > 0 ? sessionCookies : mirrorCookies
+
+      const hasAuthCookie = wanted.length > 0 && allCookies.some(c => {
+        if (!c || typeof c !== "object") return false
+        if (!wanted.includes(c.name)) return false
+        if (!c.value) return false
+        // Chrome CDP emits `expires` as fractional seconds-since-epoch.
+        // Session cookies have expires=0 or undefined — those are OK to trust
+        // (they die when the browser closes, but that's a Chrome problem).
+        if (typeof c.expires === "number" && c.expires > 0) {
+          if (c.expires * 1000 < now) return false
+        }
+        return true
+      })
+
+      const verifiedAt = sess?.last_verified_at || sess?.created_at || null
+      const ageMs = verifiedAt ? (now - new Date(verifiedAt).getTime()) : Infinity
+      const sessionAgeHours = verifiedAt ? Math.floor(ageMs / (60 * 60 * 1000)) : null
+
+      // Derive real status. Banned/flagged/cooldown are lifecycle states we
+      // preserve from the DB — they're not overridden by cookie freshness.
+      let derivedStatus: string
+      const raw = String(a.status || "")
+      if (raw === "banned" || raw === "flagged" || raw === "cooldown") {
+        derivedStatus = raw
+      } else if (!sess && !hasAuthCookie) {
+        derivedStatus = "needs_signin"
+      } else if (!hasAuthCookie) {
+        derivedStatus = "needs_signin"
+      } else if (ageMs > EXPIRED_WINDOW_MS) {
+        derivedStatus = "needs_signin"
+      } else if (ageMs > ACTIVE_WINDOW_MS) {
+        derivedStatus = "expired"
+      } else if (raw === "warming") {
+        derivedStatus = "warming"
+      } else {
+        derivedStatus = "active"
+      }
+
+      return {
+        ...acct,
+        session_status: derivedStatus,
+        session_age_hours: sessionAgeHours,
+        has_auth_cookie: hasAuthCookie,
+        has_saved_session: !!sess,
+      }
+    })
+
+    return { success: true, action, data: enriched, count: count || enriched.length }
   },
 
   update_account: async (action, body) => {
@@ -34,9 +157,21 @@ const handlers: Record<string, ActionHandler> = {
       }
     }
 
-    const data: Record<string, string> = {}
-    for (const [k, v] of Object.entries(acct)) { if (k !== "action") data[k] = String(v ?? "") }
-    await supabase.from("accounts").upsert(data)
+    // Columns that can't take empty strings — null them instead
+    const nullIfEmpty = new Set([
+      "proxy_group_id", "warmup_sequence_id", "chrome_profile_id", "persona_id",
+      "daily_limit", "warmup_day", "health_score", "sends_today",
+      "cooldown_until", "last_used_at", "profile_screenshot_at", "warmup_started_at", "warmup_complete_at",
+    ])
+    const data: Record<string, string | null> = {}
+    for (const [k, v] of Object.entries(acct)) {
+      if (k === "action") continue
+      const str = v == null ? "" : String(v)
+      if (nullIfEmpty.has(k) && str === "") { data[k] = null; continue }
+      data[k] = str
+    }
+    const { error } = await supabase.from("accounts").upsert(data)
+    if (error) return { success: false, error: error.message }
     return { success: true, action, message: "Account updated" }
   },
 
