@@ -47,6 +47,12 @@ interface Account {
   status: string; daily_limit: string; sends_today: string; connection_type: string;
   proxy_group_id: string; warmup_sequence_id: string; warmup_day: number;
   health_score: number; business_id: string; notes: string;
+  // Derived fields from the server — a real login-state rollup so the UI
+  // doesn't trust the stale "status" field alone. See get_accounts in supabase.ts.
+  session_status?: string;
+  session_age_hours?: number | null;
+  has_auth_cookie?: boolean;
+  has_saved_session?: boolean;
 }
 
 interface WarmupSequence {
@@ -69,6 +75,32 @@ const statusColors: Record<string, string> = {
   paused: "bg-muted/30 text-muted-foreground border-border/50",
   banned: "bg-red-500/20 text-red-400 border-red-500/30",
   cooldown: "bg-orange-500/20 text-orange-400 border-orange-500/30",
+  needs_signin: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+  expired: "bg-orange-500/20 text-orange-300 border-orange-500/30",
+  pending_setup: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+}
+
+// Effective status used by the Groups tab. Falls back to the stale DB
+// `status` column only when the server hasn't supplied a derived session_status.
+function effectiveStatus(a: Account): string {
+  if (a.session_status) return a.session_status
+  return a.status || "pending_setup"
+}
+
+// Human label for a badge/button — "needs_signin" looks ugly, "Needs Sign-In" doesn't.
+function statusLabel(s: string): string {
+  switch (s) {
+    case "active": return "Active"
+    case "warming": return "Warming"
+    case "paused": return "Paused"
+    case "banned": return "Banned"
+    case "flagged": return "Flagged"
+    case "cooldown": return "Cooldown"
+    case "needs_signin": return "Needs Sign-In"
+    case "expired": return "Expired"
+    case "pending_setup": return "Needs Sign-In"
+    default: return s
+  }
 }
 
 function getWarmupLimit(seq: WarmupSequence | undefined, day: number): number {
@@ -723,8 +755,13 @@ export default function AccountsPage() {
             {proxies.map((proxy) => {
               const proxyAccounts = accounts.filter(a => a.proxy_group_id === proxy.id)
               const usedPlatforms = proxyAccounts.map(a => a.platform)
-              const activeAccounts = proxyAccounts.filter(a => a.status === "active")
-              const setupNeeded = proxyAccounts.filter(a => a.status !== "active")
+              // Use the *derived* status the server computed from cookie freshness —
+              // the raw accounts.status column gets sticky-"active" and lies.
+              const activeAccounts = proxyAccounts.filter(a => effectiveStatus(a) === "active")
+              const setupNeeded = proxyAccounts.filter(a => {
+                const s = effectiveStatus(a)
+                return s === "needs_signin" || s === "expired" || s === "pending_setup"
+              })
               const groupStatus = proxyAccounts.length === 0 ? "empty" : setupNeeded.length > 0 ? "needs_setup" : "active"
               const health = proxy.status === "blocked" ? "red" : groupStatus === "active" ? "green" : groupStatus === "needs_setup" ? "yellow" : "gray"
               const availablePlatforms = SOCIAL_PLATFORMS.filter(p => !usedPlatforms.includes(p.id))
@@ -781,7 +818,7 @@ export default function AccountsPage() {
                           )}
                           {groupStatus === "needs_setup" && (
                             <Badge className="text-xs bg-amber-500/20 text-amber-400 border-amber-500/30 gap-1">
-                              <AlertTriangle className="h-3 w-3" /> Needs Setup
+                              <AlertTriangle className="h-3 w-3" /> {setupNeeded.length} Need{setupNeeded.length === 1 ? "s" : ""} Sign-In
                             </Badge>
                           )}
                           {groupStatus === "empty" && (
@@ -845,27 +882,59 @@ export default function AccountsPage() {
                               const Icon = platformIcons[a.platform] || Shield
                               const ws = warmupSeqs.find(w => w.id === a.warmup_sequence_id)
                               const warmupLimit = ws ? getWarmupLimit(ws, a.warmup_day || 0) : parseInt(a.daily_limit || "40")
-                              const isActive = a.status === "active"
+                              const effStatus = effectiveStatus(a)
+                              const isActive = effStatus === "active" || effStatus === "warming"
+                              const needsAttn = effStatus === "needs_signin" || effStatus === "expired" || effStatus === "pending_setup"
+                              const ageHrs = a.session_age_hours
+                              const freshness = ageHrs == null
+                                ? null
+                                : ageHrs < 1 ? "Just now"
+                                : ageHrs < 24 ? `${ageHrs}h ago`
+                                : `${Math.floor(ageHrs / 24)}d ago`
+
+                              // One-click re-login: opens noVNC pointed at this account's saved
+                              // Chrome profile directory + hydrates cookies from Supabase so Dylan
+                              // either lands on the feed (cookies still valid) or sees the platform's
+                              // own login page with Chrome's saved form prefilled.
+                              const openVnc = (e?: React.MouseEvent) => {
+                                if (e) e.stopPropagation()
+                                setVncProxyGroupId(proxy.id)
+                                setVncProxyIp(proxy.ip)
+                                setVncProxyLocation(proxy.location_city || "")
+                                setVncExistingAccount({
+                                  account_id: a.account_id,
+                                  platform: a.platform,
+                                  username: a.username || a.display_name || "",
+                                })
+                                setVncFlowOpen(true)
+                              }
+
                               return (
                                 <div
                                   key={a.account_id}
-                                  className={cn("rounded-xl border border-border/40 p-3 space-y-2 bg-card/40 cursor-pointer hover:bg-card/60 hover:border-border transition-all", platformBorders[a.platform] || "border-l-muted", "border-l-4")}
-                                  onClick={() => setDetailAccountId(a.account_id)}
-                                  title="Click for full details"
+                                  className={cn(
+                                    "rounded-xl border p-3 space-y-2 cursor-pointer transition-all border-l-4",
+                                    platformBorders[a.platform] || "border-l-muted",
+                                    needsAttn
+                                      ? "border-amber-500/40 bg-amber-500/5 hover:bg-amber-500/10 hover:border-amber-500/60 ring-1 ring-amber-500/20"
+                                      : "border-border/40 bg-card/40 hover:bg-card/60 hover:border-border",
+                                  )}
+                                  onClick={() => needsAttn ? openVnc() : setDetailAccountId(a.account_id)}
+                                  title={needsAttn ? "Click to sign in — opens your saved Chrome profile" : "Click for full details"}
                                 >
                                   <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                      <Icon className={cn("h-4 w-4", platformColors[a.platform])} />
-                                      <span className="text-sm font-medium text-foreground">@{a.username || a.display_name || a.account_id}</span>
-                                      {(a as any).session_cookie && <CheckCircle2 className="h-3 w-3 text-green-400 shrink-0" />}
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <Icon className={cn("h-4 w-4 shrink-0", platformColors[a.platform])} />
+                                      <span className="text-sm font-medium text-foreground truncate">@{a.username || a.display_name || a.account_id}</span>
+                                      {a.has_auth_cookie && <CheckCircle2 className="h-3 w-3 text-green-400 shrink-0" />}
                                       {(a as any).twofa_secret && <Shield className="h-3 w-3 text-violet-400 shrink-0" />}
-                                      {(a.status === "banned" || a.status === "flagged") && <AlertTriangle className="h-3 w-3 text-red-400 shrink-0" />}
+                                      {(effStatus === "banned" || a.status === "flagged") && <AlertTriangle className="h-3 w-3 text-red-400 shrink-0" />}
                                     </div>
-                                    <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                                      <Badge className={cn("text-[10px]", statusColors[a.status] || "bg-muted/30")}>{a.status}</Badge>
+                                    <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                      <Badge className={cn("text-[10px]", statusColors[effStatus] || "bg-muted/30")}>{statusLabel(effStatus)}</Badge>
                                       {isActive && (
                                         <button
-                                          onClick={() => { setVncProxyGroupId(proxy.id); setVncProxyIp(proxy.ip); setVncProxyLocation(proxy.location_city || ""); setVncExistingAccount({ account_id: a.account_id, platform: a.platform, username: a.username || a.display_name || "" }); setVncFlowOpen(true) }}
+                                          onClick={openVnc}
                                           className="text-blue-400 hover:text-blue-300 transition-colors"
                                           title="Re-login / Swap account"
                                         >
@@ -874,10 +943,20 @@ export default function AccountsPage() {
                                       )}
                                     </div>
                                   </div>
+                                  {needsAttn && (
+                                    <Button
+                                      size="sm"
+                                      onClick={openVnc}
+                                      className="w-full h-7 text-xs bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg"
+                                    >
+                                      <Monitor className="h-3 w-3 mr-1" /> Sign In Now
+                                    </Button>
+                                  )}
                                   {isActive && (
                                     <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
                                       <span className="font-mono">{a.sends_today || 0}/{warmupLimit}/day</span>
                                       {ws && <span className="text-orange-400">Day {a.warmup_day || 0}</span>}
+                                      {freshness && <span className="ml-auto text-muted-foreground/70">Seen {freshness}</span>}
                                     </div>
                                   )}
                                   {isActive && (
@@ -1085,9 +1164,9 @@ export default function AccountsPage() {
                                     <span title={a.status}><AlertTriangle className="h-3.5 w-3.5 text-red-400" /></span>
                                   )}
                                 </div>
-                                <Badge className={cn("text-[10px] border", statusColors[a.status] || "bg-muted/30 text-muted-foreground")}>
-                                  {a.status === "active" && <PulseDot color="bg-green-400" />}
-                                  <span className="ml-1">{a.status}</span>
+                                <Badge className={cn("text-[10px] border", statusColors[effectiveStatus(a)] || "bg-muted/30 text-muted-foreground")}>
+                                  {effectiveStatus(a) === "active" && <PulseDot color="bg-green-400" />}
+                                  <span className="ml-1">{statusLabel(effectiveStatus(a))}</span>
                                 </Badge>
                               </div>
                               <div className="flex items-center gap-2">
@@ -1850,7 +1929,7 @@ export default function AccountsPage() {
                               Day {day} · {currentLimit}/d · {proxy?.location_city || "no proxy"}
                             </p>
                           </div>
-                          <Badge className={cn("text-[10px]", statusColors[a.status] || "bg-muted/30")}>{a.status}</Badge>
+                          <Badge className={cn("text-[10px]", statusColors[effectiveStatus(a)] || "bg-muted/30")}>{statusLabel(effectiveStatus(a))}</Badge>
                         </div>
                       )
                     })}

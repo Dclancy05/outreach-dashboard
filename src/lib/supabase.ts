@@ -212,12 +212,139 @@ export async function handleAction(action: string, body: Record<string, unknown>
     }
 
     // ── GET ACCOUNTS ─────────────────────────────────────────────────
+    // Joins accounts with the freshest account_sessions row so the UI can
+    // show a REAL login state ("needs_signin" / "expired" / "active") instead
+    // of the static accounts.status field — which never gets invalidated when
+    // cookies expire and caused the "shows Active when not logged in" bug.
     case "get_accounts": {
       const businessId = body.business_id as string | undefined
       let query = supabase.from("accounts").select("*")
       if (businessId) query = query.eq("business_id", businessId)
-      const data = throwOnError(await query)
-      return { success: true, action, data, count: data.length }
+      const accounts = throwOnError(await query) as Array<Record<string, unknown>>
+
+      // Pull the most recent active account_sessions row per account.
+      const accountIds = accounts.map(a => a.account_id).filter(Boolean) as string[]
+      let sessionByAccount: Record<string, { cookies: unknown; last_verified_at: string | null; created_at: string | null }> = {}
+      if (accountIds.length > 0) {
+        const { data: sessRows } = await supabase
+          .from("account_sessions")
+          .select("account_id, cookies, last_verified_at, created_at, status")
+          .in("account_id", accountIds)
+          .eq("status", "active")
+          .order("created_at", { ascending: false })
+        for (const row of (sessRows || []) as Array<{
+          account_id: string
+          cookies: unknown
+          last_verified_at: string | null
+          created_at: string | null
+          status: string | null
+        }>) {
+          if (!sessionByAccount[row.account_id]) {
+            sessionByAccount[row.account_id] = {
+              cookies: row.cookies,
+              last_verified_at: row.last_verified_at,
+              created_at: row.created_at,
+            }
+          }
+        }
+      }
+
+      // Per-platform "am I logged in" cookie names. If any of these exist with
+      // a non-empty value in the saved cookie jar, we treat the session as
+      // having real credentials. Matches the list used by the VNC capture path.
+      const AUTH_COOKIE_NAMES: Record<string, string[]> = {
+        instagram: ["sessionid", "ds_user_id"],
+        facebook: ["c_user", "xs"],
+        linkedin: ["li_at", "JSESSIONID"],
+        tiktok: ["sessionid", "sid_tt"],
+        youtube: ["SID", "SAPISID", "__Secure-1PSID"],
+        snapchat: ["sc-a-session", "sc-a-nonce"],
+        x: ["auth_token"],
+        twitter: ["auth_token"],
+        pinterest: ["_auth", "_pinterest_sess"],
+        threads: ["sessionid"],
+      }
+
+      // Cookie jar can arrive as an array of objects, a JSON-string of that
+      // array, or a single string blob from the legacy accounts.session_cookie
+      // column. We normalize all shapes into an array of {name, value, expires}.
+      function parseCookies(raw: unknown): Array<{ name: string; value?: string; expires?: number }> {
+        if (!raw) return []
+        if (Array.isArray(raw)) return raw as Array<{ name: string; value?: string; expires?: number }>
+        if (typeof raw === "string") {
+          try {
+            const parsed = JSON.parse(raw)
+            return Array.isArray(parsed) ? parsed : []
+          } catch {
+            return []
+          }
+        }
+        return []
+      }
+
+      const now = Date.now()
+      const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000    // 7d = still "active"
+      const EXPIRED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000 // 7-30d = "expired"
+
+      const enriched = accounts.map(acct => {
+        const a = acct as Record<string, unknown> & { account_id?: string; platform?: string; status?: string; session_cookie?: unknown }
+        const platform = (a.platform || "").toLowerCase()
+        const wanted = AUTH_COOKIE_NAMES[platform] || []
+
+        const sess = a.account_id ? sessionByAccount[a.account_id] : undefined
+        const sessionCookies = sess ? parseCookies(sess.cookies) : []
+        const mirrorCookies = parseCookies(a.session_cookie)
+        const allCookies = sessionCookies.length > 0 ? sessionCookies : mirrorCookies
+
+        // Any auth cookie still unexpired?
+        const hasAuthCookie = wanted.length > 0 && allCookies.some(c => {
+          if (!c || typeof c !== "object") return false
+          if (!wanted.includes(c.name)) return false
+          if (!c.value) return false
+          // Chrome expires is seconds-since-epoch. Session cookies = 0 / undefined.
+          if (typeof c.expires === "number" && c.expires > 0) {
+            if (c.expires * 1000 < now) return false
+          }
+          return true
+        })
+
+        // Freshness — when was the session last captured/verified?
+        const verifiedAt = sess?.last_verified_at || sess?.created_at || null
+        const ageMs = verifiedAt ? (now - new Date(verifiedAt).getTime()) : Infinity
+        const sessionAgeHours = verifiedAt ? Math.floor(ageMs / (60 * 60 * 1000)) : null
+
+        // Derive real status. Banned/flagged/cooldown/warming are preserved
+        // from the DB because those are lifecycle states — not login states.
+        let derivedStatus: string
+        if (a.status === "banned" || a.status === "flagged" || a.status === "cooldown") {
+          derivedStatus = String(a.status)
+        } else if (!sess && !hasAuthCookie) {
+          // Pending or never-logged-in — always a sign-in ask.
+          derivedStatus = "needs_signin"
+        } else if (!hasAuthCookie) {
+          // Cookies exist on disk but no valid auth cookie found — clearly expired.
+          derivedStatus = "needs_signin"
+        } else if (ageMs > EXPIRED_WINDOW_MS) {
+          // Cookie present but very stale — probably expired server-side too.
+          derivedStatus = "needs_signin"
+        } else if (ageMs > ACTIVE_WINDOW_MS) {
+          derivedStatus = "expired"
+        } else if (a.status === "warming") {
+          derivedStatus = "warming"
+        } else {
+          derivedStatus = "active"
+        }
+
+        return {
+          ...acct,
+          session_status: derivedStatus,
+          session_age_hours: sessionAgeHours,
+          has_auth_cookie: hasAuthCookie,
+          has_saved_session: !!sess,
+        }
+      })
+
+      return { success: true, action, data: enriched, count: enriched.length }
     }
 
     // ── GET AB TESTS ─────────────────────────────────────────────────
