@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server"
 const PUBLIC_ROUTES = ["/va-login", "/api/auth/verify-pin", "/api/auth/va-login"]
 
 // VA-accessible routes (after VA login)
-const VA_ROUTES = ["/va", "/va-queue", "/api/team", "/api/businesses", "/api/leads", "/api/activity", "/api/lead-activity"]
+const VA_ROUTES = ["/va", "/va-queue", "/api/team", "/api/businesses", "/api/leads", "/api/activity", "/api/lead-activity", "/api/proxy-groups", "/api/dashboard", "/api/warmup"]
 
 // Everything else requires admin auth
 
