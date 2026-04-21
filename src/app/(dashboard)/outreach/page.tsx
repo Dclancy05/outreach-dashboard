@@ -21,7 +21,7 @@ import { createClient } from "@supabase/supabase-js"
 import {
   Zap, Send, Play, Pause, Square, Settings, Target, Clock, Users, MessageCircle,
   Activity, RefreshCw, AlertTriangle, CheckCircle, XCircle, Search, ChevronRight, ChevronDown,
-  Instagram, Facebook, Linkedin, BarChart3, Loader2, CalendarDays, Rocket, StopCircle,
+  Instagram, Facebook, Linkedin, BarChart3, Loader2, CalendarDays, Rocket, StopCircle, Bell,
   Mail, Phone, Eye, EyeOff, Monitor, Plus, Trash2, Copy, Power, GripVertical, X,
   TrendingUp, Sparkles, Timer, ArrowRight, RotateCcw, Keyboard,
 } from "lucide-react"
@@ -991,6 +991,9 @@ export default function OutreachPage() {
           <Button onClick={() => setShowQuickCampaign(true)} variant="outline" size="sm" className="rounded-xl gap-1.5 border-violet-500/30 text-violet-400 hover:bg-violet-500/10">
             <Rocket className="h-4 w-4" /> Quick Campaign
           </Button>
+          <button onClick={() => toast.info("Notifications coming soon")} className="p-2 rounded-xl hover:bg-muted/50 transition-all text-muted-foreground hover:text-foreground" title="Notifications">
+            <Bell className="h-4 w-4" />
+          </button>
           <button onClick={() => setShowSafetyDialog(true)} className="p-2 rounded-xl hover:bg-muted/50 transition-all text-muted-foreground hover:text-foreground" title="Safety Settings">
             <Settings className="h-4 w-4" />
           </button>
