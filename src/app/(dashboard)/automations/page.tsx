@@ -1338,14 +1338,151 @@ function LiveViewTab() {
   )
 }
 
+/**
+ * MaintenanceTab
+ *
+ * Quality-control dashboard for every automation. Mirrors the Phase-2 spec:
+ * name, platform, status badge, last_tested_at, last_error (truncated +
+ * tooltip on hover). Top-right "Run maintenance now" button triggers
+ * /api/automations/maintenance/run which today returns 501 — we surface the
+ * server's status message as a toast so Dylan knows the cron/replay engine
+ * is the next workstream, not a silent bug.
+ */
 function MaintenanceTab() {
+  const [items, setItems] = useState<DbAutomation[]>([])
+  const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/automations")
+      const data = await res.json()
+      setItems(data.data || [])
+    } catch {} finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const runMaintenance = async () => {
+    setRunning(true)
+    setMessage(null)
+    try {
+      const res = await fetch("/api/automations/maintenance/run", { method: "POST" })
+      const data = await res.json()
+      setMessage(data.message || (res.ok ? "Done" : `Error ${res.status}`))
+    } catch (e) {
+      setMessage((e as Error).message || "Network error")
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const statusStyles: Record<string, string> = {
+    active: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
+    draft: "bg-muted/30 text-muted-foreground border-border/50",
+    needs_recording: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+    needs_rerecording: "bg-orange-500/20 text-orange-400 border-orange-500/30",
+    fixing: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+    broken: "bg-red-500/20 text-red-400 border-red-500/30",
+  }
+
   return (
-    <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-10 shadow-lg text-center">
-      <Wrench className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-      <h2 className="text-lg font-semibold mb-1">Maintenance</h2>
-      <p className="text-sm text-muted-foreground">
-        Per-automation health table + &quot;Run maintenance now&quot; button land here next.
-      </p>
+    <div className="space-y-4">
+      <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-4 shadow-lg">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold">Maintenance</h2>
+            <p className="text-xs text-muted-foreground">
+              Daily 6am ET cron will test every automation against the dummy group and self-heal selectors that break. Not yet running — button below is a manual trigger once the cron + replay engine ships.
+            </p>
+          </div>
+          <button
+            onClick={runMaintenance}
+            disabled={running}
+            className="inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-semibold bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white transition-colors"
+          >
+            {running ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Wrench className="h-4 w-4" />}
+            Run maintenance now
+          </button>
+        </div>
+        {message && (
+          <div className="mt-3 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-xs text-amber-300 flex items-start gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+            <span>{message}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/20">
+              <tr className="text-left text-xs text-muted-foreground">
+                <th className="px-4 py-3 font-semibold">Name</th>
+                <th className="px-4 py-3 font-semibold">Platform</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold">Last tested</th>
+                <th className="px-4 py-3 font-semibold">Last error</th>
+                <th className="px-4 py-3 font-semibold text-right">Health</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">
+                    <RefreshCw className="h-4 w-4 animate-spin inline mr-2" /> Loading…
+                  </td>
+                </tr>
+              )}
+              {!loading && items.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                    No automations yet. Add one from the <span className="font-semibold">Your Automations</span> tab.
+                  </td>
+                </tr>
+              )}
+              {items.map((a) => {
+                const shortPlatform = PLATFORM_FROM_DB[a.platform] || a.platform
+                const PlatformIcon = platformIcons[shortPlatform]
+                return (
+                  <tr key={a.id} className="border-t border-border/20 hover:bg-muted/10 transition-colors">
+                    <td className="px-4 py-3 font-medium">{a.name}</td>
+                    <td className="px-4 py-3">
+                      <div className="inline-flex items-center gap-1.5 text-xs">
+                        {PlatformIcon && <PlatformIcon className="h-4 w-4" />}
+                        {platformLabels[shortPlatform] || a.platform}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold border ${statusStyles[a.status] || statusStyles.draft}`}>
+                        {a.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground">
+                      {a.last_tested_at ? new Date(a.last_tested_at).toLocaleString() : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-xs max-w-xs">
+                      {a.last_error ? (
+                        <span className="text-red-400 line-clamp-2" title={a.last_error}>{a.last_error}</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className={`inline-block w-10 text-xs font-semibold tabular-nums ${
+                        a.health_score >= 90 ? "text-emerald-400" : a.health_score >= 60 ? "text-amber-400" : "text-red-400"
+                      }`}>
+                        {a.health_score}%
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   )
 }
