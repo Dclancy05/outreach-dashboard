@@ -21,7 +21,7 @@ import { createClient } from "@supabase/supabase-js"
 import {
   Zap, Send, Play, Pause, Square, Settings, Target, Clock, Users, MessageCircle,
   Activity, RefreshCw, AlertTriangle, CheckCircle, XCircle, Search, ChevronRight, ChevronDown,
-  Instagram, Facebook, Linkedin, FileText, BarChart3, Loader2, CalendarDays, Rocket, StopCircle,
+  Instagram, Facebook, Linkedin, BarChart3, Loader2, CalendarDays, Rocket, StopCircle,
   Mail, Phone, Eye, EyeOff, Monitor, Plus, Trash2, Copy, Power, GripVertical, X,
   TrendingUp, Sparkles, Timer, ArrowRight, RotateCcw, Keyboard,
 } from "lucide-react"
@@ -2014,16 +2014,6 @@ export default function OutreachPage() {
           </motion.div>
         </TabsContent>
 
-        {/* ═══ TEMPLATES ═══ */}
-        <TabsContent value="templates" className="mt-4">
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-            className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-8 shadow-lg text-center"
-          >
-            <FileText className="h-8 w-8 mx-auto mb-2 opacity-40 text-muted-foreground" />
-            <p className="text-muted-foreground">Template management is available on the <a href="/templates" className="text-violet-400 underline">Templates page</a>.</p>
-            <p className="text-xs mt-1 text-muted-foreground">A/B performance stats coming soon.</p>
-          </motion.div>
-        </TabsContent>
       </Tabs>
 
       {/* Confirmation Dialog */}
