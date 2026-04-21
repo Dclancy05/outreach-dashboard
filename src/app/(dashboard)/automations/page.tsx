@@ -8,7 +8,7 @@ import {
   ChevronDown, ChevronUp, Tag, Plus, Clock, Circle, ExternalLink,
   RefreshCw, Zap, RotateCcw, HelpCircle, ChevronRight, PartyPopper,
   LayoutGrid, Wrench, Eye, Activity, PlayCircle, Edit2, TrendingUp,
-  Pencil,
+  Pencil, Server,
 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -1143,14 +1143,197 @@ function OverviewTab() {
   )
 }
 
+/**
+ * LiveViewTab
+ *
+ * Always-on embedded noVNC window of the GLOBAL DUMMY group (the single
+ * proxy_groups row with is_dummy=true). Dylan uses this for (a) recording
+ * new automations against the dummy browser and (b) watching the
+ * maintenance cron exercise existing automations.
+ *
+ * Above the iframe is a "Dummy account" dropdown — pick which account in
+ * the dummy group we should operate as. Selection persists to
+ * automation_dummy_selection so reloads don't lose the choice.
+ *
+ * The VNC URL matches what the Accounts setup wizard (vnc-login-flow.tsx)
+ * hits, so the same Chrome profile is visible from both places.
+ */
 function LiveViewTab() {
+  interface DummyGroup {
+    id: string
+    name: string | null
+    ip: string | null
+    port: string | null
+    location_city: string | null
+    location_country: string | null
+  }
+  interface DummyAccount {
+    account_id: string
+    platform: string
+    username: string | null
+    display_name: string | null
+    status: string | null
+  }
+
+  const [loading, setLoading] = useState(true)
+  const [group, setGroup] = useState<DummyGroup | null>(null)
+  const [accounts, setAccounts] = useState<DummyAccount[]>([])
+  const [selectedId, setSelectedId] = useState<string>("")
+  const [warning, setWarning] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [iframeLoaded, setIframeLoaded] = useState(false)
+  const [iframeError, setIframeError] = useState(false)
+
+  const fetchSelection = useCallback(async () => {
+    try {
+      const res = await fetch("/api/automations/dummy-selection")
+      const data = await res.json()
+      if (data.error) { setWarning(data.error); setLoading(false); return }
+      if (!data.group) {
+        setWarning(data.message || "No dummy group configured. Mark one proxy group as is_dummy=true in the Accounts page.")
+        setGroup(null); setAccounts([]); setSelectedId(""); setLoading(false); return
+      }
+      setWarning(null)
+      setGroup(data.group)
+      setAccounts(data.accounts || [])
+      setSelectedId(data.selection?.account_id || "")
+    } catch (e) {
+      setWarning((e as Error).message || "Failed to load dummy selection")
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { fetchSelection() }, [fetchSelection])
+
+  const handleSelect = async (accountId: string) => {
+    if (!group) return
+    setSelectedId(accountId)
+    setSaving(true)
+    try {
+      await fetch("/api/automations/dummy-selection", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proxy_group_id: group.id, account_id: accountId || null }),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
-    <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-10 shadow-lg text-center">
-      <Eye className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-      <h2 className="text-lg font-semibold mb-1">Live View</h2>
-      <p className="text-sm text-muted-foreground">
-        Dummy-account dropdown + always-on noVNC embed land here next.
-      </p>
+    <div className="space-y-4">
+      {/* Dummy group + account selector */}
+      <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-4 shadow-lg">
+        {loading ? (
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <RefreshCw className="h-4 w-4 animate-spin" /> Loading dummy group...
+          </div>
+        ) : warning ? (
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-amber-300">No dummy group</p>
+              <p className="text-xs text-muted-foreground mt-1">{warning}</p>
+              <p className="text-xs text-muted-foreground mt-2">
+                Head to <span className="font-mono bg-muted/30 px-1.5 py-0.5 rounded">Accounts &amp; Proxies</span>, pick a group you&apos;ve fully set up, and mark <code>is_dummy</code>=true in Supabase (migration 003 adds the column).
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className="rounded-lg p-1.5 bg-purple-500/20">
+                <Server className="h-4 w-4 text-purple-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Dummy group</p>
+                <p className="text-sm font-semibold">
+                  {group?.name || group?.ip || "unnamed"}
+                  <span className="ml-2 text-[10px] text-muted-foreground font-normal">
+                    {[group?.location_city, group?.location_country].filter(Boolean).join(", ") || ""}
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex-1 min-w-[220px]">
+              <label className="text-xs text-muted-foreground block mb-1">Operate as</label>
+              <select
+                value={selectedId}
+                onChange={e => handleSelect(e.target.value)}
+                disabled={saving}
+                className="w-full rounded-xl border border-border/50 bg-muted/20 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:opacity-60"
+              >
+                <option value="">— No account selected —</option>
+                {accounts.map(a => (
+                  <option key={a.account_id} value={a.account_id}>
+                    {a.platform} · {a.display_name || a.username || a.account_id}
+                  </option>
+                ))}
+              </select>
+              {accounts.length === 0 && (
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  This group has no accounts yet — add some in Accounts &amp; Proxies.
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              {saving && <RefreshCw className="h-3 w-3 animate-spin" />}
+              {!saving && selectedId && <CheckCircle className="h-3 w-3 text-emerald-400" />}
+              <span>{saving ? "Saving…" : selectedId ? "Persisted" : "Pick an account"}</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* noVNC iframe */}
+      <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg overflow-hidden">
+        <div className="flex items-center justify-between p-3 border-b border-border/30">
+          <div className="flex items-center gap-2">
+            <Monitor className="h-4 w-4 text-purple-400" />
+            <span className="text-sm font-semibold">Dummy Group Browser</span>
+            <span className="text-[10px] text-muted-foreground">(noVNC)</span>
+          </div>
+          <a
+            href={VNC_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-muted/30 hover:bg-muted/50 transition-colors"
+          >
+            <ExternalLink className="h-3 w-3" /> Open in new tab
+          </a>
+        </div>
+        <div className="relative aspect-[16/9] bg-black/50">
+          {!iframeError ? (
+            <>
+              {!iframeLoaded && (
+                <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm">
+                  <RefreshCw className="h-4 w-4 animate-spin mr-2" /> Loading noVNC…
+                </div>
+              )}
+              <iframe
+                src={VNC_URL}
+                className="w-full h-full border-0"
+                onLoad={() => setIframeLoaded(true)}
+                onError={() => setIframeError(true)}
+                allow="clipboard-read; clipboard-write"
+              />
+            </>
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
+              <Monitor className="h-10 w-10 text-muted-foreground mb-2" />
+              <p className="text-sm font-medium">Can&apos;t embed the browser here</p>
+              <a href={VNC_URL} target="_blank" rel="noopener noreferrer"
+                className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold transition-colors"
+              >
+                <ExternalLink className="h-4 w-4" /> Open in new window
+              </a>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
