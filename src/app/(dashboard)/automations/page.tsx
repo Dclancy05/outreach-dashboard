@@ -1131,14 +1131,142 @@ function RecordingModal({
  * constants. Splitting them out only adds imports without reducing coupling.
  */
 
+/**
+ * OverviewTab
+ *
+ * High-level summary surface: total automations, how many are active vs
+ * broken, recent run volume, success rate, and a short list of the latest
+ * automation_runs so Dylan can see activity without jumping to Maintenance.
+ *
+ * All data comes from one /api/automations GET — the route computes counts
+ * + success_rate server-side so this tab stays a thin renderer.
+ */
 function OverviewTab() {
+  const [loading, setLoading] = useState(true)
+  const [counts, setCounts] = useState<Record<string, number> | null>(null)
+  const [successRate, setSuccessRate] = useState<number | null>(null)
+  const [runs, setRuns] = useState<DbAutomationRun[]>([])
+  const [automations, setAutomations] = useState<DbAutomation[]>([])
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/automations")
+      const data = await res.json()
+      setCounts(data.counts || null)
+      setSuccessRate(typeof data.success_rate === "number" ? data.success_rate : null)
+      setRuns(data.runs || [])
+      setAutomations(data.data || [])
+    } catch {} finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const Card = ({
+    label, value, hint, icon: Icon, tone,
+  }: { label: string; value: string; hint?: string; icon: React.FC<{ className?: string }>; tone: string }) => (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-4 shadow-lg"
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <div className={`rounded-lg p-1.5 ${tone}`}>
+          <Icon className="h-4 w-4" />
+        </div>
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      </div>
+      <p className="text-2xl font-bold tabular-nums">{value}</p>
+      {hint && <p className="text-[11px] text-muted-foreground mt-0.5">{hint}</p>}
+    </motion.div>
+  )
+
+  const total = counts?.total ?? 0
+  const active = counts?.active ?? 0
+  const broken = counts?.broken ?? 0
+  const needsRerec = counts?.needs_rerecording ?? 0
+  const recentRuns = counts?.recent_runs ?? 0
+  const draft = counts?.draft ?? 0
+
+  const runById = new Map(automations.map(a => [a.id, a.name]))
+
   return (
-    <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-10 shadow-lg text-center">
-      <LayoutGrid className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-      <h2 className="text-lg font-semibold mb-1">Overview</h2>
-      <p className="text-sm text-muted-foreground">
-        Summary cards (total automations, active, broken, recent runs, success rate) land here next.
-      </p>
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        <Card
+          label="Total automations"
+          value={loading ? "—" : String(total)}
+          icon={Wand2}
+          tone="bg-orange-500/20 text-orange-400"
+          hint={draft ? `${draft} draft` : undefined}
+        />
+        <Card
+          label="Active"
+          value={loading ? "—" : String(active)}
+          icon={CheckCircle}
+          tone="bg-emerald-500/20 text-emerald-400"
+          hint={total ? `${Math.round((active / total) * 100)}% of catalog` : "No automations yet"}
+        />
+        <Card
+          label="Broken"
+          value={loading ? "—" : String(broken)}
+          icon={AlertTriangle}
+          tone="bg-red-500/20 text-red-400"
+          hint={needsRerec ? `+${needsRerec} need re-record` : "All healthy"}
+        />
+        <Card
+          label="Recent runs"
+          value={loading ? "—" : String(recentRuns)}
+          icon={Activity}
+          tone="bg-blue-500/20 text-blue-400"
+          hint="Last 50 runs"
+        />
+        <Card
+          label="Success rate"
+          value={loading ? "—" : successRate === null ? "—" : `${successRate}%`}
+          icon={TrendingUp}
+          tone="bg-purple-500/20 text-purple-400"
+          hint={successRate === null ? "No finished runs" : "Passed + auto-healed"}
+        />
+      </div>
+
+      {/* Recent runs list */}
+      <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border/30">
+          <h3 className="text-sm font-semibold">Recent Runs</h3>
+          <span className="text-[10px] text-muted-foreground">Latest 20</span>
+        </div>
+        {loading ? (
+          <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+            <RefreshCw className="h-4 w-4 animate-spin inline mr-2" /> Loading…
+          </div>
+        ) : runs.length === 0 ? (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            No runs yet. Once the replay engine ships and maintenance runs against the dummy group, they&apos;ll show up here.
+          </div>
+        ) : (
+          <ul className="divide-y divide-border/20">
+            {runs.slice(0, 20).map(run => {
+              const tone = run.status === "passed" ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+                : run.status === "healed" ? "bg-blue-500/20 text-blue-400 border-blue-500/30"
+                : run.status === "failed" ? "bg-red-500/20 text-red-400 border-red-500/30"
+                : "bg-amber-500/20 text-amber-400 border-amber-500/30"
+              return (
+                <li key={run.id} className="flex items-center justify-between px-4 py-2.5 text-xs hover:bg-muted/10 transition-colors">
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{runById.get(run.automation_id) || run.automation_id.slice(0, 8)}</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {run.run_type || "run"} · {new Date(run.started_at).toLocaleString()}
+                    </p>
+                  </div>
+                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold border ${tone}`}>
+                    {run.status}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
     </div>
   )
 }
