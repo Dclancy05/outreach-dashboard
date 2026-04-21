@@ -14,7 +14,8 @@ import { ConfirmDialog } from "@/components/confirm-dialog"
 import { TagDisplay } from "@/components/tag-input"
 import { TagInput } from "@/components/tag-input"
 import { LeadDetailPopup } from "@/components/lead-detail-popup"
-import { Users, Search, FileUp, Filter, Trash2, Pause, RotateCcw, Plus, ArrowUpDown, ArrowUp, ArrowDown, Tag, FolderOpen, X, ChevronLeft, ChevronsLeft, ChevronsRight, Download, Zap, AlertTriangle, Star } from "lucide-react"
+import { EnrichLeadsModal } from "@/components/leads/enrich-leads-modal"
+import { Users, Search, FileUp, Filter, Trash2, Pause, RotateCcw, Plus, ArrowUpDown, ArrowUp, ArrowDown, Tag, FolderOpen, X, ChevronLeft, ChevronsLeft, ChevronsRight, Download, Zap, AlertTriangle, Star, Sparkles } from "lucide-react"
 import { toast } from "sonner"
 import { exportToCSV } from "@/lib/csv-export"
 import { PageInstructions } from "@/components/page-instructions"
@@ -130,6 +131,7 @@ export default function LeadsPage() {
   const [removeTagOpen, setRemoveTagOpen] = useState(false)
   const [removeTags, setRemoveTags] = useState<string[]>([])
   const [selectAllMatching, setSelectAllMatching] = useState(false)
+  const [enrichOpen, setEnrichOpen] = useState(false)
 
   const smartLists = smartListsData || []
   const allTags: string[] = filterData?.tags || []
@@ -380,6 +382,9 @@ export default function LeadsPage() {
           <Button variant="outline" size="sm" className="gap-1" onClick={handleScoreLeads} disabled={scoringLoading}>
             <Zap className="h-3.5 w-3.5" /> {scoringLoading ? "Scoring..." : selected.size > 0 ? `Score ${selected.size}` : "Score All"}
           </Button>
+          <Button variant="outline" size="sm" className="gap-1 text-neon-blue border-neon-blue/40" onClick={() => setEnrichOpen(true)} title="Enrich selected leads — or all leads missing these fields — via a lead_enrichment automation">
+            <Sparkles className="h-3.5 w-3.5" /> Enrich Leads{selected.size > 0 ? ` (${selected.size})` : ""}
+          </Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => {
             if (leads.length) exportToCSV(leads as unknown as Record<string, unknown>[], "leads")
           }}>
@@ -620,6 +625,7 @@ export default function LeadsPage() {
             </Button>
           )}
           <div className="flex-1" />
+          <Button size="sm" variant="ghost" className="gap-1 text-neon-blue" onClick={() => setEnrichOpen(true)} disabled={actionLoading !== null}><Sparkles className="h-3 w-3" /> Enrich</Button>
           <Button size="sm" variant="ghost" className="gap-1 text-yellow-400" onClick={() => handleStatusChange("paused")} disabled={actionLoading !== null}><Pause className="h-3 w-3" /> Pause</Button>
           <Button size="sm" variant="ghost" className="gap-1 text-green-400" onClick={() => handleStatusChange("new")} disabled={actionLoading !== null}><RotateCcw className="h-3 w-3" /> Reset</Button>
           {smartLists.length > 0 && (
@@ -732,6 +738,12 @@ export default function LeadsPage() {
 
       <LeadDetailPopup lead={detailLead} open={detailOpen} onOpenChange={setDetailOpen} smartLists={smartLists} onUpdate={() => { mutate(); setDetailOpen(false) }} />
       <ConfirmDialog open={confirmDelete} onOpenChange={setConfirmDelete} title="Delete Leads" description={`Delete ${selected.size} lead(s)? This cannot be undone.`} onConfirm={handleDeleteSelected} />
+      <EnrichLeadsModal
+        open={enrichOpen}
+        onOpenChange={setEnrichOpen}
+        leadIds={[...selected]}
+        onComplete={() => { setSelected(new Set()); mutate(); mutateFilters() }}
+      />
     </div>
   )
 }

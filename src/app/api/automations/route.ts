@@ -19,12 +19,23 @@ export const dynamic = "force-dynamic"
  * Everything degrades gracefully: if a table doesn't exist yet (migration not
  * applied) we return empty data instead of 500-ing the whole page.
  */
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
+  // Optional `?tag=lead_enrichment` filter so callers (e.g. the Enrich Leads
+  // modal) can get only the automations relevant to their surface. When
+  // omitted, all automations come back.
+  const tagFilter = req.nextUrl.searchParams.get("tag")
+
+  let autoQuery = supabase
+    .from("automations")
+    .select("id, name, platform, status, tag, description, steps, created_at, updated_at, last_tested_at, last_error, health_score, account_id")
+    .order("updated_at", { ascending: false })
+
+  if (tagFilter) {
+    autoQuery = autoQuery.eq("tag", tagFilter)
+  }
+
   const [autoRes, runsRes] = await Promise.all([
-    supabase
-      .from("automations")
-      .select("id, name, platform, status, tag, description, steps, created_at, updated_at, last_tested_at, last_error, health_score, account_id")
-      .order("updated_at", { ascending: false }),
+    autoQuery,
     supabase
       .from("automation_runs")
       .select("id, automation_id, run_type, status, started_at, finished_at, error, steps_completed")
