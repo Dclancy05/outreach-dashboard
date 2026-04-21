@@ -26,7 +26,6 @@ import {
   TrendingUp, Sparkles, Timer, ArrowRight, RotateCcw, Keyboard,
 } from "lucide-react"
 
-const ManualMode = lazy(() => import("@/app/(dashboard)/manual/page"))
 const LeadsPage = lazy(() => import("@/app/(dashboard)/leads/page"))
 const OutreachCalendar = lazy(() => import("@/components/outreach/outreach-calendar"))
 
@@ -2013,13 +2012,6 @@ export default function OutreachPage() {
               <OutreachCalendar />
             </Suspense>
           </motion.div>
-        </TabsContent>
-
-        {/* ═══ MANUAL MODE ═══ */}
-        <TabsContent value="manual" className="mt-4">
-          <Suspense fallback={<div className="flex items-center justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-violet-400" /></div>}>
-            <ManualMode />
-          </Suspense>
         </TabsContent>
 
         {/* ═══ TEMPLATES ═══ */}
