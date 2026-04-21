@@ -864,13 +864,17 @@ export default function AccountsPage() {
                           <PulseDot color={health === "green" ? "bg-green-500" : health === "yellow" ? "bg-amber-500" : "bg-zinc-500"} />
                         </div>
                       </div>
-                      <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                      <div
+                        className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"
+                        title="Mark this group as the dummy for automation recording. Only one group can be dummy at a time."
+                      >
                         <Switch
                           checked={!!proxy.is_dummy}
                           onCheckedChange={(v) => toggleDummy(proxy.id, !!v)}
                           aria-label="Dummy group toggle"
                         />
-                        <span>Dummy group (used only for automations)</span>
+                        <span>Dummy group</span>
+                        <span className="text-muted-foreground/60">— used only for automation recording</span>
                       </div>
                     </div>
 
@@ -1154,8 +1158,11 @@ export default function AccountsPage() {
                                 </button>
                                 <div className="flex items-center gap-1.5">
                                   <span className="font-semibold text-sm text-foreground">@{a.username || a.display_name || a.account_id}</span>
-                                  {(a as any).session_cookie && (
-                                    <span title="Session saved"><CheckCircle2 className="h-3.5 w-3.5 text-green-400" /></span>
+                                  {/* Only show the green "session saved" checkmark when the
+                                      saved cookie jar actually contains a live auth cookie —
+                                      otherwise a stale blob lies about being signed in. */}
+                                  {a.has_auth_cookie && (
+                                    <span title="Active session (auth cookie live)"><CheckCircle2 className="h-3.5 w-3.5 text-green-400" /></span>
                                   )}
                                   {(a as any).twofa_secret && (
                                     <span title="2FA configured"><Shield className="h-3.5 w-3.5 text-violet-400" /></span>

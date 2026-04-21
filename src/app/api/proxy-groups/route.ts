@@ -80,5 +80,46 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, healthy: true })
   }
 
+  if (action === "set_dummy") {
+    const { id, is_dummy } = body
+    if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 })
+    return setDummy(id, !!is_dummy)
+  }
+
   return NextResponse.json({ error: "Unknown action" }, { status: 400 })
+}
+
+export async function PATCH(req: NextRequest) {
+  const body = await req.json()
+  const { id, is_dummy } = body
+  if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 })
+
+  // Dedicated flow for the is_dummy flag — it must be unique across all groups.
+  if (typeof is_dummy === "boolean") {
+    return setDummy(id, is_dummy)
+  }
+
+  // Generic patch for other updatable fields.
+  const { action: _a, id: _i, ...updates } = body
+  ;(updates as Record<string, unknown>).updated_at = new Date().toISOString()
+  const { error } = await supabase.from("proxy_groups").update(updates).eq("id", id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ success: true })
+}
+
+async function setDummy(id: string, flag: boolean) {
+  if (flag) {
+    // Clear any existing dummy group first so only one can be true at a time.
+    const { error: clearErr } = await supabase
+      .from("proxy_groups")
+      .update({ is_dummy: false })
+      .eq("is_dummy", true)
+    if (clearErr) return NextResponse.json({ error: clearErr.message }, { status: 500 })
+  }
+  const { error } = await supabase
+    .from("proxy_groups")
+    .update({ is_dummy: flag })
+    .eq("id", id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ success: true, is_dummy: flag })
 }
