@@ -3,10 +3,19 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "installCommand": "npm install",
+  "$comment_crons": "Schedules are UTC. 10:00 UTC = 6 AM EDT (current) / 5 AM EST. Switch to '0 11 * * *' in November once we leave daylight time. The ai-agent scan runs every 15 min; slow it down to '*/30' if DB load spikes.",
   "crons": [
     {
       "path": "/api/cron/warmup-tick",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/automations-maintenance",
+      "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/ai-agent/scan",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

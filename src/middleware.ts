@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from "next/server"
 
-// Public routes that don't require auth
-const PUBLIC_ROUTES = ["/va-login", "/api/auth/verify-pin", "/api/auth/va-login"]
+// Public routes that don't require auth. Cron + ai-agent routes are listed
+// here because they do their own CRON_SECRET bearer check — if we don't
+// whitelist them, the session-cookie gate below 401s Vercel Cron calls
+// before the route's own auth can run.
+const PUBLIC_ROUTES = [
+  "/va-login",
+  "/api/auth/verify-pin",
+  "/api/auth/va-login",
+  "/api/cron/",
+  "/api/ai-agent/",
+]
 
 // VA-accessible routes (after VA login)
 const VA_ROUTES = ["/va", "/va-queue", "/api/team", "/api/businesses", "/api/leads", "/api/activity", "/api/lead-activity", "/api/proxy-groups", "/api/dashboard", "/api/warmup"]
