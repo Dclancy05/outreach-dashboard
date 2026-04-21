@@ -6,8 +6,10 @@ import {
   Wand2, Play, Square, Trash2, X, CheckCircle, AlertTriangle,
   Video, Monitor, Pause, Download, Send, BarChart3, Rocket,
   ChevronDown, ChevronUp, Tag, Plus, Clock, Circle, ExternalLink,
-  RefreshCw, Zap, RotateCcw, HelpCircle, ChevronRight, PartyPopper
+  RefreshCw, Zap, RotateCcw, HelpCircle, ChevronRight, PartyPopper,
+  LayoutGrid, Wrench, Eye, Activity, PlayCircle, Edit2, TrendingUp,
 } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.08 } } }
 const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.5 } } }
@@ -808,6 +810,49 @@ function RecordingModal({
   )
 }
 
+/* ─── Tab placeholder components ───
+ * These are lightweight shells now and get fleshed out in P2.E / P2.F / P2.G.
+ * They live here (same file) rather than separate files because every tab
+ * reads from the same `/api/automations*` endpoints and shares platform
+ * constants. Splitting them out only adds imports without reducing coupling.
+ */
+
+function OverviewTab() {
+  return (
+    <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-10 shadow-lg text-center">
+      <LayoutGrid className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+      <h2 className="text-lg font-semibold mb-1">Overview</h2>
+      <p className="text-sm text-muted-foreground">
+        Summary cards (total automations, active, broken, recent runs, success rate) land here next.
+      </p>
+    </div>
+  )
+}
+
+function LiveViewTab() {
+  return (
+    <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-10 shadow-lg text-center">
+      <Eye className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+      <h2 className="text-lg font-semibold mb-1">Live View</h2>
+      <p className="text-sm text-muted-foreground">
+        Dummy-account dropdown + always-on noVNC embed land here next.
+      </p>
+    </div>
+  )
+}
+
+function MaintenanceTab() {
+  return (
+    <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-10 shadow-lg text-center">
+      <Wrench className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
+      <h2 className="text-lg font-semibold mb-1">Maintenance</h2>
+      <p className="text-sm text-muted-foreground">
+        Per-automation health table + &quot;Run maintenance now&quot; button land here next.
+      </p>
+    </div>
+  )
+}
+
 /* ─── Main Page ─── */
 export default function AutomationsPage() {
   const [recordings, setRecordings] = useState<Recording[]>([])
@@ -1138,6 +1183,45 @@ export default function AutomationsPage() {
         </motion.a>
       </motion.div>
 
+      {/* ═══ 4 Sub-Tabs ═══ Matches the accounts/proxies page pattern. */}
+      <Tabs defaultValue="your-automations">
+        <div className="flex gap-1 p-1 rounded-xl bg-muted/30 backdrop-blur-sm w-fit">
+          <TabsList className="bg-transparent p-0 h-auto">
+            <TabsTrigger
+              value="overview"
+              className="gap-1.5 rounded-lg px-4 py-2 text-sm font-medium data-[state=active]:bg-card data-[state=active]:shadow-sm data-[state=active]:text-foreground text-muted-foreground hover:text-foreground transition-all"
+            >
+              <LayoutGrid className="h-4 w-4" /> Overview
+            </TabsTrigger>
+            <TabsTrigger
+              value="your-automations"
+              className="gap-1.5 rounded-lg px-4 py-2 text-sm font-medium data-[state=active]:bg-card data-[state=active]:shadow-sm data-[state=active]:text-foreground text-muted-foreground hover:text-foreground transition-all"
+            >
+              <Wand2 className="h-4 w-4" /> Your Automations
+            </TabsTrigger>
+            <TabsTrigger
+              value="live-view"
+              className="gap-1.5 rounded-lg px-4 py-2 text-sm font-medium data-[state=active]:bg-card data-[state=active]:shadow-sm data-[state=active]:text-foreground text-muted-foreground hover:text-foreground transition-all"
+            >
+              <Eye className="h-4 w-4" /> Live View
+            </TabsTrigger>
+            <TabsTrigger
+              value="maintenance"
+              className="gap-1.5 rounded-lg px-4 py-2 text-sm font-medium data-[state=active]:bg-card data-[state=active]:shadow-sm data-[state=active]:text-foreground text-muted-foreground hover:text-foreground transition-all"
+            >
+              <Wrench className="h-4 w-4" /> Maintenance
+            </TabsTrigger>
+          </TabsList>
+        </div>
+
+        {/* ─── Overview tab ─── (populated in P2.G) */}
+        <TabsContent value="overview" className="space-y-6 mt-6">
+          <OverviewTab />
+        </TabsContent>
+
+        {/* ─── Your Automations tab ─── (the legacy platform-cards grid lives here) */}
+        <TabsContent value="your-automations" className="space-y-6 mt-6">
+
       {/* Your Automations */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
         <div className="flex items-center gap-3 mb-4">
@@ -1337,6 +1421,19 @@ export default function AutomationsPage() {
           })}
         </div>
       </motion.div>
+
+        </TabsContent>
+
+        {/* ─── Live View tab ─── (populated in P2.E) */}
+        <TabsContent value="live-view" className="space-y-6 mt-6">
+          <LiveViewTab />
+        </TabsContent>
+
+        {/* ─── Maintenance tab ─── (populated in P2.F) */}
+        <TabsContent value="maintenance" className="space-y-6 mt-6">
+          <MaintenanceTab />
+        </TabsContent>
+      </Tabs>
 
       {/* Video Playback Modal */}
       <AnimatePresence>
