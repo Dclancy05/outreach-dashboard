@@ -8,6 +8,7 @@ import {
   ChevronDown, ChevronUp, Tag, Plus, Clock, Circle, ExternalLink,
   RefreshCw, Zap, RotateCcw, HelpCircle, ChevronRight, PartyPopper,
   LayoutGrid, Wrench, Eye, Activity, PlayCircle, Edit2, TrendingUp,
+  Pencil,
 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -62,12 +63,38 @@ function YouTubeIcon({ className = "h-5 w-5" }: { className?: string }) {
     </svg>
   )
 }
+function XIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none">
+      <rect x="2" y="2" width="20" height="20" rx="4" fill="#000"/>
+      <path d="M7 7l10 10M17 7L7 17" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+  )
+}
+function SnapchatIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none">
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#FFFC00"/>
+      <path d="M12 5.5c-3 0-4.5 2-4.5 4.2v2.3c-.4.2-1 .4-1.5.4-.3 0-.5.2-.5.5 0 .4.3.7 1.2 1.1.5.2.9.4 1.1.7-.2 1.1-1.5 1.8-2.4 2.2-.3.1-.4.3-.4.5 0 .4.7.6 1.4.7.2.7.7.9 1 .9.3 0 .7-.1 1.2-.1.6 0 1 .1 1.6.5.6.4 1.2.7 2.3.7s1.7-.3 2.3-.7c.6-.4 1-.5 1.6-.5.5 0 .9.1 1.2.1.3 0 .8-.2 1-.9.7-.1 1.4-.3 1.4-.7 0-.2-.1-.4-.4-.5-.9-.4-2.2-1.1-2.4-2.2.2-.3.6-.5 1.1-.7.9-.4 1.2-.7 1.2-1.1 0-.3-.2-.5-.5-.5-.5 0-1.1-.2-1.5-.4V9.7c0-2.2-1.5-4.2-4.5-4.2z" fill="#000"/>
+    </svg>
+  )
+}
+function PinterestIcon({ className = "h-5 w-5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none">
+      <circle cx="12" cy="12" r="10" fill="#E60023"/>
+      <path d="M12.2 6.8c-2.5 0-4.5 1.6-4.5 4 0 1.1.4 2.2 1.3 2.5.1.1.3 0 .3-.1l.1-.5c0-.1 0-.2-.1-.3-.2-.3-.4-.7-.4-1.3 0-1.7 1.3-3.2 3.3-3.2 1.8 0 2.8 1.1 2.8 2.6 0 2-.9 3.7-2.2 3.7-.7 0-1.3-.6-1.1-1.4.2-.9.7-1.9.7-2.6 0-.6-.3-1.1-1-1.1-.8 0-1.4.8-1.4 1.9 0 .7.2 1.1.2 1.1L9.4 16c-.3 1.1-.1 2.5-.1 2.6 0 .1.1.1.2.1 0 0 .6-.8 1.1-1.9.1-.3.7-2.8.7-2.8.3.7 1.3 1.3 2.3 1.3 3 0 5.1-2.8 5.1-6.4 0-2.8-2.3-4.9-5.5-4.9z" fill="white"/>
+    </svg>
+  )
+}
 
 const platformIcons: Record<string, React.FC<{ className?: string }>> = {
-  ig: IGIcon, fb: FBIcon, li: LIIcon, tiktok: TikTokIcon, youtube: YouTubeIcon
+  ig: IGIcon, fb: FBIcon, li: LIIcon, tiktok: TikTokIcon, youtube: YouTubeIcon,
+  x: XIcon, snapchat: SnapchatIcon, pinterest: PinterestIcon,
 }
 const platformLabels: Record<string, string> = {
-  ig: "Instagram", fb: "Facebook", li: "LinkedIn", tiktok: "TikTok", youtube: "YouTube"
+  ig: "Instagram", fb: "Facebook", li: "LinkedIn", tiktok: "TikTok", youtube: "YouTube",
+  x: "X", snapchat: "Snapchat", pinterest: "Pinterest",
 }
 const platformColors: Record<string, string> = {
   ig: "from-pink-500/20 to-purple-500/20 border-pink-500/30",
@@ -75,6 +102,9 @@ const platformColors: Record<string, string> = {
   li: "from-sky-500/20 to-blue-500/20 border-sky-500/30",
   tiktok: "from-muted/30 to-muted/40 border-border/50",
   youtube: "from-red-500/20 to-red-600/20 border-red-500/30",
+  x: "from-zinc-500/20 to-zinc-600/20 border-zinc-500/30",
+  snapchat: "from-yellow-400/20 to-yellow-500/20 border-yellow-500/30",
+  pinterest: "from-rose-500/20 to-red-500/20 border-rose-500/30",
 }
 
 /* ─── Recording Guides ─── */
@@ -284,7 +314,24 @@ const ALL_AUTOMATIONS: AutomationDef[] = [
   { platform: "youtube", action: "Subscribe", actionKey: "subscribe", active: false, desc: "Subscribe to YouTube channels" },
 ]
 
-const PLATFORMS_ORDER = ["ig", "fb", "li", "tiktok", "youtube"]
+const PLATFORMS_ORDER = ["ig", "fb", "li", "tiktok", "youtube", "x", "snapchat", "pinterest"]
+
+/** Map short platform keys (ig/fb/li/etc) to the DB platform strings the
+ *  /api/automations route stores. Keep this in sync with migration 005. */
+const PLATFORM_DB_KEY: Record<string, string> = {
+  ig: "instagram", fb: "facebook", li: "linkedin",
+  tiktok: "tiktok", youtube: "youtube", x: "twitter",
+  snapchat: "snapchat", pinterest: "pinterest",
+}
+const PLATFORM_FROM_DB: Record<string, string> = Object.fromEntries(
+  Object.entries(PLATFORM_DB_KEY).map(([k, v]) => [v, k])
+)
+
+const AUTOMATION_TAGS = [
+  { value: "outreach_action", label: "Outreach Action", hint: "Sends a DM, follows, connects, etc." },
+  { value: "lead_enrichment", label: "Lead Enrichment", hint: "Scrapes profile data for a lead." },
+  { value: "utility", label: "Utility", hint: "Housekeeping tasks (logout, refresh, etc.)" },
+] as const
 
 const VNC_URL = "https://srv1197943.taild42583.ts.net/vnc.html"
 
@@ -321,6 +368,273 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
         </div>
         <button onClick={onClose} className="text-emerald-400/60 hover:text-emerald-300"><X className="h-4 w-4" /></button>
       </div>
+    </motion.div>
+  )
+}
+
+/* ─── Types — new automations catalog (Phase 2) ─── */
+/**
+ * Shape of a row returned by /api/automations (the new `automations` table
+ * added in migration 005). Kept in one place so Your Automations cards,
+ * Maintenance table, and Overview tiles can all share the same type.
+ */
+interface DbAutomation {
+  id: string
+  name: string
+  platform: string                   // DB platform string (instagram, facebook, ...)
+  status: "draft" | "needs_recording" | "active" | "needs_rerecording" | "fixing" | "broken"
+  tag: "outreach_action" | "lead_enrichment" | "utility" | null
+  description: string | null
+  steps: Array<{ index: number; description: string; kind: string; selectors: Record<string, unknown>; coords: { x: number; y: number } | null } | Record<string, unknown>>
+  created_at: string
+  updated_at: string
+  last_tested_at: string | null
+  last_error: string | null
+  health_score: number
+  account_id: string | null
+}
+
+interface DbAutomationRun {
+  id: string
+  automation_id: string
+  run_type: string | null
+  status: "running" | "passed" | "failed" | "healed"
+  started_at: string
+  finished_at: string | null
+  error: string | null
+  steps_completed: number | null
+}
+
+/* ─── Add Automation Modal ───
+ * The "Add {Platform} Automation" button in Your Automations opens this.
+ * Two-step flow:
+ *   1. Fill in Name / Steps / Tag (platform is pre-locked from the row that opened the modal)
+ *   2. POST /api/automations to create the draft, then transition to a
+ *      "Ready to record — open dummy group VNC" screen. The CDP recorder is
+ *      a separate workstream, so for now the Record button is a stub that
+ *      says "Recording coming in next build".
+ */
+function AddAutomationModal({
+  open,
+  onClose,
+  platformKey,      // short key (ig/fb/...) or null when re-using
+  initial,          // populated when editing an existing automation
+  onSaved,
+}: {
+  open: boolean
+  onClose: () => void
+  platformKey: string | null
+  initial?: DbAutomation | null
+  onSaved: (automation: DbAutomation, action: "created" | "updated") => void
+}) {
+  const [name, setName] = useState("")
+  const [steps, setSteps] = useState("")
+  const [tag, setTag] = useState<string>("outreach_action")
+  const [phase, setPhase] = useState<"form" | "ready">("form")
+  const [saving, setSaving] = useState(false)
+  const [savedId, setSavedId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const effectivePlatformKey = initial ? PLATFORM_FROM_DB[initial.platform] || platformKey || "" : platformKey || ""
+  const platformLabel = effectivePlatformKey ? platformLabels[effectivePlatformKey] : ""
+  const PlatformIcon = effectivePlatformKey ? platformIcons[effectivePlatformKey] : null
+  const isEditing = !!initial
+
+  // Reset state every time the dialog opens so you don't leak state between
+  // different platforms or between create/edit.
+  useEffect(() => {
+    if (open) {
+      setName(initial?.name || "")
+      setSteps(
+        initial && Array.isArray(initial.steps)
+          ? initial.steps.map((s: any) => typeof s?.description === "string" ? s.description : "").filter(Boolean).join("\n")
+          : ""
+      )
+      setTag(initial?.tag || "outreach_action")
+      setPhase("form")
+      setSavedId(initial?.id || null)
+      setError(null)
+      setSaving(false)
+    }
+  }, [open, initial])
+
+  if (!open || !effectivePlatformKey) return null
+
+  const submit = async () => {
+    if (!name.trim()) { setError("Name is required"); return }
+    if (!steps.trim()) { setError("Write at least one step"); return }
+    setSaving(true); setError(null)
+    try {
+      const dbPlatform = PLATFORM_DB_KEY[effectivePlatformKey]
+      const url = isEditing ? `/api/automations/${initial!.id}` : "/api/automations"
+      const method = isEditing ? "PATCH" : "POST"
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, platform: dbPlatform, steps, tag }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.error || "Save failed"); setSaving(false); return }
+      setSavedId(data.data.id)
+      onSaved(data.data, isEditing ? "updated" : "created")
+      setPhase("ready")
+    } catch (e) {
+      setError((e as Error).message || "Network error")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-background/70 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        onClick={e => e.stopPropagation()}
+        className="bg-card/95 backdrop-blur-xl border border-border/50 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden"
+      >
+        {phase === "form" && (
+          <>
+            <div className="flex items-center justify-between p-5 border-b border-border/30">
+              <div className="flex items-center gap-3">
+                {PlatformIcon && <PlatformIcon className="h-6 w-6" />}
+                <div>
+                  <h3 className="font-semibold text-base">
+                    {isEditing ? "Edit Automation" : `New ${platformLabel} Automation`}
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    {isEditing ? "Rename, re-describe, or adjust steps" : `Describe what this automation should do on ${platformLabel}.`}
+                  </p>
+                </div>
+              </div>
+              <button onClick={onClose} className="p-1 rounded-lg hover:bg-muted/30 transition-colors">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-1.5 block">Name</label>
+                <input
+                  autoFocus
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder={`e.g. ${platformLabel} DM`}
+                  className="w-full rounded-xl border border-border/50 bg-muted/20 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium mb-1.5 block">Steps</label>
+                <p className="text-[11px] text-muted-foreground mb-1.5">
+                  One step per line, in order. Use {"{variable}"} for anything that changes per lead (e.g. {"{target_handle}"}, {"{message_body}"}).
+                </p>
+                <textarea
+                  value={steps}
+                  onChange={e => setSteps(e.target.value)}
+                  rows={6}
+                  placeholder={"Navigate to {target_profile_url}\nClick the Message button\nType {message_body}\nPress Enter"}
+                  className="w-full rounded-xl border border-border/50 bg-muted/20 px-3 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm font-medium mb-1.5 block">Tag</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {AUTOMATION_TAGS.map(t => (
+                    <button
+                      key={t.value}
+                      type="button"
+                      onClick={() => setTag(t.value)}
+                      className={`text-left rounded-xl border px-3 py-2 transition-all ${
+                        tag === t.value
+                          ? "border-orange-500/60 bg-orange-500/10 shadow-sm"
+                          : "border-border/50 bg-muted/10 hover:border-border"
+                      }`}
+                    >
+                      <p className="text-xs font-semibold">{t.label}</p>
+                      <p className="text-[10px] text-muted-foreground leading-tight mt-0.5">{t.hint}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {error && (
+                <div className="rounded-xl bg-red-500/10 border border-red-500/30 px-3 py-2 text-xs text-red-300 flex items-center gap-2">
+                  <AlertTriangle className="h-3.5 w-3.5" /> {error}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 p-5 border-t border-border/30">
+              <button
+                onClick={onClose}
+                className="rounded-xl border border-border/50 px-4 py-2 text-sm font-medium hover:bg-muted/20 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submit}
+                disabled={saving}
+                className="rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white transition-colors flex items-center gap-1.5"
+              >
+                {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ChevronRight className="h-4 w-4" />}
+                {isEditing ? "Save" : "Next: Record"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {phase === "ready" && (
+          <div className="p-6 text-center space-y-5">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-emerald-500/20 border border-emerald-500/40">
+              <CheckCircle className="h-8 w-8 text-emerald-400" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-lg mb-1">
+                {isEditing ? "Saved!" : "Draft saved"}
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                Ready to record this automation against the dummy group.
+              </p>
+            </div>
+
+            <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 text-left text-xs text-amber-300 space-y-1">
+              <p className="font-semibold">Recording coming in next build</p>
+              <p className="text-amber-300/80">
+                The CDP recorder (captures selectors, coords, screenshots) is a separate workstream. Once it ships, this button will open the dummy group VNC with a bubble-per-click sidebar so you can demonstrate the steps.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={onClose}
+                className="rounded-xl border border-border/50 px-4 py-2 text-sm font-medium hover:bg-muted/20 transition-colors"
+              >
+                Close
+              </button>
+              <button
+                disabled
+                title="Coming in next build"
+                className="rounded-xl bg-orange-500/30 px-4 py-2 text-sm font-semibold text-white/70 cursor-not-allowed flex items-center gap-1.5"
+              >
+                <Video className="h-4 w-4" /> Open recording VNC
+              </button>
+            </div>
+
+            {savedId && (
+              <p className="text-[10px] text-muted-foreground/60 font-mono">ID: {savedId}</p>
+            )}
+          </div>
+        )}
+      </motion.div>
     </motion.div>
   )
 }
@@ -872,6 +1186,25 @@ export default function AutomationsPage() {
   const [recordingModalOpen, setRecordingModalOpen] = useState(false)
   const [recordingModalAuto, setRecordingModalAuto] = useState<AutomationDef | null>(null)
 
+  // New-style "Add Automation" modal (Phase 2 — writes to /api/automations).
+  const [addModalOpen, setAddModalOpen] = useState(false)
+  const [addModalPlatformKey, setAddModalPlatformKey] = useState<string | null>(null)
+  const [addModalInitial, setAddModalInitial] = useState<DbAutomation | null>(null)
+
+  // Catalog of automations Dylan has created via the Add flow. Merged into
+  // the platform cards grid alongside the built-in ALL_AUTOMATIONS list.
+  const [dbAutomations, setDbAutomations] = useState<DbAutomation[]>([])
+  const [dbRuns, setDbRuns] = useState<DbAutomationRun[]>([])
+  const [dbCounts, setDbCounts] = useState<Record<string, number> | null>(null)
+  const [dbSuccessRate, setDbSuccessRate] = useState<number | null>(null)
+
+  // Rename state — one card at a time, keyed by id.
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState("")
+
+  // Delete confirm state.
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
   // Local overrides (for newly recorded automations in this session)
   const [activeOverrides, setActiveOverrides] = useState<Set<string>>(new Set())
   const [settingUpOverrides, setSettingUpOverrides] = useState<Set<string>>(new Set())
@@ -881,6 +1214,17 @@ export default function AutomationsPage() {
   const [testUsername, setTestUsername] = useState("")
   const [testMessage, setTestMessage] = useState("Hey! This is a test DM from the automation system 🚀")
   const [testSending, setTestSending] = useState(false)
+
+  const fetchDbAutomations = useCallback(async () => {
+    try {
+      const res = await fetch("/api/automations")
+      const data = await res.json()
+      setDbAutomations(data.data || [])
+      setDbRuns(data.runs || [])
+      setDbCounts(data.counts || null)
+      setDbSuccessRate(typeof data.success_rate === "number" ? data.success_rate : null)
+    } catch {}
+  }, [])
 
   const fetchRecordings = useCallback(async () => {
     try {
@@ -910,10 +1254,88 @@ export default function AutomationsPage() {
     fetchRecordings()
     fetchHealth()
     fetchDayStats()
+    fetchDbAutomations()
     const h = setInterval(fetchHealth, 15000)
     const s = setInterval(fetchDayStats, 30000)
-    return () => { clearInterval(h); clearInterval(s) }
-  }, [fetchRecordings, fetchHealth, fetchDayStats])
+    const a = setInterval(fetchDbAutomations, 30000)
+    return () => { clearInterval(h); clearInterval(s); clearInterval(a) }
+  }, [fetchRecordings, fetchHealth, fetchDayStats, fetchDbAutomations])
+
+  // ═══ Add / Edit / Delete / Rename handlers for DB automations ═══
+  const openAddModal = (platformKey: string) => {
+    setAddModalInitial(null)
+    setAddModalPlatformKey(platformKey)
+    setAddModalOpen(true)
+  }
+
+  const openEditModal = (automation: DbAutomation) => {
+    setAddModalInitial(automation)
+    setAddModalPlatformKey(PLATFORM_FROM_DB[automation.platform] || null)
+    setAddModalOpen(true)
+  }
+
+  const handleAutomationSaved = (automation: DbAutomation, action: "created" | "updated") => {
+    setDbAutomations(prev => {
+      const idx = prev.findIndex(a => a.id === automation.id)
+      if (idx >= 0) {
+        const copy = [...prev]
+        copy[idx] = automation
+        return copy
+      }
+      return [automation, ...prev]
+    })
+    setToast(action === "created"
+      ? `✨ ${automation.name} added to ${platformLabels[PLATFORM_FROM_DB[automation.platform] || ""] || automation.platform}`
+      : `✅ ${automation.name} updated`)
+  }
+
+  const startRename = (automation: DbAutomation) => {
+    setRenamingId(automation.id)
+    setRenameDraft(automation.name)
+  }
+
+  const commitRename = async (id: string) => {
+    const trimmed = renameDraft.trim()
+    if (!trimmed) { setRenamingId(null); return }
+    try {
+      const res = await fetch(`/api/automations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmed }),
+      })
+      const data = await res.json()
+      if (res.ok && data.data) {
+        setDbAutomations(prev => prev.map(a => a.id === id ? data.data : a))
+        setToast("✏️ Renamed")
+      } else {
+        setToast(data.error || "Rename failed")
+      }
+    } catch (e) {
+      setToast("Network error renaming")
+    } finally {
+      setRenamingId(null)
+    }
+  }
+
+  const requestDelete = (id: string) => setDeletingId(id)
+
+  const confirmDelete = async () => {
+    if (!deletingId) return
+    const id = deletingId
+    setDeletingId(null)
+    try {
+      const res = await fetch(`/api/automations/${id}`, { method: "DELETE" })
+      if (res.ok) {
+        setDbAutomations(prev => prev.filter(a => a.id !== id))
+        setToast("🗑️ Deleted")
+      } else {
+        const data = await res.json().catch(() => ({}))
+        setToast(data.error || "Delete failed")
+      }
+    } catch {
+      setToast("Network error deleting")
+    }
+  }
 
   const openRecordingModal = (auto: AutomationDef) => {
     setRecordingModalAuto(auto)
@@ -1009,10 +1431,27 @@ export default function AutomationsPage() {
   const totalCount = ALL_AUTOMATIONS.length
   const progressPct = Math.round((activeCount / totalCount) * 100)
 
+  // Group DB-backed automations by short platform key so we can render them
+  // alongside the built-in ALL_AUTOMATIONS inside each platform panel.
+  const dbByPlatformKey: Record<string, DbAutomation[]> = {}
+  for (const a of dbAutomations) {
+    const key = PLATFORM_FROM_DB[a.platform] || a.platform
+    if (!dbByPlatformKey[key]) dbByPlatformKey[key] = []
+    dbByPlatformKey[key].push(a)
+  }
+
   const platformGroups = PLATFORMS_ORDER.map(p => {
     const autos = ALL_AUTOMATIONS.filter(a => a.platform === p)
     const activeInGroup = autos.filter(a => isAutoActive(a)).length
-    return { platform: p, automations: autos, active: activeInGroup, total: autos.length }
+    const custom = dbByPlatformKey[p] || []
+    const customActive = custom.filter(a => a.status === "active").length
+    return {
+      platform: p,
+      automations: autos,
+      active: activeInGroup + customActive,
+      total: autos.length + custom.length,
+      custom,
+    }
   })
 
   const togglePlatformCollapse = (p: string) => {
@@ -1044,6 +1483,66 @@ export default function AutomationsPage() {
             onClose={() => setRecordingModalOpen(false)}
             onComplete={handleRecordingComplete}
           />
+        )}
+      </AnimatePresence>
+
+      {/* New Add / Edit Automation Modal (writes to /api/automations) */}
+      <AnimatePresence>
+        {addModalOpen && (
+          <AddAutomationModal
+            open={addModalOpen}
+            onClose={() => setAddModalOpen(false)}
+            platformKey={addModalPlatformKey}
+            initial={addModalInitial}
+            onSaved={handleAutomationSaved}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Delete-confirm dialog for DB automations */}
+      <AnimatePresence>
+        {deletingId && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[75] flex items-center justify-center bg-background/70 backdrop-blur-sm p-4"
+            onClick={() => setDeletingId(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.95 }}
+              onClick={e => e.stopPropagation()}
+              className="bg-card/95 backdrop-blur-xl border border-border/50 rounded-2xl w-full max-w-sm p-6 shadow-2xl"
+            >
+              <div className="flex items-start gap-3 mb-4">
+                <div className="rounded-full p-2 bg-red-500/20 shrink-0">
+                  <AlertTriangle className="h-5 w-5 text-red-400" />
+                </div>
+                <div>
+                  <h3 className="font-semibold">Delete this automation?</h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    The steps, tag, and any recorded selectors will be wiped. Can&apos;t undo.
+                  </p>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setDeletingId(null)}
+                  className="rounded-xl border border-border/50 px-4 py-2 text-sm font-medium hover:bg-muted/20 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  className="rounded-xl bg-red-500 hover:bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors"
+                >
+                  Delete
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -1235,8 +1734,10 @@ export default function AutomationsPage() {
           {platformGroups.map((group, gi) => {
             const Icon = platformIcons[group.platform]
             const isCollapsed = collapsedPlatforms[group.platform]
-            const activeInGroup = group.automations.filter(a => isAutoActive(a)).length
-            const allActive = activeInGroup === group.total
+            const builtinActive = group.automations.filter(a => isAutoActive(a)).length
+            const customActive = group.custom.filter(a => a.status === "active").length
+            const activeInGroup = builtinActive + customActive
+            const allActive = activeInGroup === group.total && group.total > 0
 
             return (
               <motion.div
@@ -1246,11 +1747,12 @@ export default function AutomationsPage() {
                 transition={{ delay: 0.25 + gi * 0.05 }}
                 className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 overflow-hidden shadow-lg"
               >
-                <button
-                  onClick={() => togglePlatformCollapse(group.platform)}
-                  className="w-full flex items-center justify-between p-4 hover:bg-muted/20 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
+                <div className="flex items-center justify-between p-4 hover:bg-muted/10 transition-colors">
+                  <button
+                    type="button"
+                    onClick={() => togglePlatformCollapse(group.platform)}
+                    className="flex items-center gap-3 flex-1 text-left"
+                  >
                     <Icon className="h-5 w-5" />
                     <span className="font-semibold text-sm">{platformLabels[group.platform]}</span>
                     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${
@@ -1258,9 +1760,25 @@ export default function AutomationsPage() {
                     }`}>
                       {activeInGroup}/{group.total} active
                     </span>
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openAddModal(group.platform)}
+                      className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 border border-orange-500/30 transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add {platformLabels[group.platform]} Automation
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => togglePlatformCollapse(group.platform)}
+                      className="p-1.5 rounded-lg hover:bg-muted/30 transition-colors"
+                    >
+                      {isCollapsed ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
+                    </button>
                   </div>
-                  {isCollapsed ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
-                </button>
+                </div>
 
                 <AnimatePresence initial={false}>
                   {!isCollapsed && (
@@ -1408,6 +1926,102 @@ export default function AutomationsPage() {
                                     </div>
                                   </div>
                                 </motion.div>
+                              )}
+                            </motion.div>
+                          )
+                        })}
+
+                        {/* Custom DB-backed automations (created via "Add {Platform} Automation") */}
+                        {group.custom.map((auto) => {
+                          const isRenaming = renamingId === auto.id
+                          const statusBadge = auto.status === "active"
+                            ? <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0"><CheckCircle className="h-2.5 w-2.5" /> Active</span>
+                            : auto.status === "draft"
+                            ? <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 shrink-0"><Circle className="h-2.5 w-2.5 fill-amber-500 text-amber-500" /> Draft</span>
+                            : auto.status === "needs_rerecording"
+                            ? <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-orange-500/20 text-orange-400 border border-orange-500/30 shrink-0"><AlertTriangle className="h-2.5 w-2.5" /> Needs Re-record</span>
+                            : auto.status === "broken"
+                            ? <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-red-500/20 text-red-400 border border-red-500/30 shrink-0"><AlertTriangle className="h-2.5 w-2.5" /> Broken</span>
+                            : <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-muted/30 text-muted-foreground border border-border/50 shrink-0">{auto.status}</span>
+                          return (
+                            <motion.div
+                              key={`db-${auto.id}`}
+                              variants={item}
+                              whileHover={{ scale: 1.02, y: -2 }}
+                              className={`rounded-xl border p-4 transition-all bg-gradient-to-br ${platformColors[group.platform]}`}
+                            >
+                              <div className="flex items-start justify-between mb-2 gap-2">
+                                <div className="min-w-0 flex-1">
+                                  {isRenaming ? (
+                                    <input
+                                      autoFocus
+                                      value={renameDraft}
+                                      onChange={e => setRenameDraft(e.target.value)}
+                                      onBlur={() => commitRename(auto.id)}
+                                      onKeyDown={e => {
+                                        if (e.key === "Enter") commitRename(auto.id)
+                                        if (e.key === "Escape") setRenamingId(null)
+                                      }}
+                                      className="w-full rounded-md border border-border/60 bg-muted/20 px-2 py-1 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-orange-500"
+                                    />
+                                  ) : (
+                                    <h3 className="font-semibold text-sm truncate">{auto.name}</h3>
+                                  )}
+                                  <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">
+                                    {auto.description || (auto.tag ? AUTOMATION_TAGS.find(t => t.value === auto.tag)?.label : "No description")}
+                                  </p>
+                                </div>
+                                {statusBadge}
+                              </div>
+
+                              {auto.tag && (
+                                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-semibold bg-muted/30 text-muted-foreground border border-border/50 mb-2">
+                                  <Tag className="h-2.5 w-2.5" />
+                                  {AUTOMATION_TAGS.find(t => t.value === auto.tag)?.label || auto.tag}
+                                </span>
+                              )}
+
+                              <div className="flex items-center justify-between mt-3 pt-2 border-t border-border/20">
+                                <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                                  <Clock className="h-3 w-3" />
+                                  <span>{auto.last_tested_at ? `Tested ${new Date(auto.last_tested_at).toLocaleDateString()}` : `Created ${new Date(auto.created_at).toLocaleDateString()}`}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => startRename(auto)}
+                                    title="Rename"
+                                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-muted/30 hover:bg-muted/50 text-[10px] font-medium transition-colors"
+                                  >
+                                    <Pencil className="h-2.5 w-2.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => openEditModal(auto)}
+                                    title="Edit steps / tag"
+                                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-muted/30 hover:bg-muted/50 text-[10px] font-medium transition-colors"
+                                  >
+                                    <Edit2 className="h-2.5 w-2.5" />
+                                  </button>
+                                  <button
+                                    disabled
+                                    title="Re-record (coming in next build)"
+                                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-muted/20 text-[10px] font-medium opacity-50 cursor-not-allowed"
+                                  >
+                                    <RotateCcw className="h-2.5 w-2.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => requestDelete(auto.id)}
+                                    title="Delete"
+                                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[10px] font-medium transition-colors"
+                                  >
+                                    <Trash2 className="h-2.5 w-2.5" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {auto.last_error && (
+                                <p className="text-[10px] text-red-400 mt-2 line-clamp-2" title={auto.last_error}>
+                                  {auto.last_error}
+                                </p>
                               )}
                             </motion.div>
                           )
