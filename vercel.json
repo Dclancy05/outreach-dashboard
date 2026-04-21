@@ -14,7 +14,7 @@
     },
     {
       "path": "/api/ai-agent/scan",
-      "schedule": "*/15 * * * *"
+      "schedule": "30 10 * * *"
     }
   ]
 }
