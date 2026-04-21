@@ -239,6 +239,12 @@ export default function SetupWizardPage() {
       }
 
       const firstPlatform = selectedPlatforms[0]
+      // Pass account_id so the VNC Manager can hydrate THIS account's cookies
+      // from Supabase first (preferred-account ordering in the cookie merge).
+      // Without this the resume flow falls back to proxy-group-wide hydration,
+      // which still works — but passing the ID wins when the same proxy hosts
+      // multiple accounts on the same platform.
+      const firstAccountId = accountByPlatform[firstPlatform]
       const data = await vncFetch("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
@@ -246,6 +252,7 @@ export default function SetupWizardPage() {
           platform: firstPlatform,
           proxy_config: proxyConfig,
           use_chrome_profile: useChromeProfile,
+          account_id: firstAccountId || undefined,
         }),
       })
 

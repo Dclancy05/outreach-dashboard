@@ -17,7 +17,7 @@ import {
 import { SOCIAL_PLATFORMS } from "@/lib/platforms"
 
 const VNC_WS_HOST = process.env.NEXT_PUBLIC_VNC_WS_HOST || "srv1197943.taild42583.ts.net"
-const VNC_API_BASE = `https://${VNC_WS_HOST}:9443`
+const VNC_API_BASE = `https://${VNC_WS_HOST}`
 const VNC_API_KEY = "vnc-mgr-2026-dylan"
 
 const PLATFORM_LOGIN_INSTRUCTIONS: Record<string, { steps: string[]; tips: string[] }> = {
@@ -133,6 +133,22 @@ interface VncLoginFlowProps {
 
 type FlowStep = "platform" | "connecting" | "login" | "capturing" | "done" | "error"
 
+const VNC_CONNECT_TIMEOUT_MS = 15000
+
+async function probeVncReachable(): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 6000)
+    const res = await fetch(`${VNC_API_BASE}/health`, { signal: ctrl.signal, mode: "cors" })
+    clearTimeout(t)
+    if (!res.ok) return { ok: false, reason: `VNC server returned HTTP ${res.status}` }
+    return { ok: true }
+  } catch (e: any) {
+    if (e?.name === "AbortError") return { ok: false, reason: "VNC server didn't respond within 6s." }
+    return { ok: false, reason: `Can't reach the VNC server (${e?.message || "network error"}).` }
+  }
+}
+
 export default function VncLoginFlow({
   open, onClose, onComplete, proxyGroupId, proxyIp, proxyLocation,
   existingAccount, initialPlatform,
@@ -140,8 +156,10 @@ export default function VncLoginFlow({
   const [step, setStep] = useState<FlowStep>(existingAccount ? "connecting" : "platform")
   const [platform, setPlatform] = useState(initialPlatform || existingAccount?.platform || "")
   const [sessionId, setSessionId] = useState("")
+  const [vncPassword, setVncPassword] = useState("")
   const [vncUrl, setVncUrl] = useState("")
   const [vncLoaded, setVncLoaded] = useState(false)
+  const [vncTimedOut, setVncTimedOut] = useState(false)
   const [username, setUsername] = useState(existingAccount?.username || "")
   const [displayName, setDisplayName] = useState("")
   const [error, setError] = useState("")
@@ -167,17 +185,33 @@ export default function VncLoginFlow({
     setStep("connecting")
     setError("")
 
+    const reach = await probeVncReachable()
+    if (!reach.ok) {
+      setError(reach.reason || "VNC server not reachable")
+      setStep("error")
+      return
+    }
+
     try {
       const data = await vncFetch("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
           proxy_group_id: proxyGroupId,
           platform: selectedPlatform,
+          // When reopening an existing account, hand the account_id over so
+          // the VNC Manager hydrates THIS account's cookies from Supabase on
+          // top of the disk profile. Without it, the browser launches with
+          // only whatever Chrome had on disk — which on fresh boxes or after
+          // a crashed shutdown is often empty or stale.
+          account_id: existingAccount?.account_id,
+          use_chrome_profile: true,
         }),
       })
 
       setSessionId(data.data.id)
-      setVncUrl(`${VNC_API_BASE}/novnc/vnc_lite.html?path=websockify/${data.data.id}&autoconnect=true&resize=scale`)
+      setVncPassword(data.data.vncPassword || "")
+      const pwd = data.data.vncPassword ? `&password=${encodeURIComponent(data.data.vncPassword)}` : ""
+      setVncUrl(`${VNC_API_BASE}/novnc/vnc_lite.html?path=websockify/${data.data.id}&autoconnect=true&resize=scale${pwd}`)
       setStep("login")
     } catch (e: any) {
       setError(e.message)
@@ -190,6 +224,12 @@ export default function VncLoginFlow({
       startSession(existingAccount.platform)
     }
   }, [open, existingAccount, startSession])
+
+  useEffect(() => {
+    if (!vncUrl || vncLoaded) return
+    const t = setTimeout(() => setVncTimedOut(true), VNC_CONNECT_TIMEOUT_MS)
+    return () => clearTimeout(t)
+  }, [vncUrl, vncLoaded])
 
   function selectPlatform(p: string) {
     setPlatform(p)
@@ -259,6 +299,7 @@ export default function VncLoginFlow({
     setSessionId("")
     setVncUrl("")
     setVncLoaded(false)
+    setVncTimedOut(false)
     setUsername("")
     setDisplayName("")
     setError("")
@@ -503,10 +544,36 @@ export default function VncLoginFlow({
           <div className="flex-1 relative bg-black/90">
             {(step === "login" || step === "capturing") && vncUrl ? (
               <>
-                {!vncLoaded && (
+                {!vncLoaded && !vncTimedOut && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-10">
                     <Loader2 className="h-8 w-8 text-violet-400 animate-spin" />
                     <p className="text-sm text-muted-foreground">Loading browser view...</p>
+                    <p className="text-[11px] text-muted-foreground/80 max-w-sm text-center">
+                      If this hangs longer than a few seconds, your device probably isn't on Tailscale — the VNC server lives on the private network.
+                    </p>
+                  </div>
+                )}
+                {vncTimedOut && !vncLoaded && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-10 p-8 text-center bg-black/70">
+                    <div className="h-12 w-12 rounded-full bg-red-500/20 flex items-center justify-center">
+                      <XCircle className="h-6 w-6 text-red-400" />
+                    </div>
+                    <h4 className="font-semibold text-sm text-foreground">VNC browser didn't load</h4>
+                    <p className="text-xs text-muted-foreground max-w-md">
+                      The iframe couldn't reach <span className="font-mono">{VNC_WS_HOST}</span>. Confirm you can open {VNC_API_BASE}/health in a new tab, then retry.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setVncTimedOut(false); setVncLoaded(false); setVncUrl("")
+                        const pwd = vncPassword ? `&password=${encodeURIComponent(vncPassword)}` : ""
+                        setTimeout(() => setVncUrl(`${VNC_API_BASE}/novnc/vnc_lite.html?path=websockify/${sessionId}&autoconnect=true&resize=scale${pwd}`), 50)
+                      }}
+                      className="rounded-xl text-xs"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5 mr-1" /> Retry
+                    </Button>
                   </div>
                 )}
                 <iframe

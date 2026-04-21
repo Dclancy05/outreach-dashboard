@@ -39,7 +39,11 @@ export async function POST(req: NextRequest) {
     }
 
     // If an account was picked, pull its imported cookies so Chrome starts the
-    // session already logged in (skips the login form entirely).
+    // session already logged in (skips the login form entirely). We check two
+    // places: accounts.session_cookie (the mirror populated at capture time)
+    // and account_sessions (the authoritative capture history). The VNC
+    // Manager will also auto-hydrate from account_sessions on its own when it
+    // receives no cookies — this hop just gives it an explicit head start.
     let cookies: any[] | undefined
     if (account_id) {
       try {
@@ -53,10 +57,26 @@ export async function POST(req: NextRequest) {
             const parsed = typeof acct.session_cookie === "string"
               ? JSON.parse(acct.session_cookie)
               : acct.session_cookie
-            if (Array.isArray(parsed)) cookies = parsed
+            if (Array.isArray(parsed) && parsed.length > 0) cookies = parsed
           } catch {}
         }
       } catch {}
+
+      if (!cookies || cookies.length === 0) {
+        try {
+          const { data: sess } = await supabase
+            .from("account_sessions")
+            .select("cookies")
+            .eq("account_id", account_id)
+            .eq("status", "active")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          if (sess?.cookies && Array.isArray(sess.cookies) && sess.cookies.length > 0) {
+            cookies = sess.cookies
+          }
+        } catch {}
+      }
     }
 
     const res = await fetch(`${VNC_MANAGER_URL}/api/sessions`, {
@@ -69,6 +89,7 @@ export async function POST(req: NextRequest) {
         use_chrome_profile: !!use_chrome_profile,
         geo,
         cookies,
+        account_id,
       }),
     })
 
