@@ -12,11 +12,21 @@ const supabase = createClient(
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { proxy_group_id, platform, proxy_config, use_chrome_profile, account_id } = body
+    const { proxy_group_id, platform, platforms, proxy_config, use_chrome_profile, account_id } = body
 
     if (!proxy_group_id) {
       return NextResponse.json({ error: "proxy_group_id required" }, { status: 400 })
     }
+
+    // P5.1: multi-platform single-session support. If the caller sends
+    // `platforms: string[]` (e.g. ["instagram","twitter","linkedin"]) we forward
+    // it to the VNC Manager so ONE Chrome instance opens every social as its
+    // own tab instead of spawning N separate sessions. `platform` (singular)
+    // is kept for backward compat — if only one is given, we still send a
+    // `platforms` array so the manager only has to implement one code path.
+    const platformList: string[] = Array.isArray(platforms) && platforms.length > 0
+      ? platforms.filter((p: unknown): p is string => typeof p === "string" && !!p)
+      : platform ? [platform] : []
 
     // Fetch geo from the proxy_groups row so the stealth profile builder can
     // pin the browser timezone + locale to the proxy's real-world location.
@@ -84,7 +94,8 @@ export async function POST(req: NextRequest) {
       headers: { "Content-Type": "application/json", "X-API-Key": VNC_API_KEY },
       body: JSON.stringify({
         proxy_group_id,
-        platform,
+        platform: platformList[0] || platform,
+        platforms: platformList,
         proxy_config: effectiveProxyConfig,
         use_chrome_profile: !!use_chrome_profile,
         geo,
