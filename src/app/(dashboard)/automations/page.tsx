@@ -8,7 +8,7 @@ import {
   ChevronDown, ChevronUp, Tag, Plus, Clock, Circle, ExternalLink,
   RefreshCw, Zap, RotateCcw, HelpCircle, ChevronRight, PartyPopper,
   LayoutGrid, Wrench, Eye, Activity, PlayCircle, Edit2, TrendingUp,
-  Pencil, Server,
+  Pencil, Server, Layers,
 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
@@ -2176,6 +2176,12 @@ export default function AutomationsPage() {
           <span className="text-xs text-muted-foreground bg-muted/30 backdrop-blur-sm px-2 py-0.5 rounded-full">
             {activeCount}/{totalCount} active
           </span>
+          <a
+            href="/automations/selectors"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 border border-orange-500/30 px-3 py-1.5 text-xs font-semibold transition-colors"
+          >
+            <Layers className="h-3.5 w-3.5" /> Workflow Builder
+          </a>
         </div>
 
         <div className="space-y-4">
