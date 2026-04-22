@@ -2,6 +2,7 @@
 
 import { Sidebar } from "@/components/dashboard/sidebar"
 import { BottomTabs } from "@/components/dashboard/bottom-tabs"
+import { SystemPulse } from "@/components/system-pulse"
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -11,6 +12,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {children}
       </main>
       <BottomTabs />
+      <SystemPulse />
     </>
   )
 }
