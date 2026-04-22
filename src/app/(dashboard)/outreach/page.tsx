@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { SmartVariableTextarea } from "@/components/smart-variable-textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Slider } from "@/components/ui/slider"
@@ -376,10 +377,13 @@ function SequenceBuilderDialog({ open, onOpenChange, editSequence, onSaved }: {
                     {/* Message */}
                     {step.hasMessage && (
                       <div className="space-y-2">
-                        <Textarea placeholder="Write your message... Use {{name}}, {{niche}} for variables"
+                        <SmartVariableTextarea
+                          placeholder="Write your message... Type { to pick a variable"
                           value={step.messages[0] || ""}
-                          onChange={e => { const m = [...step.messages]; m[0] = e.target.value; updateStep(step.id, { messages: m }) }}
-                          className="rounded-xl bg-muted/30 border-border/30 min-h-[80px] resize-none" />
+                          onChange={next => { const m = [...step.messages]; m[0] = next; updateStep(step.id, { messages: m }) }}
+                          rows={4}
+                          className="w-full rounded-xl bg-muted/30 border border-border/30 min-h-[80px] resize-none px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                        />
                         <div className="flex gap-1.5 flex-wrap">
                           {VARIABLE_CHIPS.map(v => (
                             <button key={v} onClick={() => {
@@ -388,6 +392,7 @@ function SequenceBuilderDialog({ open, onOpenChange, editSequence, onSaved }: {
                               {v}
                             </button>
                           ))}
+                          <span className="text-[10px] text-muted-foreground self-center ml-1">or type <code className="px-1 py-0.5 rounded bg-muted/30">{"{"}</code> for more…</span>
                         </div>
                       </div>
                     )}
