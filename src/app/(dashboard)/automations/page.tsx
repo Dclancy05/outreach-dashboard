@@ -375,7 +375,8 @@ const AUTOMATION_TAGS = [
   { value: "utility", label: "Utility", hint: "Housekeeping tasks (logout, refresh, etc.)" },
 ] as const
 
-const VNC_URL = "https://srv1197943.taild42583.ts.net/vnc.html"
+const VNC_URL = process.env.NEXT_PUBLIC_VNC_URL || "https://srv1197943.taild42583.ts.net/vnc.html"
+const VNC_EMBED_URL = `${VNC_URL}${VNC_URL.includes("?") ? "&" : "?"}autoconnect=true&resize=scale`
 
 /* ─── Confetti ─── */
 function Confetti() {
@@ -720,6 +721,7 @@ function RecordingModal({
   const [showHelp, setShowHelp] = useState(false)
   const [pipelineStarted, setPipelineStarted] = useState(false)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
+  const popoutOpenedRef = useRef(false)
 
   const guideKey = automation ? `${automation.platform}_${automation.actionKey}` : ""
   const guide = RECORDING_GUIDES[guideKey]
@@ -983,7 +985,7 @@ function RecordingModal({
                     </div>
                   )}
                   <iframe
-                    src={VNC_URL}
+                    src={VNC_EMBED_URL}
                     className="w-full h-full border-0"
                     onLoad={() => setVncLoaded(true)}
                     onError={() => setVncError(true)}
@@ -991,25 +993,33 @@ function RecordingModal({
                   />
                 </>
               ) : (
-                <div className="h-full flex items-center justify-center p-8">
-                  <div className="text-center space-y-4 max-w-sm">
-                    <Monitor className="h-12 w-12 text-muted-foreground mx-auto" />
-                    <h3 className="text-lg font-semibold">Can&apos;t embed the browser here</h3>
-                    <p className="text-sm text-muted-foreground">No worries! Open it in a separate window and come back here to follow the steps.</p>
-                    <motion.a
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      href={VNC_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-semibold transition-colors"
-                    >
-                      <ExternalLink className="h-5 w-5" />
-                      Open Browser Window
-                    </motion.a>
-                    <p className="text-xs text-muted-foreground">Then come back to this screen to follow the steps →</p>
-                  </div>
-                </div>
+                (() => {
+                  if (typeof window !== "undefined" && !popoutOpenedRef.current) {
+                    popoutOpenedRef.current = true
+                    window.open(VNC_URL, "_vnc", "width=1400,height=900")
+                  }
+                  return (
+                    <div className="h-full flex items-center justify-center p-8">
+                      <div className="text-center space-y-4 max-w-sm">
+                        <Monitor className="h-12 w-12 text-muted-foreground mx-auto" />
+                        <h3 className="text-lg font-semibold">Your browser is ready 🎯</h3>
+                        <p className="text-sm text-muted-foreground">Click below to pop it out in a new window. Keep that window open while you record — come back here to follow the steps.</p>
+                        <motion.a
+                          whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
+                          href={VNC_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-semibold transition-colors"
+                        >
+                          <ExternalLink className="h-5 w-5" />
+                          Pop Out Browser
+                        </motion.a>
+                        <p className="text-xs text-muted-foreground">Then come back to this screen to follow the steps →</p>
+                      </div>
+                    </div>
+                  )
+                })()
               )}
             </div>
           </div>
