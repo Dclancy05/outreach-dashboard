@@ -383,7 +383,10 @@ const AUTOMATION_TAGS = [
 ] as const
 
 const VNC_URL = process.env.NEXT_PUBLIC_VNC_URL || "https://srv1197943.taild42583.ts.net/vnc.html"
-const VNC_EMBED_URL = `${VNC_URL}${VNC_URL.includes("?") ? "&" : "?"}autoconnect=true&resize=scale`
+// Pre-baked base64 of the x11vnc password so noVNC autoconnects without a prompt.
+// Dashboard is already behind admin-PIN + Tailscale funnel, so embedding is fine.
+const VNC_PASSWORD_B64 = process.env.NEXT_PUBLIC_VNC_PASSWORD_B64 || "RGNNa3RnMjAyNiE="
+const VNC_EMBED_URL = `${VNC_URL}${VNC_URL.includes("?") ? "&" : "?"}autoconnect=true&resize=scale&password=${VNC_PASSWORD_B64}`
 
 /* ─── Confetti ─── */
 function Confetti() {
@@ -1014,7 +1017,7 @@ function RecordingModal({
                         <motion.a
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
-                          href={VNC_URL}
+                          href={VNC_EMBED_URL}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-semibold transition-colors"
@@ -1485,7 +1488,7 @@ function LiveViewTab() {
             <span className="text-[10px] text-muted-foreground">(noVNC)</span>
           </div>
           <a
-            href={VNC_URL}
+            href={VNC_EMBED_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-muted/30 hover:bg-muted/50 transition-colors"
@@ -1502,7 +1505,7 @@ function LiveViewTab() {
                 </div>
               )}
               <iframe
-                src={VNC_URL}
+                src={VNC_EMBED_URL}
                 className="w-full h-full border-0"
                 onLoad={() => setIframeLoaded(true)}
                 onError={() => setIframeError(true)}
@@ -1513,7 +1516,7 @@ function LiveViewTab() {
             <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
               <Monitor className="h-10 w-10 text-muted-foreground mb-2" />
               <p className="text-sm font-medium">Can&apos;t embed the browser here</p>
-              <a href={VNC_URL} target="_blank" rel="noopener noreferrer"
+              <a href={VNC_EMBED_URL} target="_blank" rel="noopener noreferrer"
                 className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold transition-colors"
               >
                 <ExternalLink className="h-4 w-4" /> Open in new window
@@ -2308,7 +2311,7 @@ export default function AutomationsPage() {
           </div>
         </motion.div>
         <motion.a variants={item} whileHover={{ scale: 1.02, y: -2 }}
-          href={VNC_URL} target="_blank" rel="noopener noreferrer"
+          href={VNC_EMBED_URL} target="_blank" rel="noopener noreferrer"
           className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-4 shadow-lg shadow-purple-500/10 hover:shadow-xl transition-shadow text-left group"
         >
           <div className="flex items-center gap-2 mb-1">
