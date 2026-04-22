@@ -656,6 +656,10 @@ export default function OutreachPage() {
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [activeCampaign, setActiveCampaign] = useState<CampaignStats | null>(null)
   const [pollingCampaign, setPollingCampaign] = useState(false)
+  // P9.1 — dry-run: when true, the launch builds the queue in-memory but skips
+  // every DB write so Dylan can preview exactly what *would* happen.
+  const [dryRun, setDryRun] = useState(false)
+  const [dryRunResult, setDryRunResult] = useState<{ leads: number; queued: number; skipped: number; platforms: string[] } | null>(null)
 
   // Live feed
   const [feedPolling, setFeedPolling] = useState(false)
@@ -816,20 +820,24 @@ export default function OutreachPage() {
   // ── LAUNCH CAMPAIGN ──────────────────────────────────────────────
   async function launchCampaign() {
     setLaunching(true)
+    setDryRunResult(null)
     try {
       const campaignId = `camp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
       const name = campaignName || `Campaign ${new Date().toLocaleDateString()}`
 
-      try {
-        await supabase.from("campaigns").insert({
-          id: campaignId, name, business_id: "default", status: "active",
-          accounts: selectedAccounts, lead_ids: matchingLeads.map(l => l.lead_id),
-          lead_count: matchingLeads.length, sequence_id: selectedSequence,
-          total_scheduled: 0, started_at: new Date().toISOString(),
-        })
-      } catch {}
+      if (!dryRun) {
+        try {
+          await supabase.from("campaigns").insert({
+            id: campaignId, name, business_id: "default", status: "active",
+            accounts: selectedAccounts, lead_ids: matchingLeads.map(l => l.lead_id),
+            lead_count: matchingLeads.length, sequence_id: selectedSequence,
+            total_scheduled: 0, started_at: new Date().toISOString(),
+          })
+        } catch {}
+      }
 
       for (const platform of seqPlatforms) {
+        if (dryRun) break
         try {
           await supabase.from("campaign_safety_settings").insert({
             campaign_id: campaignId, platform,
@@ -896,6 +904,18 @@ export default function OutreachPage() {
       if (queueEntries.length === 0) {
         toast.error("No messages to queue — leads may be missing required platform URLs")
         setLaunching(false); return
+      }
+
+      if (dryRun) {
+        setDryRunResult({
+          leads: matchingLeads.length,
+          queued: queueEntries.length,
+          skipped: skippedCount,
+          platforms: seqPlatforms,
+        })
+        toast.success(`Dry run complete — would queue ${queueEntries.length} messages across ${seqPlatforms.length} platforms. Nothing was sent.`)
+        setLaunching(false)
+        return
       }
 
       const BATCH = 500
@@ -2183,25 +2203,77 @@ export default function OutreachPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Rocket className="h-5 w-5 text-violet-400" />
-              Ready to launch?
+              {dryRun ? "Dry run preview" : "Ready to launch?"}
             </DialogTitle>
             <DialogDescription asChild>
               <div className="space-y-3 pt-2">
-                <p>This will queue <span className="font-bold text-foreground">{previewStats?.totalMessages || 0} messages</span> across <span className="font-bold text-foreground">{seqPlatforms.length} platform{seqPlatforms.length !== 1 ? "s" : ""}</span> for <span className="font-bold text-foreground">{matchingLeads.length} leads</span>.</p>
+                <p>This will {dryRun ? <span className="font-semibold text-amber-300">simulate queueing</span> : "queue"} <span className="font-bold text-foreground">{previewStats?.totalMessages || 0} messages</span> across <span className="font-bold text-foreground">{seqPlatforms.length} platform{seqPlatforms.length !== 1 ? "s" : ""}</span> for <span className="font-bold text-foreground">{matchingLeads.length} leads</span>.</p>
                 <p>Messages will start sending within the active hours window ({settings.active_hours_start} – {settings.active_hours_end}).</p>
                 {campaignName && <p className="text-sm">Campaign: <span className="font-medium text-foreground">{campaignName}</span></p>}
+                {/* P9.1 — dry-run toggle */}
+                <label className="flex items-start gap-2.5 rounded-xl border border-border/50 bg-muted/20 px-3 py-2.5 text-sm cursor-pointer">
+                  <Switch checked={dryRun} onCheckedChange={setDryRun} />
+                  <div className="flex-1">
+                    <div className="font-medium">Dry run (no sends)</div>
+                    <div className="text-xs text-muted-foreground">
+                      Build the queue in memory so you can review it without touching the DB or sending anything.
+                    </div>
+                  </div>
+                </label>
               </div>
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2 mt-2">
             <Button variant="outline" className="rounded-xl" onClick={() => setShowConfirmDialog(false)}>Cancel</Button>
-            <Button className="rounded-xl bg-violet-600 hover:bg-violet-700 gap-1.5" disabled={launching} onClick={() => { setShowConfirmDialog(false); launchCampaign() }}>
+            <Button className={cn("rounded-xl gap-1.5", dryRun ? "bg-amber-500 hover:bg-amber-600 text-black" : "bg-violet-600 hover:bg-violet-700")} disabled={launching} onClick={() => { setShowConfirmDialog(false); launchCampaign() }}>
               {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
-              Launch Campaign
+              {dryRun ? "Run Preview" : "Launch Campaign"}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Dry-run result panel (P9.1) */}
+      {dryRunResult && (
+        <Dialog open={!!dryRunResult} onOpenChange={(open) => { if (!open) setDryRunResult(null) }}>
+          <DialogContent className="rounded-2xl border-border/50 bg-card/95 backdrop-blur-xl">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-amber-400">
+                <Rocket className="h-5 w-5" /> Dry run complete
+              </DialogTitle>
+              <DialogDescription asChild>
+                <div className="space-y-3 pt-2 text-sm">
+                  <p>Nothing was sent and nothing was written to the queue.</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="p-3 rounded-xl bg-muted/20 border border-border/50">
+                      <p className="text-xs text-muted-foreground">Leads targeted</p>
+                      <p className="text-xl font-bold">{dryRunResult.leads}</p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-muted/20 border border-border/50">
+                      <p className="text-xs text-muted-foreground">Would queue</p>
+                      <p className="text-xl font-bold text-emerald-400">{dryRunResult.queued}</p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-muted/20 border border-border/50">
+                      <p className="text-xs text-muted-foreground">Skipped (no URL)</p>
+                      <p className="text-xl font-bold text-amber-400">{dryRunResult.skipped}</p>
+                    </div>
+                    <div className="p-3 rounded-xl bg-muted/20 border border-border/50">
+                      <p className="text-xs text-muted-foreground">Platforms</p>
+                      <p className="text-sm font-semibold">{dryRunResult.platforms.join(", ")}</p>
+                    </div>
+                  </div>
+                </div>
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" className="rounded-xl" onClick={() => setDryRunResult(null)}>Close</Button>
+              <Button className="rounded-xl bg-violet-600 hover:bg-violet-700 gap-1.5" onClick={() => { setDryRunResult(null); setDryRun(false); setShowConfirmDialog(true) }}>
+                <Rocket className="h-4 w-4" /> Launch for real
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Sequence Builder Dialog */}
       <SequenceBuilderDialog
