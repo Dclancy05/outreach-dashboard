@@ -59,7 +59,7 @@ interface SafetySettings {
 }
 
 interface Account {
-  account_id: string; platform: string; username: string; daily_limit: string; sends_today: string; status: string;
+  account_id: string; platform: string; username: string; daily_limit: string; sends_today: string; status: string; proxy_group_id?: string;
 }
 
 interface Lead {
@@ -83,6 +83,73 @@ const PLATFORM_COLORS: Record<string, string> = {
 
 const PLATFORM_ICONS_MAP: Record<string, typeof Instagram> = {
   instagram: Instagram, facebook: Facebook, linkedin: Linkedin, email: Mail, sms: Phone, phone: Phone,
+}
+
+/** Returns a Google-served favicon URL for a platform. Using
+ *  google.com/s2/favicons keeps us off a CDN allowlist and always returns
+ *  *something* (a placeholder glyph) even when the social's domain is blocked
+ *  from the dashboard's origin. */
+function platformFaviconUrl(platform: string): string {
+  const domains: Record<string, string> = {
+    instagram: "instagram.com",
+    facebook: "facebook.com",
+    linkedin: "linkedin.com",
+    twitter: "twitter.com",
+    x: "twitter.com",
+    tiktok: "tiktok.com",
+    youtube: "youtube.com",
+    snapchat: "snapchat.com",
+    pinterest: "pinterest.com",
+    email: "gmail.com",
+    sms: "messages.google.com",
+  }
+  const domain = domains[platform] || "google.com"
+  return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`
+}
+
+function platformShortLabel(platform: string): string {
+  const map: Record<string, string> = {
+    instagram: "IG", facebook: "FB", linkedin: "LI", twitter: "X", x: "X",
+    tiktok: "TT", youtube: "YT", snapchat: "SC", pinterest: "PI",
+    email: "EM", sms: "SMS",
+  }
+  return map[platform] || platform.slice(0, 2).toUpperCase()
+}
+
+/** P5.2 — browser-tab-style Live Feed tab with favicon, title, subtitle. */
+function LiveFeedTab({
+  isActive, onClick, favicon, title, subtitle,
+}: {
+  isActive: boolean
+  onClick: () => void
+  favicon: string | null
+  title: string
+  subtitle: string
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all whitespace-nowrap max-w-[220px] shrink-0",
+        isActive ? "bg-violet-500/20 text-violet-300 border border-violet-500/40" : "text-muted-foreground hover:text-foreground bg-muted/10 border border-transparent hover:bg-muted/20"
+      )}
+    >
+      {favicon ? (
+        <img
+          src={favicon}
+          alt=""
+          className="h-3.5 w-3.5 rounded-sm shrink-0"
+          onError={e => { (e.target as HTMLImageElement).style.visibility = "hidden" }}
+        />
+      ) : (
+        <Monitor className="h-3.5 w-3.5 shrink-0" />
+      )}
+      <div className="min-w-0 text-left">
+        <div className="text-xs font-semibold truncate leading-tight">{title}</div>
+        <div className="text-[9px] text-muted-foreground truncate leading-tight">{subtitle}</div>
+      </div>
+    </button>
+  )
 }
 
 interface BuilderStep {
@@ -594,7 +661,10 @@ export default function OutreachPage() {
   const [feedPolling, setFeedPolling] = useState(false)
   const [showVnc, setShowVnc] = useState(false)
   const [activeVncTab, setActiveVncTab] = useState("default")
-  const [proxyGroups, setProxyGroups] = useState<Array<{ id: string; ip: string; location_city: string }>>([])
+  const [proxyGroups, setProxyGroups] = useState<Array<{ id: string; ip: string; location_city: string; name?: string }>>([])
+  // P5.3 — "all tiles at once" view is on when there are >6 proxy groups.
+  const [vncGridView, setVncGridView] = useState(false)
+  const [vncHoverTile, setVncHoverTile] = useState<string | null>(null)
 
   // Platform coverage
   const [coverageExpanded, setCoverageExpanded] = useState(false)
@@ -1880,7 +1950,7 @@ export default function OutreachPage() {
             </div>
           </motion.div>
 
-          {/* VNC Live View — Multi Proxy Group Tabs */}
+          {/* VNC Live View — Multi Proxy Group Tabs (P5.2 + P5.3) */}
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
             className="rounded-2xl overflow-hidden border border-border/50 bg-black"
           >
@@ -1889,8 +1959,14 @@ export default function OutreachPage() {
                 <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                 <Monitor className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm font-medium">Chrome Live View</span>
+                <span className="text-[10px] text-muted-foreground">· {proxyGroups.length} group{proxyGroups.length === 1 ? "" : "s"}</span>
               </div>
               <div className="flex items-center gap-2">
+                {proxyGroups.length > 6 && (
+                  <Button size="sm" variant="outline" className="text-xs rounded-xl gap-1" onClick={() => setVncGridView(v => !v)}>
+                    {vncGridView ? "Focus mode" : "Grid view"}
+                  </Button>
+                )}
                 <Button size="sm" variant="outline" className="text-xs rounded-xl gap-1" onClick={() => setShowVnc(!showVnc)}>
                   {showVnc ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                   {showVnc ? "Hide" : "Show"}
@@ -1899,24 +1975,106 @@ export default function OutreachPage() {
             </div>
             {showVnc && (
               <div>
-                <div className="flex items-center gap-1 px-3 py-2 bg-card/60 border-b border-border/30 overflow-x-auto">
-                  <button onClick={() => setActiveVncTab("default")} className={cn("px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap", activeVncTab === "default" ? "bg-violet-500/20 text-violet-400" : "text-muted-foreground hover:text-foreground")}>
-                    Primary Display
-                  </button>
-                  {proxyGroups.map(pg => (
-                    <button key={pg.id} onClick={() => setActiveVncTab(pg.id)} className={cn("px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap", activeVncTab === pg.id ? "bg-violet-500/20 text-violet-400" : "text-muted-foreground hover:text-foreground")}>
-                      {pg.location_city || pg.ip || pg.id}
-                    </button>
-                  ))}
-                </div>
-                <iframe
-                  src={activeVncTab === "default"
-                    ? "https://srv1197943.taild42583.ts.net:9443/vnc.html?autoconnect=true&resize=scale&password=RGNNa3RnMjAyNiE="
-                    : `https://srv1197943.taild42583.ts.net:18790/novnc/vnc_lite.html?path=websockify/${activeVncTab}&autoconnect=true&resize=scale`
-                  }
-                  className="w-full h-[450px] border-0"
-                  allow="clipboard-read; clipboard-write"
-                />
+                {/* Browser-tab-style strip (hidden when we're in grid view) */}
+                {!vncGridView && (
+                  <div className="flex items-center gap-1 px-3 py-2 bg-card/60 border-b border-border/30 overflow-x-auto">
+                    <LiveFeedTab
+                      isActive={activeVncTab === "default"}
+                      onClick={() => setActiveVncTab("default")}
+                      favicon={null}
+                      title="Primary Display"
+                      subtitle="default dummy group"
+                    />
+                    {proxyGroups.map(pg => {
+                      const groupAccounts = accounts.filter(a => a.proxy_group_id === pg.id)
+                      const platforms = Array.from(new Set(groupAccounts.map(a => a.platform).filter(Boolean)))
+                      const primary = platforms[0] || "instagram"
+                      const title = pg.name || pg.location_city || pg.ip || pg.id.slice(0, 8)
+                      return (
+                        <LiveFeedTab
+                          key={pg.id}
+                          isActive={activeVncTab === pg.id}
+                          onClick={() => setActiveVncTab(pg.id)}
+                          favicon={platformFaviconUrl(primary)}
+                          title={title}
+                          subtitle={platforms.length > 0 ? platforms.map(p => platformShortLabel(p)).join(" · ") : "(no accounts)"}
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Single big iframe (focus mode) */}
+                {!vncGridView && (
+                  <iframe
+                    src={activeVncTab === "default"
+                      ? "https://srv1197943.taild42583.ts.net:9443/vnc.html?autoconnect=true&resize=scale&password=RGNNa3RnMjAyNiE="
+                      : `https://srv1197943.taild42583.ts.net:18790/novnc/vnc_lite.html?path=websockify/${activeVncTab}&autoconnect=true&resize=scale`
+                    }
+                    className="w-full h-[450px] border-0"
+                    allow="clipboard-read; clipboard-write"
+                  />
+                )}
+
+                {/* P5.3 — tile grid for more than 6 groups. Offscreen tiles
+                    are lazy-mounted via IntersectionObserver-style conditional
+                    rendering (we only mount visible + hovered tiles to avoid
+                    streaming N noVNC feeds at once). */}
+                {vncGridView && (
+                  <div className="p-3 grid gap-2 grid-cols-3 max-h-[600px] overflow-y-auto">
+                    {proxyGroups.map((pg, idx) => {
+                      const groupAccounts = accounts.filter(a => a.proxy_group_id === pg.id)
+                      const platforms = Array.from(new Set(groupAccounts.map(a => a.platform).filter(Boolean)))
+                      const primary = platforms[0] || "instagram"
+                      const isHovered = vncHoverTile === pg.id
+                      // Stream only tiles likely to be visible (first 6) or the one the user is hovering.
+                      const shouldStream = isHovered || idx < 6
+                      return (
+                        <div
+                          key={pg.id}
+                          className={cn(
+                            "relative rounded-lg overflow-hidden border border-border/40 bg-black transition-all cursor-pointer",
+                            isHovered ? "col-span-3 row-span-2 z-10 scale-[1.01]" : ""
+                          )}
+                          onMouseEnter={() => setVncHoverTile(pg.id)}
+                          onMouseLeave={() => setVncHoverTile(null)}
+                          style={{ aspectRatio: isHovered ? "auto" : "16 / 10", height: isHovered ? 480 : undefined }}
+                        >
+                          <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-1.5 px-2 py-1 bg-black/60 backdrop-blur-sm border-b border-white/10">
+                            <img
+                              src={platformFaviconUrl(primary)}
+                              alt=""
+                              className="h-3 w-3 rounded-sm"
+                              onError={e => { (e.target as HTMLImageElement).style.display = "none" }}
+                            />
+                            <span className="text-[10px] font-medium text-white/90 truncate">
+                              {pg.name || pg.location_city || pg.ip || pg.id.slice(0, 8)}
+                            </span>
+                            <span className="text-[9px] text-white/50 ml-auto truncate">
+                              {platforms.slice(0, 3).map(p => platformShortLabel(p)).join(" · ") || "—"}
+                            </span>
+                          </div>
+                          {shouldStream ? (
+                            <iframe
+                              src={`https://srv1197943.taild42583.ts.net:18790/novnc/vnc_lite.html?path=websockify/${pg.id}&autoconnect=true&resize=scale`}
+                              className="w-full h-full border-0 pt-5"
+                              allow="clipboard-read; clipboard-write"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-muted-foreground text-[10px] pt-5">
+                              Hover to stream
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                    {proxyGroups.length === 0 && (
+                      <div className="col-span-3 text-center py-12 text-muted-foreground text-xs">
+                        No proxy groups configured yet.
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
             {!showVnc && (
