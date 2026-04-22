@@ -383,10 +383,10 @@ const AUTOMATION_TAGS = [
 ] as const
 
 const VNC_URL = process.env.NEXT_PUBLIC_VNC_URL || "https://srv1197943.taild42583.ts.net/vnc.html"
-// Pre-baked base64 of the x11vnc password so noVNC autoconnects without a prompt.
+// noVNC password query param is plaintext — RFB truncates to 8 chars at the server.
 // Dashboard is already behind admin-PIN + Tailscale funnel, so embedding is fine.
-const VNC_PASSWORD_B64 = process.env.NEXT_PUBLIC_VNC_PASSWORD_B64 || "RGNNa3RnMjAyNiE="
-const VNC_EMBED_URL = `${VNC_URL}${VNC_URL.includes("?") ? "&" : "?"}autoconnect=true&resize=scale&password=${VNC_PASSWORD_B64}`
+const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || "DcMktg20"
+const VNC_EMBED_URL = `${VNC_URL}${VNC_URL.includes("?") ? "&" : "?"}autoconnect=true&resize=scale&password=${encodeURIComponent(VNC_PASSWORD)}`
 
 /* ─── Confetti ─── */
 function Confetti() {
