@@ -11,6 +11,7 @@ import {
   Pencil, Server, Layers,
 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ReplayAutomationDialog } from "@/components/replay-automation-dialog"
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.08 } } }
 const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.5 } } }
@@ -1653,6 +1654,9 @@ export default function AutomationsPage() {
   // Delete confirm state.
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
+  // P9.3 — replay dialog target.
+  const [replayAutomation, setReplayAutomation] = useState<{ id: string; name: string } | null>(null)
+
   // Local overrides (for newly recorded automations in this session)
   const [activeOverrides, setActiveOverrides] = useState<Set<string>>(new Set())
   const [settingUpOverrides, setSettingUpOverrides] = useState<Set<string>>(new Set())
@@ -2456,11 +2460,11 @@ export default function AutomationsPage() {
                                     <Edit2 className="h-2.5 w-2.5" />
                                   </button>
                                   <button
-                                    disabled
-                                    title="Re-record (coming in next build)"
-                                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-muted/20 text-[10px] font-medium opacity-50 cursor-not-allowed"
+                                    onClick={() => setReplayAutomation({ id: auto.id, name: auto.name })}
+                                    title="Replay this automation"
+                                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[10px] font-medium transition-colors"
                                   >
-                                    <RotateCcw className="h-2.5 w-2.5" />
+                                    <Play className="h-2.5 w-2.5" />
                                   </button>
                                   <button
                                     onClick={() => requestDelete(auto.id)}
@@ -2585,6 +2589,18 @@ export default function AutomationsPage() {
               </div>
             </motion.div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* P9.3 — Replay dialog */}
+      <AnimatePresence>
+        {replayAutomation && (
+          <ReplayAutomationDialog
+            open={!!replayAutomation}
+            onClose={() => setReplayAutomation(null)}
+            automationId={replayAutomation.id}
+            automationName={replayAutomation.name}
+          />
         )}
       </AnimatePresence>
     </motion.div>
