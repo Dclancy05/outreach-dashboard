@@ -18,11 +18,11 @@
     },
     {
       "path": "/api/retry-queue/process",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 9 * * *"
     },
     {
       "path": "/api/cron/deadman-check",
-      "schedule": "0 * * * *"
+      "schedule": "0 11 * * *"
     }
   ]
 }
