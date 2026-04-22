@@ -273,9 +273,8 @@ export default function VncLoginFlow({
           "[VNC] Initial tab URL does not match requested platform",
           { requested: selectedPlatform, expected, got: initialTabUrl }
         )
-        // Fire-and-forget observability POST — dashboard-side record only, the
-        // ai-agent scan cron reads these for pattern analysis.
-        fetch("/api/ai-agent/scan", {
+        // Fire-and-forget observability POST — dashboard-side record only.
+        fetch("/api/observability/vnc", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -285,7 +284,6 @@ export default function VncLoginFlow({
             actual_url: initialTabUrl,
             session_id: data.data.id,
             account_id: existingAccount?.account_id || null,
-            at: new Date().toISOString(),
           }),
         }).catch(() => {})
       }
