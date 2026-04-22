@@ -374,17 +374,47 @@ function SequenceBuilderDialog({ open, onOpenChange, editSequence, onSaved }: {
                         onChange={e => updateStep(step.id, { subject: e.target.value })} className="rounded-xl bg-muted/30" />
                     )}
 
-                    {/* Message */}
+                    {/* Message — P9.4 supports multiple A/B variants */}
                     {step.hasMessage && (
-                      <div className="space-y-2">
-                        <SmartVariableTextarea
-                          placeholder="Write your message... Type { to pick a variable"
-                          value={step.messages[0] || ""}
-                          onChange={next => { const m = [...step.messages]; m[0] = next; updateStep(step.id, { messages: m }) }}
-                          rows={4}
-                          className="w-full rounded-xl bg-muted/30 border border-border/30 min-h-[80px] resize-none px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
-                        />
-                        <div className="flex gap-1.5 flex-wrap">
+                      <div className="space-y-3">
+                        {(step.messages.length === 0 ? [""] : step.messages).map((msg, vi) => (
+                          <div key={vi} className="space-y-1.5">
+                            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                              <span>
+                                {step.messages.length > 1
+                                  ? <><span className="font-semibold text-violet-400">Variant {String.fromCharCode(65 + vi)}</span> · one picked at random per send</>
+                                  : "Message"}
+                              </span>
+                              {step.messages.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const m = step.messages.filter((_, idx) => idx !== vi)
+                                    updateStep(step.id, { messages: m.length ? m : [""] })
+                                  }}
+                                  className="text-red-400 hover:text-red-300 transition-colors"
+                                  title="Remove variant"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+                            <SmartVariableTextarea
+                              placeholder="Write your message... Type { to pick a variable"
+                              value={msg}
+                              onChange={next => {
+                                const m = [...step.messages]
+                                if (m.length === 0) m.push(next)
+                                else m[vi] = next
+                                updateStep(step.id, { messages: m })
+                              }}
+                              rows={4}
+                              className="w-full rounded-xl bg-muted/30 border border-border/30 min-h-[80px] resize-none px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500"
+                            />
+                          </div>
+                        ))}
+
+                        <div className="flex gap-1.5 flex-wrap items-center">
                           {VARIABLE_CHIPS.map(v => (
                             <button key={v} onClick={() => {
                               const m = [...step.messages]; m[0] = (m[0] || "") + v; updateStep(step.id, { messages: m })
@@ -392,7 +422,15 @@ function SequenceBuilderDialog({ open, onOpenChange, editSequence, onSaved }: {
                               {v}
                             </button>
                           ))}
-                          <span className="text-[10px] text-muted-foreground self-center ml-1">or type <code className="px-1 py-0.5 rounded bg-muted/30">{"{"}</code> for more…</span>
+                          <span className="text-[10px] text-muted-foreground">or type <code className="px-1 py-0.5 rounded bg-muted/30">{"{"}</code></span>
+
+                          <button
+                            type="button"
+                            onClick={() => updateStep(step.id, { messages: [...step.messages, ""] })}
+                            className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-semibold transition-colors"
+                          >
+                            + Add variant
+                          </button>
                         </div>
                       </div>
                     )}
@@ -882,7 +920,11 @@ export default function OutreachPage() {
           const url = getPlatformUrl(lead, platform)
           if (!url) { skippedCount++; continue }
 
-          let messageText = step.message || step.messages?.[0] || ""
+          // P9.4 — pick a variant at random when more than one is configured.
+          const variants = Array.isArray(step.messages) ? step.messages.filter(m => m && m.trim()) : []
+          let messageText = variants.length > 1
+            ? variants[Math.floor(Math.random() * variants.length)]
+            : (step.message || variants[0] || "")
           if (!messageText) {
             const tplKey = `${step.template_group || "default"}:${platform}`
             messageText = templateMap[tplKey] || templateMap[`default:${platform}`] || `Hey {{name}}! Would love to connect about your {{niche}} business.`
