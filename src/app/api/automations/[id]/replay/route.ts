@@ -27,7 +27,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const { data: automation, error } = await supabase
     .from("automations")
-    .select("id, name, platform, steps, variables")
+    .select("id, name, platform, status, steps, variables")
     .eq("id", params.id)
     .maybeSingle()
 
@@ -99,12 +99,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       })
       .eq("id", runRow.id)
 
+    const autoUpdates: Record<string, unknown> = { last_tested_at: new Date().toISOString() }
     if (overall === "passed") {
-      await supabase
-        .from("automations")
-        .update({ last_tested_at: new Date().toISOString() })
-        .eq("id", automation.id)
+      autoUpdates.last_error = null
+      // Heal a previously flagged automation if the replay now passes.
+      if ((automation as { status?: string }).status === "needs_rerecording") {
+        autoUpdates.status = "active"
+      }
+    } else {
+      autoUpdates.last_error = lastError || "Replay failed"
+      if ((automation as { status?: string }).status === "active") {
+        autoUpdates.status = "needs_rerecording"
+      }
     }
+    await supabase.from("automations").update(autoUpdates).eq("id", automation.id)
   }
 
   return NextResponse.json({

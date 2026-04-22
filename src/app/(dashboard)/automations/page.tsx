@@ -2643,12 +2643,21 @@ export default function AutomationsPage() {
                             : auto.status === "broken"
                             ? <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-red-500/20 text-red-400 border border-red-500/30 shrink-0"><AlertTriangle className="h-2.5 w-2.5" /> Broken</span>
                             : <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-muted/30 text-muted-foreground border border-border/50 shrink-0">{auto.status}</span>
+                          const needsAttn = auto.status === "needs_rerecording" || auto.status === "broken"
                           return (
                             <motion.div
                               key={`db-${auto.id}`}
                               variants={item}
                               whileHover={{ scale: 1.02, y: -2 }}
-                              className={`rounded-xl border p-4 transition-all bg-gradient-to-br ${platformColors[group.platform]}`}
+                              animate={needsAttn ? {
+                                boxShadow: [
+                                  "0 0 0 0 rgba(251, 146, 60, 0.0)",
+                                  "0 0 0 4px rgba(251, 146, 60, 0.45)",
+                                  "0 0 0 0 rgba(251, 146, 60, 0.0)",
+                                ],
+                              } : {}}
+                              transition={needsAttn ? { duration: 1.8, repeat: Infinity, ease: "easeInOut" } : {}}
+                              className={`rounded-xl border p-4 transition-all bg-gradient-to-br ${platformColors[group.platform]} ${needsAttn ? "border-orange-500/60" : ""}`}
                             >
                               <div className="flex items-start justify-between mb-2 gap-2">
                                 <div className="min-w-0 flex-1">
@@ -2687,6 +2696,18 @@ export default function AutomationsPage() {
                                   <span>{auto.last_tested_at ? `Tested ${new Date(auto.last_tested_at).toLocaleDateString()}` : `Created ${new Date(auto.created_at).toLocaleDateString()}`}</span>
                                 </div>
                                 <div className="flex items-center gap-1.5">
+                                  {needsAttn && (
+                                    <motion.button
+                                      onClick={() => openEditModal(auto)}
+                                      title="This automation is failing — re-record to fix the broken step"
+                                      animate={{ scale: [1, 1.05, 1] }}
+                                      transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-orange-500/90 hover:bg-orange-500 text-white text-[10px] font-semibold transition-colors shadow-md shadow-orange-500/40"
+                                    >
+                                      <RotateCcw className="h-3 w-3" />
+                                      Re-record
+                                    </motion.button>
+                                  )}
                                   <button
                                     onClick={() => setReplayAutomation({ id: auto.id, name: auto.name })}
                                     title="Replay this automation"

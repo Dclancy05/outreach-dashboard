@@ -3,118 +3,146 @@ import { createClient } from "@supabase/supabase-js"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+export const maxDuration = 60
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-/**
- * POST /api/cron/automations-maintenance
- *
- * Daily at 6 AM Eastern (vercel.json cron triggers this). Iterates every
- * automation whose status marks it "live enough to test" and records a
- * maintenance `automation_runs` entry per automation.
- *
- * THIS IS A STUB of the control path. The replay engine (Phase 4 continuation)
- * will slot in where we currently write `passed` + a stub note. Wiring the
- * cron route + auth + row-write now means when the engine lands it's just a
- * function swap — no schedule/auth/env changes needed.
- *
- * Auth: Vercel Cron + Dylan's curl tests both send
- *   `Authorization: Bearer <CRON_SECRET>`
- * Missing or mismatched → 401. This doubles as the auth for the ai-agent
- * routes so all background workers share one secret.
- */
+const VPS_URL = process.env.VPS_URL || "https://srv1197943.taild42583.ts.net:10000"
+
+const TEST_TARGETS: Record<string, string> = {
+  instagram: "https://www.instagram.com/mrbeast/",
+  facebook: "https://www.facebook.com/zuck",
+  tiktok: "https://www.tiktok.com/@mrbeast",
+  linkedin: "https://www.linkedin.com/in/williamhgates/",
+  youtube: "https://www.youtube.com/@MrBeast",
+  twitter: "https://twitter.com/elonmusk",
+  snapchat: "https://www.snapchat.com/add/team.snapchat",
+  pinterest: "https://www.pinterest.com/starbucks/",
+}
+
+interface Step {
+  description?: string
+  kind?: string
+  url?: string
+  value?: string | null
+  selectors?: { css?: string | null; xpath?: string | null }
+}
+
 async function handle(req: NextRequest) {
-  console.warn("MAINTENANCE STUB — no real replay happening, last_tested_at is NOT being written.")
   const auth = req.headers.get("authorization") || ""
   const expected = process.env.CRON_SECRET || ""
-  if (!expected) {
-    // Fail-closed: without a secret we refuse to run maintenance at all.
-    return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 })
-  }
-  if (auth !== `Bearer ${expected}`) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-  }
+  if (!expected) return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 })
+  if (auth !== `Bearer ${expected}`) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
 
   const startedAt = new Date()
 
-  // Only test automations that are "live enough" — drafts and fully-broken ones
-  // are excluded. `fixing` is included so the maintenance pass can confirm an
-  // in-progress self-heal actually stuck.
+  // Test every automation that has steps, regardless of status — a maintenance
+  // pass exists to detect selector drift, so we need to verify currently-active
+  // ones AND re-verify ones previously flagged `needs_rerecording` in case a
+  // change on the target site fixed them.
   const { data: automations, error } = await supabase
     .from("automations")
-    .select("id, name, platform, status")
+    .select("id, name, platform, status, steps, variables")
     .in("status", ["active", "needs_rerecording", "fixing"])
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const list = automations || []
-  const testedIds: string[] = []
-  const errors: { automation_id: string; error: string }[] = []
+  const list = (automations || []) as Array<{ id: string; name: string; platform: string; status: string; steps: Step[] | null; variables: Record<string, string> | null }>
+  const results: Array<{ automation_id: string; overall: "passed" | "failed" | "skipped"; detail?: string }> = []
 
   for (const a of list) {
-    // 1) Open a "running" run row so an in-progress maintenance pass is visible
-    //    in the UI even before the replay finishes.
-    const { data: runRow, error: insErr } = await supabase
+    const steps = Array.isArray(a.steps) ? a.steps : []
+    if (!steps.length) {
+      results.push({ automation_id: a.id, overall: "skipped", detail: "no steps" })
+      continue
+    }
+
+    const { data: runRow } = await supabase
       .from("automation_runs")
       .insert({
         automation_id: a.id,
         run_type: "maintenance",
         status: "running",
+        started_at: new Date().toISOString(),
       })
       .select("id")
       .single()
 
-    if (insErr || !runRow) {
-      errors.push({ automation_id: a.id, error: insErr?.message || "insert failed" })
-      continue
+    const variables: Record<string, string> = {
+      ...(a.variables || {}),
+      username: (a.variables?.username as string) || "mrbeast",
+      message: (a.variables?.message as string) || "[maintenance replay]",
+      target_url: TEST_TARGETS[a.platform] || TEST_TARGETS.instagram,
     }
 
-    // 2) STUB: mark it passed immediately with a note so the UI shows green and
-    //    we know which runs came from the stub vs the real replay engine.
-    const finishedAt = new Date()
-    const { error: upRunErr } = await supabase
-      .from("automation_runs")
-      .update({
-        status: "passed",
-        finished_at: finishedAt.toISOString(),
-        error: "maintenance-stub: replay engine not yet wired",
-        steps_completed: Array.isArray((a as any).steps) ? (a as any).steps.length : 0,
+    let overall: "passed" | "failed" = "failed"
+    let stepsCompleted = 0
+    let lastError: string | null = null
+    let replayData: { steps?: Array<{ status: string }>; lastError?: string } = {}
+
+    try {
+      const res = await fetch(`${VPS_URL}/replay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ steps, variables }),
+        signal: AbortSignal.timeout(50000),
       })
-      .eq("id", runRow.id)
-
-    if (upRunErr) {
-      errors.push({ automation_id: a.id, error: upRunErr.message })
-      continue
+      replayData = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        lastError = (replayData as { error?: string }).error || `Replay service returned ${res.status}`
+      } else {
+        const rSteps = Array.isArray((replayData as { steps?: unknown }).steps) ? (replayData as { steps: Array<{ status: string }> }).steps : []
+        stepsCompleted = rSteps.filter(s => s.status === "passed").length
+        const failed = rSteps.find(s => s.status === "failed")
+        overall = failed ? "failed" : "passed"
+        lastError = (replayData as { lastError?: string }).lastError || null
+      }
+    } catch (e) {
+      lastError = (e as Error).message
     }
 
-    // 3) Intentionally do NOT update automations.last_tested_at — the replay
-    //    engine is still a stub. Writing a timestamp would lie about test
-    //    freshness. The `automation_runs` row alone is the honest record.
+    if (runRow?.id) {
+      await supabase
+        .from("automation_runs")
+        .update({
+          status: overall,
+          finished_at: new Date().toISOString(),
+          steps_completed: stepsCompleted,
+          error: lastError || undefined,
+        })
+        .eq("id", runRow.id)
+    }
 
-    testedIds.push(a.id)
+    // Flag status: failure → needs_rerecording (unless it's already broken/draft).
+    // Success from a previously flagged state → active (the site probably self-healed).
+    const updates: Record<string, unknown> = { last_tested_at: new Date().toISOString() }
+    if (overall === "passed" && a.status !== "active") {
+      updates.status = "active"
+      updates.last_error = null
+    }
+    if (overall === "failed" && a.status === "active") {
+      updates.status = "needs_rerecording"
+      updates.last_error = lastError || "Replay failed during maintenance"
+    }
+    await supabase.from("automations").update(updates).eq("id", a.id)
+
+    results.push({ automation_id: a.id, overall, detail: lastError || undefined })
   }
 
   return NextResponse.json({
     ok: true,
-    tested: testedIds.length,
-    tested_ids: testedIds,
-    skipped_errors: errors,
+    tested: results.length,
+    passed: results.filter(r => r.overall === "passed").length,
+    failed: results.filter(r => r.overall === "failed").length,
+    skipped: results.filter(r => r.overall === "skipped").length,
     ran_at: startedAt.toISOString(),
-    note: "stub — per-automation replay not yet implemented",
+    took_ms: Date.now() - startedAt.getTime(),
+    results,
   })
 }
 
-export async function POST(req: NextRequest) {
-  return handle(req)
-}
-
-// Vercel Cron sends GET by default — accept both so manual curls + scheduled
-// invocations hit the same code path.
-export async function GET(req: NextRequest) {
-  return handle(req)
-}
+export async function POST(req: NextRequest) { return handle(req) }
+export async function GET(req: NextRequest) { return handle(req) }
