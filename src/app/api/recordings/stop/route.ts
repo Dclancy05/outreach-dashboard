@@ -6,7 +6,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const VPS_URL = "http://srv1197943.hstgr.cloud:3848"
+const VPS_URL = process.env.VPS_URL || process.env.RECORDING_SERVER_URL || "http://srv1197943.hstgr.cloud:3848"
 
 // Get the base URL for internal API calls
 function getBaseUrl(req: NextRequest): string {

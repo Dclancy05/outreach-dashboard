@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 
-const VPS_URL = "http://srv1197943.hstgr.cloud:3848"
+const VPS_URL = process.env.VPS_URL || process.env.RECORDING_SERVER_URL || "http://srv1197943.hstgr.cloud:3848"
 
 export async function POST() {
   try {

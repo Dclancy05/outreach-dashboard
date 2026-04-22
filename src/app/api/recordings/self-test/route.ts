@@ -6,7 +6,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-const VPS_URL = "http://srv1197943.hstgr.cloud:3848"
+const VPS_URL = process.env.VPS_URL || process.env.RECORDING_SERVER_URL || "http://srv1197943.hstgr.cloud:3848"
 
 // 5 selector strategies in order of preference
 const STRATEGIES = [
