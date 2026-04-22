@@ -12,9 +12,25 @@ import { motion, AnimatePresence } from "framer-motion"
 import {
   Monitor, Loader2, CheckCircle2, XCircle, ArrowRight,
   Globe, Shield, Eye, Cookie, Save, LogOut, RefreshCw,
-  ChevronRight, AlertTriangle,
+  ChevronRight, AlertTriangle, Instagram, Facebook, Linkedin,
 } from "lucide-react"
 import { SOCIAL_PLATFORMS } from "@/lib/platforms"
+
+// Login URLs the toolbar uses to force-navigate the VNC tab to the right
+// platform. If the VNC Manager opens the wrong page on first launch (e.g. the
+// reported "Login Instagram → sketchy LinkedIn" bug), the user has a one-click
+// escape hatch.
+const PLATFORM_URLS: Record<string, string> = {
+  instagram: "https://www.instagram.com/accounts/login/",
+  facebook: "https://www.facebook.com/login",
+  linkedin: "https://www.linkedin.com/login",
+  tiktok: "https://www.tiktok.com/login",
+  twitter: "https://twitter.com/login",
+  x: "https://x.com/login",
+  youtube: "https://accounts.google.com/signin",
+  pinterest: "https://www.pinterest.com/login/",
+  snapchat: "https://accounts.snapchat.com/accounts/login",
+}
 
 const VNC_WS_HOST = process.env.NEXT_PUBLIC_VNC_WS_HOST || "srv1197943.taild42583.ts.net"
 const VNC_API_BASE = `https://${VNC_WS_HOST}`
@@ -164,6 +180,8 @@ export default function VncLoginFlow({
   const [displayName, setDisplayName] = useState("")
   const [error, setError] = useState("")
   const [capturing, setCapturing] = useState(false)
+  const [currentTabUrl, setCurrentTabUrl] = useState<string>("")
+  const [navigating, setNavigating] = useState<string | null>(null)
 
   const vncFetch = useCallback(async (path: string, options?: RequestInit) => {
     const res = await fetch(`${VNC_API_BASE}${path}`, {
@@ -180,6 +198,36 @@ export default function VncLoginFlow({
     }
     return res.json()
   }, [])
+
+  // Force the VNC tab onto a given URL. Hits the direct VNC Manager and, as a
+  // second channel, the dashboard proxy at /api/vnc/session/:id/navigate — so
+  // if the VPS manager drops the request the dashboard still logs the intent.
+  const navigateTab = useCallback(async (targetUrl: string, label?: string) => {
+    if (!sessionId) {
+      toast.error("No active session yet")
+      return
+    }
+    setNavigating(label || targetUrl)
+    try {
+      // Primary: direct VNC Manager
+      await vncFetch(`/api/sessions/${sessionId}/navigate`, {
+        method: "POST",
+        body: JSON.stringify({ url: targetUrl }),
+      }).catch(() => {})
+      // Secondary/ observability: dashboard proxy endpoint
+      await fetch(`/api/vnc/session/${sessionId}/navigate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: targetUrl }),
+      }).catch(() => {})
+      setCurrentTabUrl(targetUrl)
+      toast.success(`Opened ${label || "link"}`)
+    } catch (e: any) {
+      toast.error(e?.message || "Navigate failed")
+    } finally {
+      setNavigating(null)
+    }
+  }, [sessionId, vncFetch])
 
   const startSession = useCallback(async (selectedPlatform: string) => {
     setStep("connecting")
@@ -213,11 +261,52 @@ export default function VncLoginFlow({
       const pwd = data.data.vncPassword ? `&password=${encodeURIComponent(data.data.vncPassword)}` : ""
       setVncUrl(`${VNC_API_BASE}/novnc/vnc_lite.html?path=websockify/${data.data.id}&autoconnect=true&resize=scale${pwd}`)
       setStep("login")
+
+      // Track what we *expected* the tab to be on. The toolbar can compare and
+      // log a warning if the manager opens something else (e.g. the reported
+      // "Login Instagram → LinkedIn" bug).
+      const expected = PLATFORM_URLS[selectedPlatform]
+      const initialTabUrl: string = data?.data?.initial_url || data?.data?.url || ""
+      setCurrentTabUrl(initialTabUrl || expected || "")
+      if (initialTabUrl && expected && !initialTabUrl.includes(new URL(expected).hostname)) {
+        console.warn(
+          "[VNC] Initial tab URL does not match requested platform",
+          { requested: selectedPlatform, expected, got: initialTabUrl }
+        )
+        // Fire-and-forget observability POST — dashboard-side record only, the
+        // ai-agent scan cron reads these for pattern analysis.
+        fetch("/api/ai-agent/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: "vnc_platform_mismatch",
+            requested_platform: selectedPlatform,
+            expected_url: expected,
+            actual_url: initialTabUrl,
+            session_id: data.data.id,
+            account_id: existingAccount?.account_id || null,
+            at: new Date().toISOString(),
+          }),
+        }).catch(() => {})
+      }
+
+      // Also proactively fire a navigate to the correct platform URL — belt
+      // and suspenders. If the manager already got it right this is a no-op.
+      if (expected) {
+        // Don't await — we don't want to block entering the login step on this
+        setTimeout(() => {
+          fetch(`/api/vnc/session/${data.data.id}/navigate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: expected }),
+          }).catch(() => {})
+        }, 800)
+      }
     } catch (e: any) {
       setError(e.message)
       setStep("error")
     }
-  }, [proxyGroupId, vncFetch])
+  }, [proxyGroupId, vncFetch, existingAccount])
 
   useEffect(() => {
     if (open && existingAccount) {
@@ -541,7 +630,66 @@ export default function VncLoginFlow({
           </div>
 
           {/* Right Panel — VNC Iframe */}
-          <div className="flex-1 relative bg-black/90">
+          <div className="flex-1 relative bg-black/90 flex flex-col">
+            {/* Navigation toolbar — force-opens the right platform login page if
+                the VNC Manager opened something else (the reported "Login IG
+                → LinkedIn" bug has a one-click fix here). */}
+            {(step === "login" || step === "capturing") && sessionId && (
+              <div className="shrink-0 border-b border-border/40 bg-card/70 backdrop-blur px-3 py-2 flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => navigateTab(PLATFORM_URLS.instagram, "Instagram")}
+                  disabled={!!navigating}
+                  className="rounded-lg bg-gradient-to-r from-pink-600 to-fuchsia-600 h-7 text-xs"
+                >
+                  <Globe className="h-3 w-3 mr-1" />
+                  Open Instagram Login
+                </Button>
+                <div className="flex items-center gap-1 border-l border-border/40 pl-2">
+                  <button
+                    onClick={() => navigateTab(PLATFORM_URLS.instagram, "Instagram")}
+                    disabled={!!navigating}
+                    title="Go to Instagram"
+                    className="p-1.5 rounded-md hover:bg-pink-500/20 disabled:opacity-40"
+                  >
+                    <Instagram className="h-4 w-4 text-pink-400" />
+                  </button>
+                  <button
+                    onClick={() => navigateTab(PLATFORM_URLS.facebook, "Facebook")}
+                    disabled={!!navigating}
+                    title="Go to Facebook"
+                    className="p-1.5 rounded-md hover:bg-blue-500/20 disabled:opacity-40"
+                  >
+                    <Facebook className="h-4 w-4 text-blue-400" />
+                  </button>
+                  <button
+                    onClick={() => navigateTab(PLATFORM_URLS.linkedin, "LinkedIn")}
+                    disabled={!!navigating}
+                    title="Go to LinkedIn"
+                    className="p-1.5 rounded-md hover:bg-sky-500/20 disabled:opacity-40"
+                  >
+                    <Linkedin className="h-4 w-4 text-sky-400" />
+                  </button>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => navigateTab(currentTabUrl || PLATFORM_URLS[platform] || "about:blank", "Refresh")}
+                  disabled={!!navigating}
+                  className="rounded-lg h-7 text-xs"
+                >
+                  <RefreshCw className="h-3 w-3 mr-1" />
+                  Refresh Tab
+                </Button>
+                <div className="ml-auto text-[10px] text-muted-foreground truncate max-w-[260px]">
+                  Tab is on:{" "}
+                  <span className="font-mono text-foreground">
+                    {currentTabUrl || "—"}
+                  </span>
+                </div>
+              </div>
+            )}
+            <div className="relative flex-1">
             {(step === "login" || step === "capturing") && vncUrl ? (
               <>
                 {!vncLoaded && !vncTimedOut && (
@@ -595,6 +743,7 @@ export default function VncLoginFlow({
                 </p>
               </div>
             )}
+            </div>
           </div>
         </div>
       </DialogContent>

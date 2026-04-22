@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { generateFingerprint, deriveGeoFields } from "@/lib/fingerprint"
 
 const VNC_MANAGER_URL = process.env.VNC_MANAGER_URL || "http://127.0.0.1:18790"
 const VNC_API_KEY = process.env.VNC_API_KEY || "vnc-mgr-2026-dylan"
@@ -89,6 +90,59 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Per-account fingerprint: generate + persist on first launch, then pin
+    // forever. We forward it to the VNC Manager even if the manager doesn't
+    // consume it yet — the dashboard side is ready for when it does, and the
+    // fingerprint row is permanently stored in Supabase either way.
+    let fingerprint: any = null
+    if (account_id) {
+      try {
+        const { data: existing } = await supabase
+          .from("account_fingerprints")
+          .select("*")
+          .eq("account_id", account_id)
+          .maybeSingle()
+
+        if (existing) {
+          fingerprint = existing
+        } else {
+          const fp = generateFingerprint()
+          const geoDerived = deriveGeoFields(geo.country || null, geo.city || null)
+          const row = {
+            account_id,
+            user_agent: fp.user_agent,
+            platform: fp.platform,
+            screen_width: fp.screen_width,
+            screen_height: fp.screen_height,
+            device_pixel_ratio: fp.device_pixel_ratio,
+            color_depth: fp.color_depth,
+            hardware_concurrency: fp.hardware_concurrency,
+            device_memory: fp.device_memory,
+            webgl_vendor: fp.webgl_vendor,
+            webgl_renderer: fp.webgl_renderer,
+            canvas_noise_seed: fp.canvas_noise_seed,
+            audio_noise_seed: fp.audio_noise_seed,
+            timezone: geoDerived.timezone,
+            locale: geoDerived.locale,
+            accept_language: geoDerived.accept_language,
+            geo_lat: geoDerived.geo_lat,
+            geo_lon: geoDerived.geo_lon,
+            proxy_group_id,
+            chrome_profile_dir: `/vps/profiles/${account_id}`,
+            updated_at: new Date().toISOString(),
+          }
+          const { data: saved } = await supabase
+            .from("account_fingerprints")
+            .upsert(row, { onConflict: "account_id" })
+            .select()
+            .single()
+          fingerprint = saved || row
+        }
+      } catch (e) {
+        // Non-fatal — session launches without fingerprint on failure
+      }
+    }
+
     const res = await fetch(`${VNC_MANAGER_URL}/api/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-API-Key": VNC_API_KEY },
@@ -101,6 +155,7 @@ export async function POST(req: NextRequest) {
         geo,
         cookies,
         account_id,
+        fingerprint,
       }),
     })
 

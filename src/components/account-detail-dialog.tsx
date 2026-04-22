@@ -13,6 +13,8 @@ import {
   Loader2, Cookie,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { DeviceIdentity } from "@/components/device-identity"
+import { CookieHealthBadge } from "@/components/cookie-health-badge"
 
 interface Props {
   open: boolean
@@ -372,6 +374,17 @@ export default function AccountDetailDialog({ open, accountId, onClose, onLoginC
                 )}
               </div>
             </div>
+
+            {/* Cookie health + device identity — expose the new persistence
+                system to the user without cluttering the primary card. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <CookieHealthBadge
+                accountId={data.account.account_id}
+                initialHealth={(data.account as any).cookies_health}
+                initialUpdatedAt={(data.account as any).cookies_updated_at}
+              />
+            </div>
+            <DeviceIdentity accountId={data.account.account_id} />
 
             {/* Flag signals */}
             {data.flags.needsAttention && (

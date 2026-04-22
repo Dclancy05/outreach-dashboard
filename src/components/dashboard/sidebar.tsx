@@ -93,6 +93,7 @@ const businessNavSections: NavSection[] = [
       { path: "/accounts", label: "Accounts & Proxies", icon: Shield, color: "text-emerald-500" },
       { path: "/automations", label: "Automations", icon: Zap, color: "text-amber-400" },
       { path: "/settings", label: "Settings", icon: Settings, color: "text-muted-foreground" },
+      { path: "/get-started", label: "Get Started", icon: Sparkles, color: "text-fuchsia-400" },
     ],
   },
 ]

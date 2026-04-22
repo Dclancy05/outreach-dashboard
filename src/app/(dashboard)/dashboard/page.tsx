@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { StatCard } from "@/components/dashboard/stat-card"
 import Link from "next/link"
 import { SetupBanner } from "@/components/setup-banner"
+import { OnboardingBanner } from "@/components/onboarding-banner"
 import {
   LayoutDashboard,
   Users,
@@ -67,6 +68,9 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* First-time user nudge — dismissible */}
+      <OnboardingBanner />
 
       {/* Setup Banner */}
       <SetupBanner

@@ -26,6 +26,8 @@ import { useRouter } from "next/navigation"
 import VncLoginFlow from "@/components/vnc-login-flow"
 import AccountDetailDialog from "@/components/account-detail-dialog"
 import BulkImportDialog from "@/components/bulk-import-dialog"
+import { CookieHealthBadge } from "@/components/cookie-health-badge"
+import { HelpButton } from "@/components/help-button"
 
 // ── Animation variants ──────────────────────────────────────────────
 
@@ -1195,7 +1197,7 @@ export default function AccountsPage() {
                             </div>
 
                             {/* Stats row */}
-                            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
                               <span className="font-mono">{a.sends_today || 0}/{warmupLimit} today</span>
                               {proxy && <span className="flex items-center gap-1"><Wifi className="h-3 w-3 text-green-400" />{proxy.location_city || proxy.ip}</span>}
                               {ws && (
@@ -1203,6 +1205,11 @@ export default function AccountsPage() {
                                   <Sparkles className="h-3 w-3" /> Day {a.warmup_day || 0}
                                 </span>
                               )}
+                              <CookieHealthBadge
+                                accountId={a.account_id}
+                                initialHealth={(a as any).cookies_health}
+                                initialUpdatedAt={(a as any).cookies_updated_at}
+                              />
                             </div>
 
                             {/* Progress bar */}
@@ -1968,6 +1975,7 @@ export default function AccountsPage() {
           })()}
         </DialogContent>
       </Dialog>
+      <HelpButton pageHint="This is the Accounts page. Each card is one social login. Click a card to see its health, cookies, and device identity." />
     </motion.div>
   )
 }
