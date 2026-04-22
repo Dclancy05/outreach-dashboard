@@ -10,7 +10,10 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Settings as SettingsIcon, Save, Check, Calendar, Upload, Shield, Users, Wifi, Instagram, Facebook, Linkedin, AlertCircle, ChevronDown, ChevronUp, Globe, ExternalLink, CheckCircle, Mail } from "lucide-react"
+import { Settings as SettingsIcon, Save, Check, Calendar, Upload, Shield, Users, Wifi, Instagram, Facebook, Linkedin, AlertCircle, ChevronDown, ChevronUp, Globe, ExternalLink, CheckCircle, Mail, BellRing, RefreshCw } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { PageInstructions } from "@/components/page-instructions"
 import type { Settings } from "@/types"
@@ -606,9 +609,240 @@ function MicrosoftEmailTab() {
   )
 }
 
+// ─── Alerts & Monitoring Tab ────────────────────────────────────────
+
+function AlertsMonitoringTab() {
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [deadman, setDeadman] = useState({
+    enabled: false,
+    silence_hours: 6,
+    alert_method: "in_app" as "in_app" | "telegram",
+    telegram_chat_id: "",
+    last_fired_at: null as string | null,
+  })
+  const [cooldown, setCooldown] = useState({
+    enabled: true,
+    error_threshold: 3,
+    error_window_minutes: 10,
+    cooldown_hours: 24,
+  })
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch("/api/settings/system", { cache: "no-store" })
+      const j = await res.json()
+      if (j.byKey?.deadman_switch) setDeadman(prev => ({ ...prev, ...j.byKey.deadman_switch }))
+      if (j.byKey?.auto_cooldown) setCooldown(prev => ({ ...prev, ...j.byKey.auto_cooldown }))
+    } catch (e) { console.error(e) }
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function saveKey(key: string, value: any) {
+    setSaving(true)
+    try {
+      const res = await fetch("/api/settings/system", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, value }),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      setSaved(true)
+      toast.success("Saved")
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e: any) {
+      toast.error("Save failed: " + e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function testDeadman() {
+    try {
+      const res = await fetch("/api/cron/deadman-check", { cache: "no-store" })
+      const j = await res.json()
+      if (j.fired) toast.success("Alert fired! Check notifications.")
+      else if (j.skipped) toast.info(`Skipped: ${j.reason}`)
+      else toast.success(`OK — ${j.recent_sends} recent sends`)
+    } catch (e: any) {
+      toast.error("Test failed: " + e.message)
+    }
+  }
+
+  if (loading) return <div className="text-center text-muted-foreground py-12">Loading…</div>
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      {/* Dead Man's Switch */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <BellRing className="h-4 w-4 text-amber-400" />
+            Dead Man&apos;s Switch
+            {deadman.enabled && <Badge variant="success" className="ml-2">Active</Badge>}
+            {!deadman.enabled && <Badge variant="outline" className="ml-2">Not configured</Badge>}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            If no sends happen within the silence window, you&apos;ll get an alert. Catches silent failures before they cost you a day.
+          </p>
+
+          <div className="flex items-center justify-between">
+            <Label htmlFor="deadman-enabled" className="text-sm font-medium">Enable dead man&apos;s switch</Label>
+            <Switch
+              id="deadman-enabled"
+              checked={deadman.enabled}
+              onCheckedChange={(v) => setDeadman(d => ({ ...d, enabled: v }))}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="silence-hours" className="text-sm">Silence window (hours)</Label>
+              <Input
+                id="silence-hours"
+                type="number"
+                min={1}
+                max={72}
+                value={deadman.silence_hours}
+                onChange={(e) => setDeadman(d => ({ ...d, silence_hours: parseInt(e.target.value) || 6 }))}
+                className="mt-1"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">Alert fires if zero sends in this window</p>
+            </div>
+            <div>
+              <Label htmlFor="alert-method" className="text-sm">Alert method</Label>
+              <Select
+                value={deadman.alert_method}
+                onValueChange={(v) => setDeadman(d => ({ ...d, alert_method: v as any }))}
+              >
+                <SelectTrigger id="alert-method" className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="in_app">In-app notification</SelectItem>
+                  <SelectItem value="telegram">Telegram</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {deadman.alert_method === "telegram" && (
+            <div>
+              <Label htmlFor="telegram-chat-id" className="text-sm">Telegram chat ID</Label>
+              <Input
+                id="telegram-chat-id"
+                type="text"
+                value={deadman.telegram_chat_id}
+                onChange={(e) => setDeadman(d => ({ ...d, telegram_chat_id: e.target.value }))}
+                placeholder="e.g. 123456789"
+                className="mt-1"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                TELEGRAM_BOT_TOKEN must be set in Vercel env. Chat with @userinfobot to get your ID.
+              </p>
+            </div>
+          )}
+
+          {deadman.last_fired_at && (
+            <div className="text-xs text-muted-foreground border-l-2 border-amber-500/40 pl-2">
+              Last fired: {new Date(deadman.last_fired_at).toLocaleString()}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <Button onClick={() => saveKey("deadman_switch", deadman)} disabled={saving} size="sm">
+              {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              {saved ? <Check className="h-3.5 w-3.5 ml-1" /> : null}
+              Save
+            </Button>
+            <Button onClick={testDeadman} variant="outline" size="sm">
+              Test now
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Auto Cooldown */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Shield className="h-4 w-4 text-blue-400" />
+            Auto-Cooldown
+            {cooldown.enabled && <Badge variant="success" className="ml-2">Enabled</Badge>}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            When an account errors repeatedly, auto-pause it to avoid flags. Resumes after cooldown period.
+          </p>
+
+          <div className="flex items-center justify-between">
+            <Label htmlFor="cooldown-enabled" className="text-sm font-medium">Enable auto-cooldown</Label>
+            <Switch
+              id="cooldown-enabled"
+              checked={cooldown.enabled}
+              onCheckedChange={(v) => setCooldown(c => ({ ...c, enabled: v }))}
+            />
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <Label className="text-sm">Error threshold</Label>
+              <Input
+                type="number"
+                min={1}
+                max={20}
+                value={cooldown.error_threshold}
+                onChange={(e) => setCooldown(c => ({ ...c, error_threshold: parseInt(e.target.value) || 3 }))}
+                className="mt-1"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">Errors before cooldown</p>
+            </div>
+            <div>
+              <Label className="text-sm">Window (min)</Label>
+              <Input
+                type="number"
+                min={1}
+                max={120}
+                value={cooldown.error_window_minutes}
+                onChange={(e) => setCooldown(c => ({ ...c, error_window_minutes: parseInt(e.target.value) || 10 }))}
+                className="mt-1"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">Rolling window</p>
+            </div>
+            <div>
+              <Label className="text-sm">Cooldown (hours)</Label>
+              <Input
+                type="number"
+                min={1}
+                max={168}
+                value={cooldown.cooldown_hours}
+                onChange={(e) => setCooldown(c => ({ ...c, cooldown_hours: parseInt(e.target.value) || 24 }))}
+                className="mt-1"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">Pause duration</p>
+            </div>
+          </div>
+
+          <Button onClick={() => saveKey("auto_cooldown", cooldown)} disabled={saving} size="sm">
+            {saving ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            Save
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
 // ─── Main Settings Page ─────────────────────────────────────────────
 
 export default function SettingsPage() {
+  const search = useSearchParams()
+  const initialTab = search?.get("tab") === "alerts" ? "alerts" : "general"
   return (
     <div className="space-y-6 animate-slide-up">
       <div>
@@ -624,12 +858,13 @@ export default function SettingsPage() {
         <p className="text-muted-foreground text-sm mt-1">Outreach preferences &amp; account management</p>
       </div>
 
-      <Tabs defaultValue="general">
+      <Tabs defaultValue={initialTab}>
         <TabsList>
           <TabsTrigger value="general" className="gap-1.5"><SettingsIcon className="h-3.5 w-3.5" /> General</TabsTrigger>
           <TabsTrigger value="accounts" className="gap-1.5"><Users className="h-3.5 w-3.5" /> Accounts &amp; Proxies</TabsTrigger>
           <TabsTrigger value="gologin" className="gap-1.5"><Globe className="h-3.5 w-3.5" /> GoLogin</TabsTrigger>
           <TabsTrigger value="email" className="gap-1.5"><Mail className="h-3.5 w-3.5" /> Microsoft Email</TabsTrigger>
+          <TabsTrigger value="alerts" className="gap-1.5"><BellRing className="h-3.5 w-3.5" /> Alerts &amp; Monitoring</TabsTrigger>
         </TabsList>
         <TabsContent value="general">
           <GeneralSettingsTab />
@@ -642,6 +877,9 @@ export default function SettingsPage() {
         </TabsContent>
         <TabsContent value="email">
           <MicrosoftEmailTab />
+        </TabsContent>
+        <TabsContent value="alerts">
+          <AlertsMonitoringTab />
         </TabsContent>
       </Tabs>
     </div>
