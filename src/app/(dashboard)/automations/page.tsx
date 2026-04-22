@@ -290,31 +290,70 @@ const RECORDING_GUIDES: Record<string, { steps: GuideStep[]; exampleSearch: stri
 }
 
 /* ─── Automation Definitions ─── */
+/**
+ * Catalog tile for one built-in automation (e.g. Instagram DM). The catalog no
+ * longer carries hard-coded `active: true` / `tested: "Mar 30"` flags — those
+ * were a 2026-03 placeholder and showed "Active" even when the DB had zero
+ * rows. The live state now comes from `isAutoActive`, which cross-checks the
+ * `automations` table at runtime. If a DB row keyed by `slug` exists with
+ * `status='active'` and ≥1 step, the tile renders as Active; otherwise
+ * "Needs Recording".
+ *
+ * - `slug` is the canonical `{platform}_{action}` identifier we use as the
+ *   primary key in the `automations` DB table for catalog tiles.
+ * - `tag` mirrors the DB `tag` column ("outreach_action" vs "lead_enrichment")
+ *   so Your Automations can style enrichment tiles differently.
+ */
 interface AutomationDef {
   platform: string
   action: string
   actionKey: string
-  active: boolean
-  tested?: string
+  slug: string
+  active: false            // catalog default — always false; live state comes from DB
+  tested: null             // catalog default — null, we never claim a test date we can't prove
+  needsRecording: true     // renders the "Needs Recording" pill when no DB row matches
   desc: string
   note?: string
+  tag?: "outreach_action" | "lead_enrichment" | "utility"
 }
 
 const ALL_AUTOMATIONS: AutomationDef[] = [
-  { platform: "ig", action: "DM", actionKey: "dm", active: true, tested: "Mar 30", desc: "Send direct messages on Instagram" },
-  { platform: "ig", action: "Follow", actionKey: "follow", active: true, tested: "Mar 30", desc: "Follow users on Instagram" },
-  { platform: "ig", action: "Unfollow", actionKey: "unfollow", active: true, tested: "Mar 30", desc: "Unfollow users on Instagram" },
-  { platform: "fb", action: "DM", actionKey: "dm", active: true, tested: "Mar 30", desc: "Send messages on Facebook" },
-  { platform: "fb", action: "Follow", actionKey: "follow", active: true, tested: "Mar 30", desc: "Follow pages on Facebook" },
-  { platform: "fb", action: "Unfollow", actionKey: "unfollow", active: true, tested: "Mar 30", desc: "Unfollow pages on Facebook" },
-  { platform: "li", action: "Connect+Note", actionKey: "connect", active: true, tested: "Mar 31", desc: "Send connection requests with notes" },
-  { platform: "li", action: "DM", actionKey: "dm", active: false, desc: "Send LinkedIn messages" },
-  { platform: "li", action: "Follow", actionKey: "follow", active: false, desc: "Follow profiles on LinkedIn", note: "Company page follow works, personal profile not recorded" },
-  { platform: "li", action: "Unfollow", actionKey: "unfollow", active: false, desc: "Unfollow profiles on LinkedIn" },
-  { platform: "tiktok", action: "DM", actionKey: "dm", active: false, desc: "Send TikTok direct messages" },
-  { platform: "tiktok", action: "Follow", actionKey: "follow", active: false, desc: "Follow users on TikTok" },
-  { platform: "youtube", action: "DM", actionKey: "dm", active: false, desc: "Send YouTube messages" },
-  { platform: "youtube", action: "Subscribe", actionKey: "subscribe", active: false, desc: "Subscribe to YouTube channels" },
+  // ─── Outreach actions ───
+  { platform: "ig", action: "DM", actionKey: "dm", slug: "ig_dm", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Send direct messages on Instagram" },
+  { platform: "ig", action: "Follow", actionKey: "follow", slug: "ig_follow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Follow users on Instagram" },
+  { platform: "ig", action: "Unfollow", actionKey: "unfollow", slug: "ig_unfollow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Unfollow users on Instagram" },
+  { platform: "fb", action: "DM", actionKey: "dm", slug: "fb_dm", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Send messages on Facebook" },
+  { platform: "fb", action: "Follow", actionKey: "follow", slug: "fb_follow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Follow pages on Facebook" },
+  { platform: "fb", action: "Unfollow", actionKey: "unfollow", slug: "fb_unfollow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Unfollow pages on Facebook" },
+  { platform: "li", action: "Connect+Note", actionKey: "connect", slug: "li_connect", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Send connection requests with notes" },
+  { platform: "li", action: "DM", actionKey: "dm", slug: "li_dm", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Send LinkedIn messages" },
+  { platform: "li", action: "Follow", actionKey: "follow", slug: "li_follow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Follow profiles on LinkedIn" },
+  { platform: "li", action: "Unfollow", actionKey: "unfollow", slug: "li_unfollow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Unfollow profiles on LinkedIn" },
+  { platform: "tiktok", action: "DM", actionKey: "dm", slug: "tiktok_dm", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Send TikTok direct messages" },
+  { platform: "tiktok", action: "Follow", actionKey: "follow", slug: "tiktok_follow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Follow users on TikTok" },
+  { platform: "youtube", action: "DM", actionKey: "dm", slug: "youtube_dm", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Send YouTube messages" },
+  { platform: "youtube", action: "Subscribe", actionKey: "subscribe", slug: "youtube_subscribe", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Subscribe to YouTube channels" },
+
+  // ─── Lead enrichment (IG) — scrape fields from a public profile ───
+  { platform: "ig", action: "Scrape Follower Count", actionKey: "scrape_follower_count", slug: "ig_scrape_follower_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the follower count from an IG profile" },
+  { platform: "ig", action: "Scrape Following Count", actionKey: "scrape_following_count", slug: "ig_scrape_following_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull how many accounts the profile follows" },
+  { platform: "ig", action: "Scrape Post Count", actionKey: "scrape_post_count", slug: "ig_scrape_post_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull total posts on the profile" },
+  { platform: "ig", action: "Scrape Bio", actionKey: "scrape_bio", slug: "ig_scrape_bio", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the IG bio text" },
+  { platform: "ig", action: "Scrape Category", actionKey: "scrape_category", slug: "ig_scrape_category", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the business category label" },
+
+  // ─── Lead enrichment (FB) ───
+  { platform: "fb", action: "Scrape Follower Count", actionKey: "scrape_follower_count", slug: "fb_scrape_follower_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the follower count from a FB page" },
+  { platform: "fb", action: "Scrape Following Count", actionKey: "scrape_following_count", slug: "fb_scrape_following_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull how many pages/people the profile follows" },
+  { platform: "fb", action: "Scrape Post Count", actionKey: "scrape_post_count", slug: "fb_scrape_post_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull total posts on the page" },
+  { platform: "fb", action: "Scrape Bio", actionKey: "scrape_bio", slug: "fb_scrape_bio", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the page About/bio text" },
+  { platform: "fb", action: "Scrape Category", actionKey: "scrape_category", slug: "fb_scrape_category", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the page category label" },
+
+  // ─── Lead enrichment (LinkedIn) ───
+  { platform: "li", action: "Scrape Follower Count", actionKey: "scrape_follower_count", slug: "li_scrape_follower_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the follower count from a LI profile/company" },
+  { platform: "li", action: "Scrape Following Count", actionKey: "scrape_following_count", slug: "li_scrape_following_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull how many entities the profile follows" },
+  { platform: "li", action: "Scrape Post Count", actionKey: "scrape_post_count", slug: "li_scrape_post_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull total posts by the profile/company" },
+  { platform: "li", action: "Scrape Bio", actionKey: "scrape_bio", slug: "li_scrape_bio", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the About/headline text" },
+  { platform: "li", action: "Scrape Category", actionKey: "scrape_category", slug: "li_scrape_category", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the company industry or profile headline tag" },
 ]
 
 const PLATFORMS_ORDER = ["ig", "fb", "li", "tiktok", "youtube", "x", "snapchat", "pinterest"]
@@ -1859,12 +1898,108 @@ export default function AutomationsPage() {
     setTimeout(() => clearInterval(pollInterval), 300000)
   }
 
+  /**
+   * Look up the DB-backed automation that corresponds to a catalog tile. We
+   * match on `id === slug` first (because the rescue migration and the
+   * recorder pipeline both write `automations.id = "{platform}_{action}"`),
+   * then fall back to matching platform + name for legacy rows.
+   */
+  const findDbAutoForCatalog = (auto: AutomationDef): DbAutomation | undefined => {
+    const slug = auto.slug
+    const dbPlatform = PLATFORM_DB_KEY[auto.platform] || auto.platform
+    // 1. Direct slug-id match (preferred — set by rescue + build-automation paths)
+    const byId = dbAutomations.find(a => a.id === slug)
+    if (byId) return byId
+    // 2. Platform + action keyword fallback for legacy rows that got inserted
+    //    with a uuid id before this page started writing slugs.
+    const actionKey = auto.actionKey.replace(/_/g, " ")
+    return dbAutomations.find(a =>
+      a.platform === dbPlatform &&
+      typeof a.name === "string" &&
+      a.name.toLowerCase().includes(actionKey.toLowerCase())
+    )
+  }
+
+  /**
+   * The ONE source of truth for whether a catalog tile shows "Active". It's
+   * active iff the DB has a matching row whose `steps` JSON has ≥1 step AND
+   * whose `status` is "active". We still honor the optimistic
+   * `activeOverrides` set so newly-finished recordings show up before the
+   * next /api/automations poll lands.
+   */
   const isAutoActive = (auto: AutomationDef) => {
-    return auto.active || activeOverrides.has(`${auto.platform}_${auto.actionKey}`)
+    if (activeOverrides.has(`${auto.platform}_${auto.actionKey}`)) return true
+    const dbRow = findDbAutoForCatalog(auto)
+    if (!dbRow) return false
+    const stepCount = Array.isArray(dbRow.steps) ? dbRow.steps.length : 0
+    return dbRow.status === "active" && stepCount >= 1
   }
 
   const isAutoSettingUp = (auto: AutomationDef) => {
     return settingUpOverrides.has(`${auto.platform}_${auto.actionKey}`)
+  }
+
+  /** Last-tested date string for a tile (falls back to null, never a fake "Mar 30"). */
+  const autoLastTested = (auto: AutomationDef): string | null => {
+    const dbRow = findDbAutoForCatalog(auto)
+    if (!dbRow?.last_tested_at) return null
+    try { return new Date(dbRow.last_tested_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) }
+    catch { return null }
+  }
+
+  /**
+   * Test button handler — fires a real /api/automations/:id/replay request.
+   *
+   * This replaces the old `setToast("Testing ...")` stub. The endpoint
+   * expects a `target_url` so we pass a platform-specific sentinel profile
+   * ("starbucks" on IG, "microsoft" on LinkedIn, etc.) which is enough for a
+   * stub replay to exercise each step. On success we optimistically set
+   * `last_tested_at` locally so the "Tested {date}" label updates without a
+   * full refetch, and the next poll will confirm.
+   */
+  const TEST_TARGETS: Record<string, string> = {
+    instagram: "https://www.instagram.com/starbucks/",
+    facebook: "https://www.facebook.com/Starbucks",
+    linkedin: "https://www.linkedin.com/company/microsoft/",
+    tiktok: "https://www.tiktok.com/@starbucks",
+    youtube: "https://www.youtube.com/@MrBeast",
+    twitter: "https://twitter.com/elonmusk",
+    snapchat: "https://www.snapchat.com/add/team.snapchat",
+    pinterest: "https://www.pinterest.com/starbucks/",
+  }
+
+  const runTestReplay = async (dbRow: DbAutomation, auto: AutomationDef) => {
+    const label = `${platformLabels[auto.platform] || auto.platform} ${auto.action}`
+    setToast(`🧪 Testing ${label}...`)
+    try {
+      const targetUrl = TEST_TARGETS[dbRow.platform] || TEST_TARGETS.instagram
+      const res = await fetch(`/api/automations/${encodeURIComponent(dbRow.id)}/replay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_url: targetUrl }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setToast(`❌ Test failed: ${data.error || `HTTP ${res.status}`}`)
+        return
+      }
+      const overall = data?.data?.overall
+      if (overall === "passed") {
+        setToast(`✅ Test passed — ${label}`)
+        // Optimistic local bump so "Tested {date}" label refreshes immediately
+        setDbAutomations(prev => prev.map(a => a.id === dbRow.id ? { ...a, last_tested_at: new Date().toISOString() } : a))
+      } else {
+        const firstFailed = Array.isArray(data?.data?.steps)
+          ? data.data.steps.find((s: { status: string; detail?: string }) => s.status === "failed")
+          : null
+        const detail = firstFailed?.detail || data?.data?.note || "Unknown error"
+        setToast(`❌ Test failed: ${detail}`)
+      }
+      // Refetch so `last_tested_at` + run history land authoritatively.
+      fetchDbAutomations()
+    } catch (e) {
+      setToast(`❌ Test failed: ${(e as Error).message || "Network error"}`)
+    }
   }
 
   const togglePauseAll = async () => {
@@ -1915,9 +2050,13 @@ export default function AutomationsPage() {
   const progressPct = Math.round((activeCount / totalCount) * 100)
 
   // Group DB-backed automations by short platform key so we can render them
-  // alongside the built-in ALL_AUTOMATIONS inside each platform panel.
+  // alongside the built-in ALL_AUTOMATIONS inside each platform panel. Rows
+  // whose `id` matches a catalog slug are skipped here — they already back a
+  // built-in tile and shouldn't be rendered twice.
+  const catalogSlugs = new Set(ALL_AUTOMATIONS.map(a => a.slug))
   const dbByPlatformKey: Record<string, DbAutomation[]> = {}
   for (const a of dbAutomations) {
+    if (catalogSlugs.has(a.id)) continue
     const key = PLATFORM_FROM_DB[a.platform] || a.platform
     if (!dbByPlatformKey[key]) dbByPlatformKey[key] = []
     dbByPlatformKey[key].push(a)
@@ -2327,7 +2466,18 @@ export default function AutomationsPage() {
                             >
                               <div className="flex items-start justify-between mb-2">
                                 <div>
-                                  <h3 className="font-semibold text-sm">{auto.action}</h3>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <h3 className="font-semibold text-sm">{auto.action}</h3>
+                                    {auto.tag === "lead_enrichment" && (
+                                      <span
+                                        className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
+                                        title="Lead enrichment — scrapes a field into the Leads table"
+                                      >
+                                        <BarChart3 className="h-2.5 w-2.5" />
+                                        Enrichment
+                                      </span>
+                                    )}
+                                  </div>
                                   <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-1">{auto.desc}</p>
                                 </div>
                                 {settingUp ? (
@@ -2364,29 +2514,36 @@ export default function AutomationsPage() {
                                 <p className="text-[10px] text-amber-400/70 mb-2 italic">{auto.note}</p>
                               )}
 
-                              {active && (
-                                <div className="flex items-center justify-between mt-3 pt-2 border-t border-border/20">
-                                  <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                                    <Clock className="h-3 w-3" />
-                                    <span>{auto.tested ? `Tested ${auto.tested}` : "Just recorded"}</span>
+                              {active && (() => {
+                                const dbRow = findDbAutoForCatalog(auto)
+                                const lastTested = autoLastTested(auto)
+                                const hasScript = !!dbRow && Array.isArray(dbRow.steps) && dbRow.steps.length >= 1
+                                return (
+                                  <div className="flex items-center justify-between mt-3 pt-2 border-t border-border/20">
+                                    <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                                      <Clock className="h-3 w-3" />
+                                      <span>{lastTested ? `Tested ${lastTested}` : "Not tested yet"}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        disabled={!hasScript}
+                                        onClick={(e) => { e.stopPropagation(); if (dbRow) runTestReplay(dbRow, auto) }}
+                                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-muted/30 hover:bg-muted/50 disabled:opacity-40 disabled:cursor-not-allowed text-[10px] font-medium transition-colors"
+                                        title={hasScript ? "Run a test replay against the dummy group" : "Record this first."}
+                                      >
+                                        <RefreshCw className="h-2.5 w-2.5" /> Test
+                                      </button>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); openRecordingModal(auto) }}
+                                        className="flex items-center gap-1 px-2 py-1 rounded-lg bg-muted/30 hover:bg-muted/50 text-[10px] font-medium transition-colors"
+                                        title="Re-record this automation"
+                                      >
+                                        <RotateCcw className="h-2.5 w-2.5" /> Re-record
+                                      </button>
+                                    </div>
                                   </div>
-                                  <div className="flex items-center gap-1">
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); setToast(`🧪 Testing ${platformLabels[auto.platform]} ${auto.action}...`) }}
-                                      className="flex items-center gap-1 px-2 py-1 rounded-lg bg-muted/30 hover:bg-muted/50 text-[10px] font-medium transition-colors"
-                                    >
-                                      <RefreshCw className="h-2.5 w-2.5" /> Test
-                                    </button>
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); openRecordingModal(auto) }}
-                                      className="flex items-center gap-1 px-2 py-1 rounded-lg bg-muted/30 hover:bg-muted/50 text-[10px] font-medium transition-colors"
-                                      title="Re-record this automation"
-                                    >
-                                      <RotateCcw className="h-2.5 w-2.5" /> Re-record
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
+                                )
+                              })()}
 
                               {settingUp && (
                                 <div className="mt-3 pt-2 border-t border-blue-500/10">
