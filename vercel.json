@@ -30,7 +30,7 @@
     },
     {
       "path": "/api/cron/cookies-health-check",
-      "schedule": "0 * * * *"
+      "schedule": "0 12 * * *"
     }
   ]
 }
