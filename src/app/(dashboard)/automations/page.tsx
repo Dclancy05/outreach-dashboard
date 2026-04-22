@@ -699,7 +699,13 @@ interface Recording {
   video_path: string | null; annotations: Annotation[]; tags: string[]
 }
 interface Annotation { time: number; label: string }
-interface HealthStatus { chrome: boolean; xvfb: boolean; proxy: boolean; queueProcessor: boolean; recording: boolean }
+interface LoginResult { platform: string; loggedIn: boolean | null; loginUrl?: string; reason?: string | null; url?: string }
+interface HealthStatus {
+  chrome: boolean; xvfb: boolean; proxy: boolean; queueProcessor: boolean; recording: boolean
+  accountsLoggedIn?: boolean
+  loginResults?: LoginResult[]
+  loggedOutCount?: number
+}
 interface DayStats { dmsSent: number; follows: number; errors: number }
 
 const TAG_OPTIONS = ["warmup", "outreach", "engagement", "test"]
@@ -2001,6 +2007,14 @@ export default function AutomationsPage() {
 
   const runTestReplay = async (dbRow: DbAutomation, auto: AutomationDef) => {
     const label = `${platformLabels[auto.platform] || auto.platform} ${auto.action}`
+    // Guard: don't run a test against a platform that's signed out — the result
+    // would be a guaranteed failure and just add noise to the maintenance log.
+    const platformKey = PLATFORM_DB_KEY[auto.platform] || auto.platform
+    const signedOut = (health?.loginResults || []).find(r => r.platform === platformKey && r.loggedIn === false)
+    if (signedOut) {
+      setToast(`⚠️ Can't test — ${auto.platform} needs login first. Use the red Log in button at the top.`)
+      return
+    }
     // Pop open the VNC viewer FIRST so Dylan can watch the test run in the browser.
     try {
       window.open(
@@ -2081,8 +2095,20 @@ export default function AutomationsPage() {
 
   const healthCount = health ? [health.chrome, health.xvfb, health.proxy, health.queueProcessor].filter(Boolean).length : 0
   const healthTotal = 4
-  const healthColor = !health ? "text-muted-foreground" : healthCount === healthTotal ? "text-emerald-400" : healthCount >= 2 ? "text-amber-400" : "text-red-400"
-  const healthLabel = !health ? "Checking..." : healthCount === healthTotal ? "All Systems Operational" : healthCount >= 2 ? `${healthTotal - healthCount} Issue${healthTotal - healthCount > 1 ? "s" : ""}` : "Systems Down"
+  const loggedOutPlatforms = (health?.loginResults || []).filter(r => r.loggedIn === false)
+  const hasLoggedOut = loggedOutPlatforms.length > 0
+  const healthColor = !health
+    ? "text-muted-foreground"
+    : hasLoggedOut
+    ? "text-red-400"
+    : healthCount === healthTotal ? "text-emerald-400" : healthCount >= 2 ? "text-amber-400" : "text-red-400"
+  const healthLabel = !health
+    ? "Checking..."
+    : hasLoggedOut
+    ? loggedOutPlatforms.length === 1
+      ? `${loggedOutPlatforms[0].platform.charAt(0).toUpperCase()}${loggedOutPlatforms[0].platform.slice(1)} needs login`
+      : `${loggedOutPlatforms.length} accounts need login`
+    : healthCount === healthTotal ? "All Systems Operational" : healthCount >= 2 ? `${healthTotal - healthCount} Issue${healthTotal - healthCount > 1 ? "s" : ""}` : "Systems Down"
 
   const activeCount = ALL_AUTOMATIONS.filter(a => isAutoActive(a)).length
   const totalCount = ALL_AUTOMATIONS.length
@@ -2222,18 +2248,18 @@ export default function AutomationsPage() {
 
       {/* Health Bar */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
-        className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-4 shadow-lg"
+        className={`rounded-2xl backdrop-blur-xl border p-4 shadow-lg ${hasLoggedOut ? "bg-red-500/10 border-red-500/40" : "bg-card/60 border-border/50"}`}
       >
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-2">
             <motion.div
-              className={`h-3 w-3 rounded-full ${!health ? "bg-muted-foreground" : healthCount === healthTotal ? "bg-emerald-400" : healthCount >= 2 ? "bg-amber-400" : "bg-red-400"}`}
-              animate={healthCount === healthTotal ? {} : { opacity: [1, 0.4, 1] }}
+              className={`h-3 w-3 rounded-full ${!health ? "bg-muted-foreground" : hasLoggedOut ? "bg-red-400" : healthCount === healthTotal ? "bg-emerald-400" : healthCount >= 2 ? "bg-amber-400" : "bg-red-400"}`}
+              animate={(hasLoggedOut || healthCount !== healthTotal) ? { opacity: [1, 0.4, 1] } : {}}
               transition={{ duration: 1.5, repeat: Infinity }}
             />
             <span className={`text-sm font-semibold ${healthColor}`}>{healthLabel}</span>
           </div>
-          {health && (
+          {health && !hasLoggedOut && (
             <div className="flex flex-wrap gap-3 text-xs">
               {[
                 { label: "Chrome", ok: health.chrome },
@@ -2248,6 +2274,41 @@ export default function AutomationsPage() {
               ))}
             </div>
           )}
+          {hasLoggedOut && (
+            <div className="flex flex-wrap gap-2 items-center">
+              {loggedOutPlatforms.map(p => (
+                <button
+                  key={p.platform}
+                  onClick={async () => {
+                    setToast(`🔑 Opening ${p.platform} login...`)
+                    // Point the VPS Chrome at the login page first, then open the VNC
+                    // window so Dylan's looking at the sign-in form immediately.
+                    await fetch("/api/platforms/goto", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ url: p.loginUrl || `https://www.${p.platform}.com` }),
+                    }).catch(() => {})
+                    window.open(VNC_EMBED_URL, "outreach-vnc-login", "width=1280,height=800,noopener,noreferrer")
+                  }}
+                  className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold bg-red-500 hover:bg-red-600 text-white transition-colors shadow-md shadow-red-500/40"
+                  title={`Open ${p.platform} login in the automation browser — log in once and the status turns green.`}
+                >
+                  <AlertTriangle className="h-3 w-3" />
+                  Log in to {p.platform.charAt(0).toUpperCase() + p.platform.slice(1)}
+                </button>
+              ))}
+              <button
+                onClick={() => {
+                  setToast("🔄 Rechecking logins...")
+                  fetch("/api/platforms/login-status?refresh=1").finally(() => fetchHealth())
+                }}
+                className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium bg-muted/30 hover:bg-muted/50 transition-colors"
+                title="Re-probe logins after you've signed in"
+              >
+                <RefreshCw className="h-3 w-3" /> Recheck
+              </button>
+            </div>
+          )}
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={togglePauseAll}
@@ -2259,6 +2320,11 @@ export default function AutomationsPage() {
             </button>
           </div>
         </div>
+        {hasLoggedOut && (
+          <p className="text-[11px] text-red-300/80 mt-2">
+            Automations can&apos;t run until you log in. Click a button above — the browser will open at the login page. Sign in, hit Recheck.
+          </p>
+        )}
       </motion.div>
 
       {/* Summary Progress Bar */}
