@@ -169,6 +169,15 @@ function TotpDisplay({ initial }: { initial: DetailData["totp"] }) {
   )
 }
 
+type TimelineEntry = {
+  timestamp: string
+  source: "send_log" | "automation_runs"
+  action: string
+  status: string
+  target: string | null
+  error: string | null
+}
+
 export default function AccountDetailDialog({ open, accountId, onClose, onLoginClick, onChanged }: Props) {
   const [data, setData] = useState<DetailData | null>(null)
   const [loading, setLoading] = useState(false)
@@ -178,6 +187,9 @@ export default function AccountDetailDialog({ open, accountId, onClose, onLoginC
   const [cookieImportOpen, setCookieImportOpen] = useState(false)
   const [cookieImportText, setCookieImportText] = useState("")
   const [cookieImporting, setCookieImporting] = useState(false)
+  const [timeline, setTimeline] = useState<TimelineEntry[]>([])
+  const [timelineLoading, setTimelineLoading] = useState(false)
+  const [timelineExpanded, setTimelineExpanded] = useState(false)
 
   const load = useCallback(async () => {
     if (!accountId) return
@@ -200,8 +212,21 @@ export default function AccountDetailDialog({ open, accountId, onClose, onLoginC
 
   useEffect(() => {
     if (open && accountId) load()
-    else setData(null)
+    else { setData(null); setTimeline([]) }
   }, [open, accountId, load])
+
+  // Load richer timeline from send_log + automation_runs
+  useEffect(() => {
+    if (!open || !accountId) return
+    let cancelled = false
+    setTimelineLoading(true)
+    fetch(`/api/accounts/timeline?account_id=${encodeURIComponent(accountId)}&limit=50`, { cache: "no-store" })
+      .then(r => r.json())
+      .then(j => { if (!cancelled) setTimeline(j.data || []) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setTimelineLoading(false) })
+    return () => { cancelled = true }
+  }, [open, accountId])
 
   useEffect(() => {
     if (!data?.totp || !open) return
@@ -446,32 +471,63 @@ export default function AccountDetailDialog({ open, accountId, onClose, onLoginC
               </div>
             </div>
 
-            {/* Activity */}
-            {data.recentSends.length > 0 && (
-              <div className="space-y-2">
+            {/* Activity timeline — send_log + automation_runs merged */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  <Activity className="h-3 w-3" /> Recent Activity ({data.recentSends.length})
+                  <Activity className="h-3 w-3" /> Recent Activity {timeline.length > 0 && `(${timeline.length})`}
                 </div>
-                <div className="rounded-xl bg-muted/20 border border-border/40 max-h-40 overflow-y-auto">
-                  {data.recentSends.slice(0, 10).map((s, i) => {
-                    const isFail = s.status === "failed" || s.status === "error"
+                {timeline.length > 5 && (
+                  <button
+                    onClick={() => setTimelineExpanded(v => !v)}
+                    className="text-[10px] text-muted-foreground hover:text-foreground"
+                  >
+                    {timelineExpanded ? "Show less" : `Show all (${timeline.length})`}
+                  </button>
+                )}
+              </div>
+              {timelineLoading ? (
+                <div className="text-xs text-muted-foreground py-4 text-center">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin inline mr-1.5" /> Loading timeline...
+                </div>
+              ) : timeline.length === 0 ? (
+                <div className="text-xs text-muted-foreground py-4 text-center rounded-xl bg-muted/10 border border-border/30">
+                  No activity yet
+                </div>
+              ) : (
+                <div className={cn(
+                  "rounded-xl bg-muted/20 border border-border/40 overflow-y-auto",
+                  timelineExpanded ? "max-h-80" : "max-h-48"
+                )}>
+                  {timeline.slice(0, timelineExpanded ? 50 : 10).map((t, i) => {
+                    const isFail = ["failed", "error", "gave_up"].includes(t.status)
+                    const isOk = ["sent", "passed", "healed", "queued", "resolved"].includes(t.status)
                     return (
-                      <div key={i} className="px-2.5 py-1.5 border-b border-border/20 last:border-0 flex items-center gap-2 text-xs">
-                        {isFail ? (
-                          <XCircle className="h-3 w-3 text-red-400 shrink-0" />
-                        ) : (
-                          <CheckCircle2 className="h-3 w-3 text-green-400 shrink-0" />
-                        )}
-                        <span className="truncate flex-1 text-muted-foreground">{s.target || s.recipient || "—"}</span>
-                        <span className="text-[10px] text-muted-foreground">
-                          {s.sent_at ? new Date(s.sent_at).toLocaleString() : "—"}
+                      <div key={i} className="px-2.5 py-1.5 border-b border-border/20 last:border-0 flex items-center gap-2 text-xs hover:bg-muted/30">
+                        {isFail ? <XCircle className="h-3 w-3 text-red-400 shrink-0" />
+                          : isOk ? <CheckCircle2 className="h-3 w-3 text-green-400 shrink-0" />
+                          : <Clock className="h-3 w-3 text-amber-400 shrink-0" />}
+                        <span className="shrink-0 text-muted-foreground font-mono text-[10px]">
+                          {t.source === "automation_runs" ? "auto" : "send"}
+                        </span>
+                        <span className="truncate flex-1 text-foreground" title={t.error || undefined}>
+                          {t.action}{t.target ? ` → ${t.target}` : ""}
+                        </span>
+                        <Badge className={cn(
+                          "text-[9px] h-4 px-1",
+                          isFail && "bg-red-500/10 text-red-300 border-red-500/20",
+                          isOk && "bg-green-500/10 text-green-300 border-green-500/20",
+                          !isFail && !isOk && "bg-amber-500/10 text-amber-300 border-amber-500/20",
+                        )}>{t.status}</Badge>
+                        <span className="text-[9px] text-muted-foreground shrink-0">
+                          {t.timestamp ? new Date(t.timestamp).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"}
                         </span>
                       </div>
                     )
                   })}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Notes */}
             {data.account.notes && (
