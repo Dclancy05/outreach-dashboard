@@ -1657,6 +1657,34 @@ export default function AutomationsPage() {
   // P9.3 — replay dialog target.
   const [replayAutomation, setReplayAutomation] = useState<{ id: string; name: string } | null>(null)
 
+  // P9.5 — import file picker + progress toast.
+  const importFileRef = useRef<HTMLInputElement | null>(null)
+
+  const handleImportAutomations = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const payload = JSON.parse(text)
+      const res = await fetch("/api/automations/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setToast(`❌ Import failed: ${data.error || "unknown error"}`)
+      } else {
+        setToast(`✅ Imported ${data.imported} automations${data.skipped ? ` (${data.skipped} skipped)` : ""}`)
+        await fetchDbAutomations()
+      }
+    } catch (err) {
+      setToast(`❌ Import parse failed: ${(err as Error).message}`)
+    } finally {
+      if (importFileRef.current) importFileRef.current.value = ""
+    }
+  }
+
   // Local overrides (for newly recorded automations in this session)
   const [activeOverrides, setActiveOverrides] = useState<Set<string>>(new Set())
   const [settingUpOverrides, setSettingUpOverrides] = useState<Set<string>>(new Set())
@@ -2180,12 +2208,36 @@ export default function AutomationsPage() {
           <span className="text-xs text-muted-foreground bg-muted/30 backdrop-blur-sm px-2 py-0.5 rounded-full">
             {activeCount}/{totalCount} active
           </span>
-          <a
-            href="/automations/selectors"
-            className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 border border-orange-500/30 px-3 py-1.5 text-xs font-semibold transition-colors"
-          >
-            <Layers className="h-3.5 w-3.5" /> Workflow Builder
-          </a>
+          {/* P9.5 — export + import */}
+          <div className="ml-auto flex items-center gap-2">
+            <a
+              href="/api/automations/export"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border/50 bg-muted/20 hover:bg-muted/30 px-3 py-1.5 text-xs font-semibold transition-colors"
+              title="Export all automations as JSON"
+            >
+              <Download className="h-3.5 w-3.5" /> Export
+            </a>
+            <button
+              onClick={() => importFileRef.current?.click()}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-border/50 bg-muted/20 hover:bg-muted/30 px-3 py-1.5 text-xs font-semibold transition-colors"
+              title="Import automations from a JSON file"
+            >
+              <PlayCircle className="h-3.5 w-3.5 rotate-180" /> Import
+            </button>
+            <input
+              ref={importFileRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={handleImportAutomations}
+            />
+            <a
+              href="/automations/selectors"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 border border-orange-500/30 px-3 py-1.5 text-xs font-semibold transition-colors"
+            >
+              <Layers className="h-3.5 w-3.5" /> Workflow Builder
+            </a>
+          </div>
         </div>
 
         <div className="space-y-4">
