@@ -53,6 +53,8 @@ interface Account {
   session_age_hours?: number | null;
   has_auth_cookie?: boolean;
   has_saved_session?: boolean;
+  cooldown_until?: string | null;
+  cooldown_reason?: string | null;
 }
 
 interface WarmupSequence {
@@ -75,6 +77,7 @@ const statusColors: Record<string, string> = {
   paused: "bg-muted/30 text-muted-foreground border-border/50",
   banned: "bg-red-500/20 text-red-400 border-red-500/30",
   cooldown: "bg-orange-500/20 text-orange-400 border-orange-500/30",
+  cooled_down: "bg-amber-500/20 text-amber-400 border-amber-500/30",
   needs_signin: "bg-amber-500/20 text-amber-400 border-amber-500/30",
   expired: "bg-orange-500/20 text-orange-300 border-orange-500/30",
   pending_setup: "bg-amber-500/20 text-amber-400 border-amber-500/30",
@@ -96,6 +99,7 @@ function statusLabel(s: string): string {
     case "banned": return "Banned"
     case "flagged": return "Flagged"
     case "cooldown": return "Cooldown"
+    case "cooled_down": return "Cooled Down"
     case "needs_signin": return "Needs Sign-In"
     case "expired": return "Expired"
     case "pending_setup": return "Needs Sign-In"
@@ -1175,6 +1179,14 @@ export default function AccountsPage() {
                                   {effectiveStatus(a) === "active" && <PulseDot color="bg-green-400" />}
                                   <span className="ml-1">{statusLabel(effectiveStatus(a))}</span>
                                 </Badge>
+                                {a.cooldown_until && new Date(a.cooldown_until).getTime() > Date.now() && (
+                                  <Badge
+                                    className="text-[10px] border bg-amber-500/10 text-amber-300 border-amber-500/30"
+                                    title={a.cooldown_reason || "Too many errors"}
+                                  >
+                                    Cooled Down — resumes {new Date(a.cooldown_until).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                  </Badge>
+                                )}
                               </div>
                               <div className="flex items-center gap-2">
                                 {a.health_score > 0 && <HealthRing score={healthScore} size={32} />}

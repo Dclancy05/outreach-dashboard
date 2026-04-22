@@ -22,6 +22,51 @@ async function enqueueRetry(body: any, errorMessage: string) {
   }
 }
 
+async function evaluateCooldown(accountId: string, errorMessage: string) {
+  try {
+    const { data: settingRow } = await supabase
+      .from("system_settings")
+      .select("value")
+      .eq("key", "auto_cooldown")
+      .maybeSingle()
+    const cfg = settingRow?.value || { enabled: true, error_threshold: 3, error_window_minutes: 10, cooldown_hours: 24 }
+    if (!cfg.enabled) return false
+
+    const sinceIso = new Date(Date.now() - (cfg.error_window_minutes || 10) * 60_000).toISOString()
+    const { count } = await supabase
+      .from("send_log")
+      .select("*", { count: "exact", head: true })
+      .eq("account_id", accountId)
+      .in("status", ["failed", "error"])
+      .gte("created_at", sinceIso)
+
+    const errorCount = count || 0
+    if (errorCount + 1 < (cfg.error_threshold || 3)) return false
+
+    const cooldownUntil = new Date(Date.now() + (cfg.cooldown_hours || 24) * 3600_000).toISOString()
+
+    await supabase
+      .from("accounts")
+      .update({
+        status: "cooled_down",
+        cooldown_until: cooldownUntil,
+        cooldown_reason: errorMessage.slice(0, 250),
+      })
+      .eq("account_id", accountId)
+
+    await supabase.from("notifications").insert({
+      type: "account_cooldown",
+      title: "Account auto-cooled down",
+      message: `Account ${accountId} hit ${errorCount + 1} errors in ${cfg.error_window_minutes}m — paused until ${new Date(cooldownUntil).toLocaleString()}`,
+    })
+
+    return true
+  } catch (e) {
+    console.error("[cooldown] eval failed", e)
+    return false
+  }
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { account_id, lead_id, platform, message, __from_retry } = body
@@ -67,6 +112,25 @@ export async function POST(req: NextRequest) {
       .eq("account_id", account_id)
       .single()
 
+    // Cooldown check — if account is cooled_down and cooldown_until is in future, refuse
+    if (account?.cooldown_until) {
+      const until = new Date(account.cooldown_until).getTime()
+      if (until > Date.now()) {
+        return NextResponse.json({
+          error: "Account is in cooldown",
+          cooldown_until: account.cooldown_until,
+          reason: account.cooldown_reason || null,
+        }, { status: 403 })
+      }
+      // Cooldown expired — clear it and set status back to active
+      if (account.status === "cooled_down") {
+        await supabase
+          .from("accounts")
+          .update({ status: "active", cooldown_until: null, cooldown_reason: null })
+          .eq("account_id", account_id)
+      }
+    }
+
     dailyLimit = parseInt(account?.daily_limit || "40")
 
     const { data: schedule } = await supabase
@@ -105,6 +169,9 @@ export async function POST(req: NextRequest) {
   if (queueError) {
     if (!__from_retry) {
       await enqueueRetry(body, "Failed to queue send: " + queueError.message)
+    }
+    if (account_id) {
+      await evaluateCooldown(account_id, queueError.message)
     }
     return NextResponse.json({ error: "Failed to queue send: " + queueError.message, retry_queued: !__from_retry }, { status: 500 })
   }
