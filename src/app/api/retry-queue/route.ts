@@ -1,18 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { nextRetryDelay } from "@/lib/retry-queue"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
-
-// Exponential backoff schedule (seconds): 30s, 2min, 8min, 30min, 2h
-const BACKOFF_SECONDS = [30, 120, 480, 1800, 7200]
-
-export function nextRetryDelay(attemptCount: number): number {
-  const idx = Math.min(attemptCount, BACKOFF_SECONDS.length - 1)
-  return BACKOFF_SECONDS[idx]
-}
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
