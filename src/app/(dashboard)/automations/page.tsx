@@ -8,9 +8,16 @@ import {
   ChevronDown, ChevronUp, Tag, Plus, Clock, Circle, ExternalLink,
   RefreshCw, Zap, RotateCcw, HelpCircle, ChevronRight, PartyPopper,
   LayoutGrid, Wrench, Eye, Activity, PlayCircle, Edit2, TrendingUp,
-  Pencil, Server, Layers,
+  Pencil, Server, Layers, MoreHorizontal,
 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu"
 import { ReplayAutomationDialog } from "@/components/replay-automation-dialog"
 import { RetryQueueWidget } from "@/components/retry-queue-widget"
 import { NudgeBanners } from "@/components/nudge-banners"
@@ -2668,35 +2675,49 @@ export default function AutomationsPage() {
                                   <Clock className="h-3 w-3" />
                                   <span>{auto.last_tested_at ? `Tested ${new Date(auto.last_tested_at).toLocaleDateString()}` : `Created ${new Date(auto.created_at).toLocaleDateString()}`}</span>
                                 </div>
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    onClick={() => startRename(auto)}
-                                    title="Rename"
-                                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-muted/30 hover:bg-muted/50 text-[10px] font-medium transition-colors"
-                                  >
-                                    <Pencil className="h-2.5 w-2.5" />
-                                  </button>
-                                  <button
-                                    onClick={() => openEditModal(auto)}
-                                    title="Edit steps / tag"
-                                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-muted/30 hover:bg-muted/50 text-[10px] font-medium transition-colors"
-                                  >
-                                    <Edit2 className="h-2.5 w-2.5" />
-                                  </button>
+                                <div className="flex items-center gap-1.5">
                                   <button
                                     onClick={() => setReplayAutomation({ id: auto.id, name: auto.name })}
                                     title="Replay this automation"
-                                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[10px] font-medium transition-colors"
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 text-[10px] font-semibold transition-colors"
                                   >
-                                    <Play className="h-2.5 w-2.5" />
+                                    <Play className="h-3 w-3" />
+                                    Replay
                                   </button>
-                                  <button
-                                    onClick={() => requestDelete(auto.id)}
-                                    title="Delete"
-                                    className="flex items-center gap-1 px-1.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[10px] font-medium transition-colors"
-                                  >
-                                    <Trash2 className="h-2.5 w-2.5" />
-                                  </button>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <button
+                                        title="More actions"
+                                        className="inline-flex items-center justify-center px-1.5 py-1 rounded-lg bg-muted/30 hover:bg-muted/50 text-[10px] font-medium transition-colors"
+                                      >
+                                        <MoreHorizontal className="h-3.5 w-3.5" />
+                                      </button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-48">
+                                      <DropdownMenuItem onClick={() => startRename(auto)}>
+                                        <Pencil className="h-3.5 w-3.5 mr-2" />
+                                        Rename
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => openEditModal(auto)}>
+                                        <Edit2 className="h-3.5 w-3.5 mr-2" />
+                                        Edit steps & tag
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onClick={() => window.open(`/api/automations/export?ids=${auto.id}`, "_blank")}
+                                      >
+                                        <Download className="h-3.5 w-3.5 mr-2" />
+                                        Export JSON
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem
+                                        onClick={() => requestDelete(auto.id)}
+                                        className="text-red-400 focus:text-red-300"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5 mr-2" />
+                                        Delete
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
                                 </div>
                               </div>
 
