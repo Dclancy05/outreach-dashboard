@@ -1990,7 +1990,15 @@ export default function AutomationsPage() {
 
   const runTestReplay = async (dbRow: DbAutomation, auto: AutomationDef) => {
     const label = `${platformLabels[auto.platform] || auto.platform} ${auto.action}`
-    setToast(`🧪 Testing ${label}...`)
+    // Pop open the VNC viewer FIRST so Dylan can watch the test run in the browser.
+    try {
+      window.open(
+        VNC_EMBED_URL,
+        "outreach-vnc",
+        "width=1280,height=800,noopener,noreferrer"
+      )
+    } catch {}
+    setToast(`🧪 Testing ${label} — watch the VNC window...`)
     try {
       const targetUrl = TEST_TARGETS[dbRow.platform] || TEST_TARGETS.instagram
       const res = await fetch(`/api/automations/${encodeURIComponent(dbRow.id)}/replay`, {

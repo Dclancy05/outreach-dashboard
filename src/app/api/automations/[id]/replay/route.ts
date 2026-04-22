@@ -6,48 +6,28 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const VNC_MANAGER_URL = process.env.VNC_MANAGER_URL || "http://127.0.0.1:18790"
-const VNC_API_KEY = process.env.VNC_API_KEY || "vnc-mgr-2026-dylan"
+const VPS_URL = process.env.VPS_URL || process.env.RECORDING_SERVER_URL || "https://srv1197943.taild42583.ts.net:10000"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
-
-/**
- * POST /api/automations/:id/replay  — P9.3
- *
- * Replays a recorded automation step-by-step against a target URL. Writes an
- * automation_runs row so the Overview tab picks up the run, then returns a
- * per-step progress report for the UI dialog.
- *
- * Body: { target_url: string, session_id?: string }
- *
- * If `session_id` is supplied we forward each step's URL (derived from the
- * step's description or target_url fallback) to the VNC Manager's navigate
- * endpoint so the replay is actually visible in the noVNC pane. When the
- * session is unreachable we still complete the run in "stub" mode so Dylan
- * gets end-to-end visibility.
- */
 
 interface StepPayload {
   index?: number
   description?: string
   kind?: string
   url?: string
-  selectors?: Record<string, unknown>
+  value?: string | null
+  selectors?: { css?: string | null; xpath?: string | null }
   [k: string]: unknown
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const body = await req.json().catch(() => ({}))
-  const { target_url: targetUrl, session_id: sessionId } = body as { target_url?: string; session_id?: string }
-
-  if (!targetUrl) {
-    return NextResponse.json({ error: "target_url is required" }, { status: 400 })
-  }
+  const { target_url: targetUrl, variables: reqVars } = body as { target_url?: string; variables?: Record<string, string> }
 
   const { data: automation, error } = await supabase
     .from("automations")
-    .select("id, name, platform, steps")
+    .select("id, name, platform, steps, variables")
     .eq("id", params.id)
     .maybeSingle()
 
@@ -55,8 +35,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!automation) return NextResponse.json({ error: "Automation not found" }, { status: 404 })
 
   const steps: StepPayload[] = Array.isArray(automation.steps) ? (automation.steps as StepPayload[]) : []
+  if (!steps.length) return NextResponse.json({ error: "Automation has no steps to replay" }, { status: 400 })
 
-  // Kick off a run row so the Overview/Maintenance tabs see this activity.
+  // Variables: merge automation defaults, caller-supplied, and target_url fallback
+  const variables: Record<string, string> = {
+    ...(automation.variables as Record<string, string> | null || {}),
+    ...(reqVars || {}),
+  }
+  if (targetUrl && !variables.target_url) variables.target_url = targetUrl
+  // Reasonable defaults so Instagram/Facebook templates resolve even without a lead
+  if (!variables.username) {
+    try {
+      const u = new URL(targetUrl || steps[0]?.url || "")
+      const guess = u.pathname.split("/").filter(Boolean)[0]
+      if (guess) variables.username = guess
+    } catch {}
+    if (!variables.username) variables.username = "mrbeast"
+  }
+  if (!variables.message) variables.message = "Test message from outreach HQ"
+
   const { data: runRow } = await supabase
     .from("automation_runs")
     .insert({
@@ -68,53 +65,28 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .select()
     .single()
 
-  const stepResults: Array<{
-    index: number
-    description: string
-    status: "passed" | "failed" | "skipped"
-    detail?: string
-  }> = []
-
-  let stubMode = !sessionId
+  let stepResults: Array<{ index: number; description: string; status: string; detail?: string }> = []
+  let overall: "passed" | "failed" = "failed"
   let lastError: string | null = null
 
-  for (let i = 0; i < steps.length; i++) {
-    const step = steps[i]
-    const description = (step.description as string) || `Step ${i + 1}`
-
-    // The first step always navigates to the provided target URL. Subsequent
-    // steps navigate to any URL explicitly stored on the step, or are
-    // reported as "no-op / waiting on CDP recorder" in stub mode.
-    const stepUrl = i === 0 ? targetUrl : (typeof step.url === "string" ? step.url : "")
-
-    if (stubMode || !stepUrl) {
-      stepResults.push({ index: i, description, status: "skipped", detail: stubMode ? "No VNC session — simulated" : "No URL on step" })
-      continue
+  try {
+    const res = await fetch(`${VPS_URL}/replay`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ steps, variables }),
+      signal: AbortSignal.timeout(55000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data?.ok) {
+      lastError = data?.error || `Replay service returned ${res.status}`
+    } else {
+      stepResults = data.steps || []
+      overall = data.overall === "passed" ? "passed" : "failed"
+      lastError = data.lastError || null
     }
-
-    try {
-      const navRes = await fetch(`${VNC_MANAGER_URL}/api/sessions/${sessionId}/navigate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": VNC_API_KEY },
-        body: JSON.stringify({ url: stepUrl }),
-      })
-      if (!navRes.ok) {
-        // First failure flips us into stub mode so subsequent steps at least complete cleanly.
-        stubMode = true
-        lastError = `VNC navigate failed (${navRes.status})`
-        stepResults.push({ index: i, description, status: "failed", detail: lastError })
-      } else {
-        stepResults.push({ index: i, description, status: "passed", detail: `Navigated to ${stepUrl}` })
-      }
-    } catch (e) {
-      stubMode = true
-      lastError = (e as Error).message
-      stepResults.push({ index: i, description, status: "failed", detail: lastError })
-    }
+  } catch (e) {
+    lastError = (e as Error).message
   }
-
-  const allPassed = stepResults.every(r => r.status === "passed" || r.status === "skipped")
-  const overall: "passed" | "failed" = allPassed ? "passed" : "failed"
 
   if (runRow?.id) {
     await supabase
@@ -126,6 +98,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         error: lastError || undefined,
       })
       .eq("id", runRow.id)
+
+    if (overall === "passed") {
+      await supabase
+        .from("automations")
+        .update({ last_tested_at: new Date().toISOString() })
+        .eq("id", automation.id)
+    }
   }
 
   return NextResponse.json({
@@ -135,10 +114,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       automation_name: automation.name,
       overall,
       steps: stepResults,
-      stub: stubMode,
-      note: stubMode
-        ? "Replay completed without a live VNC session. Pass session_id to run against a real browser."
-        : "Replay executed against live browser session.",
+      note: lastError || (overall === "passed" ? "Replay executed against live browser." : "Replay failed."),
     },
   })
 }
