@@ -27,6 +27,7 @@ const supabase = createClient(
  * routes so all background workers share one secret.
  */
 async function handle(req: NextRequest) {
+  console.warn("MAINTENANCE STUB — no real replay happening, last_tested_at is NOT being written.")
   const auth = req.headers.get("authorization") || ""
   const expected = process.env.CRON_SECRET || ""
   if (!expected) {
@@ -91,12 +92,9 @@ async function handle(req: NextRequest) {
       continue
     }
 
-    // 3) Mirror the fresh test timestamp onto the automation itself so the
-    //    Maintenance tab's "last tested" column stays accurate.
-    await supabase
-      .from("automations")
-      .update({ last_tested_at: finishedAt.toISOString() })
-      .eq("id", a.id)
+    // 3) Intentionally do NOT update automations.last_tested_at — the replay
+    //    engine is still a stub. Writing a timestamp would lie about test
+    //    freshness. The `automation_runs` row alone is the honest record.
 
     testedIds.push(a.id)
   }
