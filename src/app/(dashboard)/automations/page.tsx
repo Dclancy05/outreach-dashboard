@@ -1959,6 +1959,17 @@ export default function AutomationsPage() {
     return settingUpOverrides.has(`${auto.platform}_${auto.actionKey}`)
   }
 
+  // True when the DB row exists with steps but was flagged by maintenance /
+  // test as broken — UI uses this to show the orange pulse + highlighted
+  // Re-record CTA on the catalog tile (distinct from "Needs Recording" which
+  // means the automation was never recorded).
+  const isAutoNeedsRerec = (auto: AutomationDef) => {
+    const dbRow = findDbAutoForCatalog(auto)
+    if (!dbRow) return false
+    const stepCount = Array.isArray(dbRow.steps) ? dbRow.steps.length : 0
+    return stepCount >= 1 && (dbRow.status === "needs_rerecording" || dbRow.status === "broken")
+  }
+
   /** Last-tested date string for a tile (falls back to null, never a fake "Mar 30"). */
   const autoLastTested = (auto: AutomationDef): string | null => {
     const dbRow = findDbAutoForCatalog(auto)
@@ -2478,15 +2489,26 @@ export default function AutomationsPage() {
                           const recording = findRecording(auto)
                           const active = isAutoActive(auto)
                           const settingUp = isAutoSettingUp(auto)
+                          const needsRerec = isAutoNeedsRerec(auto)
                           return (
                             <motion.div
                               key={`${auto.platform}-${auto.actionKey}`}
                               variants={item}
                               whileHover={{ scale: 1.02, y: -2 }}
-                              onClick={!active && !settingUp ? () => openRecordingModal(auto) : undefined}
+                              onClick={needsRerec ? () => openRecordingModal(auto) : (!active && !settingUp ? () => openRecordingModal(auto) : undefined)}
+                              animate={needsRerec ? {
+                                boxShadow: [
+                                  "0 0 0 0 rgba(251, 146, 60, 0.0)",
+                                  "0 0 0 4px rgba(251, 146, 60, 0.5)",
+                                  "0 0 0 0 rgba(251, 146, 60, 0.0)",
+                                ],
+                              } : {}}
+                              transition={needsRerec ? { duration: 1.8, repeat: Infinity, ease: "easeInOut" } : {}}
                               className={`rounded-xl border p-4 transition-all ${
                                 settingUp
                                   ? "bg-gradient-to-br from-blue-500/10 to-purple-500/10 border-blue-500/30"
+                                  : needsRerec
+                                  ? "bg-gradient-to-br from-orange-500/10 to-red-500/10 border-orange-500/60 cursor-pointer"
                                   : active
                                   ? "bg-gradient-to-br " + platformColors[auto.platform] + " hover:bg-muted/20"
                                   : "bg-muted/10 border-dashed border-amber-500/30 hover:border-amber-500/50 hover:bg-amber-500/5 cursor-pointer"
@@ -2520,6 +2542,15 @@ export default function AutomationsPage() {
                                       transition={{ duration: 1, repeat: Infinity }}
                                     />
                                     Setting up...
+                                  </motion.span>
+                                ) : needsRerec ? (
+                                  <motion.span
+                                    animate={{ opacity: [1, 0.55, 1] }}
+                                    transition={{ duration: 1.4, repeat: Infinity }}
+                                    className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-orange-500/25 text-orange-300 border border-orange-500/60 shrink-0"
+                                  >
+                                    <AlertTriangle className="h-2.5 w-2.5" />
+                                    Needs Re-record
                                   </motion.span>
                                 ) : active ? (
                                   <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shrink-0">
