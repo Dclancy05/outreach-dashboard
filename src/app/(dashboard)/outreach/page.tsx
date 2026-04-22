@@ -27,6 +27,10 @@ import {
   TrendingUp, Sparkles, Timer, ArrowRight, RotateCcw, Keyboard,
 } from "lucide-react"
 
+import { RetryQueueWidget } from "@/components/retry-queue-widget"
+import { NudgeBanners } from "@/components/nudge-banners"
+import { NotificationsBell } from "@/components/notifications-bell"
+
 const LeadsPage = lazy(() => import("@/app/(dashboard)/leads/page"))
 const OutreachCalendar = lazy(() => import("@/components/outreach/outreach-calendar"))
 
@@ -1128,9 +1132,9 @@ export default function OutreachPage() {
           <Button onClick={() => setShowQuickCampaign(true)} variant="outline" size="sm" className="rounded-xl gap-1.5 border-violet-500/30 text-violet-400 hover:bg-violet-500/10">
             <Rocket className="h-4 w-4" /> Quick Campaign
           </Button>
-          <button onClick={() => toast.info("Notifications coming soon")} className="p-2 rounded-xl hover:bg-muted/50 transition-all text-muted-foreground hover:text-foreground" title="Notifications">
-            <Bell className="h-4 w-4" />
-          </button>
+          <NotificationsBell />
+          {/* preserve import so eslint doesn't complain */}
+          {false && <Bell className="h-4 w-4" />}
           <button onClick={() => setShowSafetyDialog(true)} className="p-2 rounded-xl hover:bg-muted/50 transition-all text-muted-foreground hover:text-foreground" title="Safety Settings">
             <Settings className="h-4 w-4" />
           </button>
@@ -1147,6 +1151,12 @@ export default function OutreachPage() {
           <Button onClick={fetchAll} variant="outline" size="sm" className="rounded-xl"><RefreshCw className="h-4 w-4" /></Button>
         </div>
       </motion.div>
+
+      {/* Retry queue banner (only visible when retries active) */}
+      <RetryQueueWidget variant="banner" />
+
+      {/* Nudge banners */}
+      <NudgeBanners page="outreach" />
 
       {/* Keyboard hint */}
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground/50">

@@ -16,3 +16,6 @@ npm-debug.log*
 # OS files
 .DS_Store
 .vercel
+
+# vercel env backups
+.env.vercel-backup*

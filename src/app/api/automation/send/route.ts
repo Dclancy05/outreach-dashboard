@@ -6,9 +6,25 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
+async function enqueueRetry(body: any, errorMessage: string) {
+  try {
+    await supabase.from("retry_queue").insert({
+      action_type: "send",
+      payload: body,
+      max_attempts: 5,
+      next_retry_at: new Date(Date.now() + 30 * 1000).toISOString(), // first retry in 30s
+      account_id: body.account_id || null,
+      lead_id: body.lead_id || null,
+      error_message: errorMessage.slice(0, 500),
+    })
+  } catch (e) {
+    console.error("[retry-queue] Failed to enqueue retry:", e)
+  }
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { account_id, lead_id, platform, message } = body
+  const { account_id, lead_id, platform, message, __from_retry } = body
 
   if (!lead_id || !platform || !message) {
     return NextResponse.json({ error: "Missing required fields: lead_id, platform, message" }, { status: 400 })
@@ -87,7 +103,10 @@ export async function POST(req: NextRequest) {
   })
 
   if (queueError) {
-    return NextResponse.json({ error: "Failed to queue send: " + queueError.message }, { status: 500 })
+    if (!__from_retry) {
+      await enqueueRetry(body, "Failed to queue send: " + queueError.message)
+    }
+    return NextResponse.json({ error: "Failed to queue send: " + queueError.message, retry_queued: !__from_retry }, { status: 500 })
   }
 
   // 5. Also create a send_log entry

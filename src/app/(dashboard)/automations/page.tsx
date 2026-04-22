@@ -12,6 +12,8 @@ import {
 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ReplayAutomationDialog } from "@/components/replay-automation-dialog"
+import { RetryQueueWidget } from "@/components/retry-queue-widget"
+import { NudgeBanners } from "@/components/nudge-banners"
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.08 } } }
 const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.5 } } }
@@ -1192,6 +1194,7 @@ function OverviewTab() {
 
   return (
     <div className="space-y-4">
+      <RetryQueueWidget variant="card" />
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         <Card
           label="Total automations"
@@ -2161,6 +2164,8 @@ export default function AutomationsPage() {
           <p className="text-xs text-muted-foreground">Full-screen VNC in new tab</p>
         </motion.a>
       </motion.div>
+
+      <NudgeBanners page="automations" />
 
       {/* ═══ 4 Sub-Tabs ═══ Matches the accounts/proxies page pattern. */}
       <Tabs defaultValue="your-automations">
