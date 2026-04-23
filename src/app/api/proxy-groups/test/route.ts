@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 
 const VNC_MANAGER_URL = process.env.VNC_MANAGER_URL || "http://127.0.0.1:18790"
-const VNC_API_KEY = process.env.VNC_API_KEY || "vnc-mgr-2026-dylan"
+if (!process.env.VNC_API_KEY) {
+  throw new Error("VNC_API_KEY env var is required")
+}
+const VNC_API_KEY = process.env.VNC_API_KEY
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,

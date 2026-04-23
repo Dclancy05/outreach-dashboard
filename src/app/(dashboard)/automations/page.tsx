@@ -383,10 +383,16 @@ const AUTOMATION_TAGS = [
 ] as const
 
 const VNC_URL = process.env.NEXT_PUBLIC_VNC_URL || "https://srv1197943.taild42583.ts.net/vnc.html"
-// noVNC password query param is plaintext — RFB truncates to 8 chars at the server.
-// Dashboard is already behind admin-PIN + Tailscale funnel, so embedding is fine.
-const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || "DcMktg20"
-const VNC_EMBED_URL = `${VNC_URL}${VNC_URL.includes("?") ? "&" : "?"}autoconnect=true&resize=scale&password=${encodeURIComponent(VNC_PASSWORD)}`
+// noVNC password query param is plaintext — RFB truncates to 8 chars at the
+// server. Dashboard is behind admin-PIN + Tailscale funnel, but embedding a
+// hardcoded fallback would leak the password to anyone who inspects the
+// client bundle — so the password is env-only. If NEXT_PUBLIC_VNC_PASSWORD
+// is not set, we render the iframe without a password and show a friendly
+// in-app message instead (see VncEmbedNotice below).
+const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || ""
+const VNC_EMBED_URL = VNC_PASSWORD
+  ? `${VNC_URL}${VNC_URL.includes("?") ? "&" : "?"}autoconnect=true&resize=scale&password=${encodeURIComponent(VNC_PASSWORD)}`
+  : ""
 
 /* ─── Confetti ─── */
 function Confetti() {

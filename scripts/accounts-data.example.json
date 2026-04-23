@@ -1,0 +1,41 @@
+[
+  {
+    "platform": "instagram",
+    "username": "REDACTED",
+    "password": "REDACTED",
+    "two_factor_secret": "REDACTED",
+    "email": "REDACTED",
+    "email_password": "REDACTED",
+    "external_id": "REDACTED",
+    "identity_group": 1,
+    "status": "warming",
+    "daily_limit": "10",
+    "sends_today": "0"
+  },
+  {
+    "platform": "facebook",
+    "username": "REDACTED",
+    "password": "REDACTED",
+    "two_factor_secret": "REDACTED",
+    "email": "REDACTED",
+    "email_password": "REDACTED",
+    "cookie": "REDACTED",
+    "external_id": "REDACTED",
+    "identity_group": 1,
+    "status": "warming",
+    "daily_limit": "10",
+    "sends_today": "0"
+  },
+  {
+    "platform": "linkedin",
+    "username": "REDACTED",
+    "password": "REDACTED",
+    "two_factor_secret": "REDACTED",
+    "email": "REDACTED",
+    "profile_url": "REDACTED",
+    "identity_group": 1,
+    "status": "warming",
+    "daily_limit": "10",
+    "sends_today": "0"
+  }
+]

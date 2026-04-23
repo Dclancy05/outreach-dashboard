@@ -6,10 +6,6 @@ import { toast } from "sonner"
 import { Save, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-const VNC_WS_HOST = process.env.NEXT_PUBLIC_VNC_WS_HOST || "srv1197943.taild42583.ts.net"
-const VNC_API_BASE = `https://${VNC_WS_HOST}`
-const VNC_API_KEY = "vnc-mgr-2026-dylan"
-
 /**
  * Grabs the current cookies + localStorage from an active VNC session and
  * writes them as a snapshot for the account. The VNC Manager exposes
@@ -41,12 +37,13 @@ export function SaveSessionButton({
       let localStorage: any = null
 
       if (sessionId) {
-        // Ask the VNC Manager for fresh cookies + localStorage
-        const res = await fetch(`${VNC_API_BASE}/api/sessions/${sessionId}/capture`, {
+        // Ask the VNC Manager for fresh cookies + localStorage via the
+        // dashboard's server-side proxy. The real API key stays on the server;
+        // middleware gates this route behind the admin/va session cookie.
+        const res = await fetch(`/api/vnc/session/${sessionId}/capture`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-API-Key": VNC_API_KEY,
           },
           body: JSON.stringify({
             account_id: accountId,

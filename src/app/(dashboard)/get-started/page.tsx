@@ -149,16 +149,15 @@ export default function GetStartedPage() {
     }
     setSavingSession(true)
     try {
-      // Ask VNC manager for fresh cookies
-      const VNC_WS_HOST =
-        process.env.NEXT_PUBLIC_VNC_WS_HOST || "srv1197943.taild42583.ts.net"
+      // Ask VNC manager for fresh cookies — via the dashboard's server-side
+      // proxy so the API key stays on the server. Middleware enforces the
+      // admin/va session cookie before forwarding to the VNC Manager.
       const capture = await fetch(
-        `https://${VNC_WS_HOST}/api/sessions/${vncSession.id}/capture`,
+        `/api/vnc/session/${vncSession.id}/capture`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-API-Key": "vnc-mgr-2026-dylan",
           },
           body: JSON.stringify({
             account_id: selectedAccount.account_id,

@@ -19,7 +19,6 @@ import { SOCIAL_PLATFORMS, getPlatform } from "@/lib/platforms"
 
 const VNC_WS_HOST = process.env.NEXT_PUBLIC_VNC_WS_HOST || "srv1197943.taild42583.ts.net"
 const VNC_API_BASE = `https://${VNC_WS_HOST}`
-const VNC_API_KEY = "vnc-mgr-2026-dylan"
 
 const platformIcons: Record<string, typeof Instagram> = {
   instagram: Instagram, facebook: Facebook, linkedin: Linkedin,
@@ -130,10 +129,17 @@ export default function SetupWizardPage() {
   const currentPlatform = selectedPlatforms[currentLoginIndex] || ""
   const allLoginsComplete = completedLogins.size === selectedPlatforms.length && selectedPlatforms.length > 0
 
+  // Route all VNC Manager calls through the dashboard's server-side proxy so
+  // the API key stays on the server. /api/vnc/... mirrors the manager one-
+  // for-one (session create, capture, navigate, delete). Middleware gates
+  // these behind the admin/va session cookie.
   const vncFetch = useCallback(async (path: string, options?: RequestInit) => {
-    const res = await fetch(`${VNC_API_BASE}${path}`, {
+    const proxied = path
+      .replace(/^\/api\/sessions$/, "/api/vnc/session")
+      .replace(/^\/api\/sessions\//, "/api/vnc/session/")
+    const res = await fetch(proxied, {
       ...options,
-      headers: { "Content-Type": "application/json", "X-API-Key": VNC_API_KEY, ...options?.headers },
+      headers: { "Content-Type": "application/json", ...options?.headers },
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: "VNC Manager unreachable" }))

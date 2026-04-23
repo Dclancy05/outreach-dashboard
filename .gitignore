@@ -20,3 +20,9 @@ npm-debug.log*
 # vercel env backups
 .env.vercel-backup*
 .vercel.backup*
+
+# credentials / sensitive local-only data
+scripts/accounts-data.local.json
+*.credentials.json
+*.secrets.json
+credentials.json

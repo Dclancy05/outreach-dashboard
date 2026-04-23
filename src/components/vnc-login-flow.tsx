@@ -34,7 +34,6 @@ const PLATFORM_URLS: Record<string, string> = {
 
 const VNC_WS_HOST = process.env.NEXT_PUBLIC_VNC_WS_HOST || "srv1197943.taild42583.ts.net"
 const VNC_API_BASE = `https://${VNC_WS_HOST}`
-const VNC_API_KEY = "vnc-mgr-2026-dylan"
 
 const PLATFORM_LOGIN_INSTRUCTIONS: Record<string, { steps: string[]; tips: string[] }> = {
   instagram: {
@@ -155,7 +154,10 @@ async function probeVncReachable(): Promise<{ ok: boolean; reason?: string }> {
   try {
     const ctrl = new AbortController()
     const t = setTimeout(() => ctrl.abort(), 6000)
-    const res = await fetch(`${VNC_API_BASE}/health`, { signal: ctrl.signal, mode: "cors" })
+    // Hit the dashboard's server-side proxy — it talks to the VNC Manager
+    // over Tailscale using the server-only API key. This also avoids baking
+    // a direct cross-origin call (and the key) into the client bundle.
+    const res = await fetch(`/api/vnc/health`, { signal: ctrl.signal })
     clearTimeout(t)
     if (!res.ok) return { ok: false, reason: `VNC server returned HTTP ${res.status}` }
     return { ok: true }
@@ -183,12 +185,21 @@ export default function VncLoginFlow({
   const [currentTabUrl, setCurrentTabUrl] = useState<string>("")
   const [navigating, setNavigating] = useState<string | null>(null)
 
+  // Route all VNC Manager calls through the dashboard's server-side proxy so
+  // the API key stays on the server. The proxy lives at /api/vnc/... and
+  // mirrors the VNC Manager endpoints one-for-one (session create, capture,
+  // navigate, delete). Middleware gates these on admin/va session cookies, so
+  // only logged-in users can hit them.
   const vncFetch = useCallback(async (path: string, options?: RequestInit) => {
-    const res = await fetch(`${VNC_API_BASE}${path}`, {
+    // Rewrite direct VNC Manager paths (/api/sessions/...) to the dashboard
+    // proxy equivalents (/api/vnc/session/...). Accept either form for safety.
+    const proxied = path
+      .replace(/^\/api\/sessions$/, "/api/vnc/session")
+      .replace(/^\/api\/sessions\//, "/api/vnc/session/")
+    const res = await fetch(proxied, {
       ...options,
       headers: {
         "Content-Type": "application/json",
-        "X-API-Key": VNC_API_KEY,
         ...options?.headers,
       },
     })
