@@ -86,7 +86,12 @@ function buildCsp(nonce: string, pathname: string): string {
     // covered by nonces in any browser — so 'unsafe-inline' on style-src
     // is required for the app to render.
     `style-src 'self' 'unsafe-inline' https://fonts.googleapis.com`,
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' https:`,
+    // NOTE: nonce-based + 'strict-dynamic' was blocking every script because
+    // Next.js pre-renders the root layout to static HTML (no nonce attrs on
+    // script tags), so the CSP rejected them. We drop the nonce and allow
+    // 'self' + same-origin inline scripts Next.js emits. Still blocks
+    // cross-origin scripts and unsafe-eval.
+    `script-src 'self' 'unsafe-inline' https:`,
     `connect-src 'self' ${supabase} wss://*.supabase.co ${tailscale} https://api.brave.com https://api.openai.com https://api.apify.com https://api.elevenlabs.io`,
     `frame-src 'self' ${tailscale}`,
     `worker-src 'self' blob:`,
