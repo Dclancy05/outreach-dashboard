@@ -13,10 +13,26 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
+// Default login URL per platform. Forwarded to the VNC Manager so Chrome
+// opens directly on the right login page instead of relying on a follow-up
+// /navigate call (which races against the first page load and sometimes drops).
+const PLATFORM_LOGIN_URLS: Record<string, string> = {
+  instagram: "https://www.instagram.com/accounts/login/",
+  facebook: "https://www.facebook.com/login",
+  linkedin: "https://www.linkedin.com/login",
+  tiktok: "https://www.tiktok.com/login",
+  twitter: "https://twitter.com/login",
+  x: "https://x.com/login",
+  youtube: "https://accounts.google.com/signin",
+  google: "https://accounts.google.com/signin",
+  pinterest: "https://www.pinterest.com/login/",
+  snapchat: "https://accounts.snapchat.com/accounts/login",
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { proxy_group_id, platform, platforms, proxy_config, use_chrome_profile, account_id } = body
+    const { proxy_group_id, platform, platforms, proxy_config, use_chrome_profile, account_id, initial_url, initialUrl } = body
 
     if (!proxy_group_id) {
       return NextResponse.json({ error: "proxy_group_id required" }, { status: 400 })
@@ -146,12 +162,29 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Resolve the URL Chrome should open on first paint. Explicit caller input
+    // wins; otherwise we default to the platform's canonical login URL so a
+    // click on "Open Browser" for an existing account lands on the login page
+    // instead of the default new-tab page. `about:blank` is allowed through if
+    // the caller really wants a blank tab.
+    const primaryPlatform = platformList[0] || platform
+    const resolvedInitialUrl: string | undefined =
+      (typeof initial_url === "string" && initial_url) ||
+      (typeof initialUrl === "string" && initialUrl) ||
+      (primaryPlatform ? PLATFORM_LOGIN_URLS[primaryPlatform] : undefined)
+
+    // Per-account profile dir: we pin it to /vps/profiles/<account_id> so the
+    // VPS VNC Manager can mount a persistent --user-data-dir that survives
+    // across sessions. The fingerprint row already stores this path; we
+    // forward it explicitly here so the manager doesn't have to re-derive it.
+    const chromeProfileDir: string | undefined = account_id ? `/vps/profiles/${account_id}` : undefined
+
     const res = await fetch(`${VNC_MANAGER_URL}/api/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-API-Key": VNC_API_KEY },
       body: JSON.stringify({
         proxy_group_id,
-        platform: platformList[0] || platform,
+        platform: primaryPlatform,
         platforms: platformList,
         proxy_config: effectiveProxyConfig,
         use_chrome_profile: !!use_chrome_profile,
@@ -159,6 +192,8 @@ export async function POST(req: NextRequest) {
         cookies,
         account_id,
         fingerprint,
+        initial_url: resolvedInitialUrl,
+        chrome_profile_dir: chromeProfileDir,
       }),
     })
 
