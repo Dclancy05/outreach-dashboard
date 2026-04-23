@@ -1,69 +1,66 @@
 import { NextRequest, NextResponse } from "next/server"
+import { verifyAdminSessionEdge, verifyVaSessionEdge } from "@/lib/session-crypto-edge"
 
-// Public routes that don't require auth. Cron + ai-agent routes are listed
-// here because they do their own CRON_SECRET bearer check — if we don't
-// whitelist them, the session-cookie gate below 401s Vercel Cron calls
-// before the route's own auth can run.
 const PUBLIC_ROUTES = [
   "/va-login",
   "/api/auth/verify-pin",
   "/api/auth/va-login",
   "/api/cron/",
   "/api/ai-agent/",
+  "/security",
+  "/.well-known/",
 ]
 
-// VA-accessible routes (after VA login)
 const VA_ROUTES = ["/va", "/va-queue", "/api/team", "/api/businesses", "/api/leads", "/api/activity", "/api/lead-activity", "/api/proxy-groups", "/api/dashboard", "/api/warmup"]
 
-// Everything else requires admin auth
+const ADMIN_MAX_AGE_MS = 1000 * 60 * 60 * 24
 
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
 
-  // Allow public routes
   if (PUBLIC_ROUTES.some(r => pathname.startsWith(r))) {
-    return NextResponse.next()
+    return withSecurityHeaders(NextResponse.next())
   }
 
-  // Allow static assets and Next.js internals
   if (pathname.startsWith("/_next") || pathname.startsWith("/favicon") || pathname === "/") {
-    return NextResponse.next()
+    return withSecurityHeaders(NextResponse.next())
   }
 
-  // Check VA routes
+  const secret = process.env.SESSION_SIGNING_SECRET || ""
+
+  const adminCookie = req.cookies.get("admin_session")?.value
+  const adminValid = await verifyAdminSessionEdge(adminCookie, secret, ADMIN_MAX_AGE_MS)
+
   if (VA_ROUTES.some(r => pathname.startsWith(r))) {
-    const vaSession = req.cookies.get("va_session")?.value
-    const adminSession = req.cookies.get("admin_session")?.value
+    if (adminValid) return withSecurityHeaders(NextResponse.next())
 
-    if (adminSession === "authenticated") return NextResponse.next()
-
-    if (vaSession) {
-      try {
-        const session = JSON.parse(vaSession)
-        if (session.exp && session.exp > Date.now()) {
-          return NextResponse.next()
-        }
-      } catch { /* invalid session */ }
+    const vaCookie = req.cookies.get("va_session")?.value
+    const vaSession = await verifyVaSessionEdge<{ exp?: number }>(vaCookie, secret)
+    if (vaSession && typeof vaSession.exp === "number" && vaSession.exp > Date.now()) {
+      return withSecurityHeaders(NextResponse.next())
     }
 
-    // Redirect to VA login
-    return NextResponse.redirect(new URL("/va-login", req.url))
+    return withSecurityHeaders(NextResponse.redirect(new URL("/va-login", req.url)))
   }
 
-  // Admin routes - check admin session
-  const adminSession = req.cookies.get("admin_session")?.value
-  if (adminSession === "authenticated") {
-    return NextResponse.next()
+  if (adminValid) {
+    return withSecurityHeaders(NextResponse.next())
   }
 
-  // For API routes, return 401
   if (pathname.startsWith("/api/")) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    return withSecurityHeaders(NextResponse.json({ error: "Unauthorized" }, { status: 401 }))
   }
 
-  // For pages, allow through (pin-lock component handles client-side)
-  // This allows the pin-lock UI to render and authenticate
-  return NextResponse.next()
+  return withSecurityHeaders(NextResponse.next())
+}
+
+function withSecurityHeaders(res: NextResponse): NextResponse {
+  res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+  res.headers.set("X-Content-Type-Options", "nosniff")
+  res.headers.set("X-Frame-Options", "DENY")
+  res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
+  res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+  return res
 }
 
 export const config = {
