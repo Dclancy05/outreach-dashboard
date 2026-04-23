@@ -28,18 +28,12 @@ const EXPIRED_AFTER_HOURS = 24 * 14
 // back. Dashboard UI reads the cached column so the health badge stays fast
 // even with 100+ accounts.
 async function handle(req: NextRequest) {
-  // Vercel Cron sends GET with a signed header. For safety also accept the
-  // same Bearer CRON_SECRET pattern other routes use.
   const auth = req.headers.get("authorization") || ""
   const expected = process.env.CRON_SECRET || ""
-  const userAgent = req.headers.get("user-agent") || ""
-  const isVercelCron = userAgent.toLowerCase().includes("vercel")
-  if (!isVercelCron) {
-    if (!expected)
-      return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 })
-    if (auth !== `Bearer ${expected}`)
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-  }
+  if (!expected)
+    return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 })
+  if (auth !== `Bearer ${expected}`)
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 })
 
   const startedAt = Date.now()
 

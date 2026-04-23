@@ -317,7 +317,7 @@ const handlers: Record<string, ActionHandler> = {
       proxy_host: a.identity_group ? String(a.proxy_host || "brd.superproxy.io") : "",
       proxy_port: a.identity_group ? String(a.proxy_port || "33335") : "",
       proxy_username: a.identity_group ? String(a.proxy_username || "") : "",
-      proxy_password: a.identity_group ? String(a.proxy_password || "4tv2tjpt6ppq") : "",
+      proxy_password: a.identity_group ? String(a.proxy_password || "") : "",
     }))
     const { error } = await supabase.from("outreach_accounts").insert(rows)
     if (error) throw new Error(error.message)
@@ -397,7 +397,7 @@ const handlers: Record<string, ActionHandler> = {
     const row = {
       group_number: Number(body.group_number), proxy_host: String(body.proxy_host || "brd.superproxy.io"),
       proxy_port: String(body.proxy_port || "33335"), proxy_username: String(body.proxy_username || ""),
-      proxy_password: String(body.proxy_password || "4tv2tjpt6ppq"), status: String(body.status || "active"),
+      proxy_password: String(body.proxy_password || ""), status: String(body.status || "active"),
       notes: String(body.notes || ""),
     }
     const data = throwOnError(await supabase.from("proxy_identities").insert(row).select())

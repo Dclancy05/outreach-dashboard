@@ -1,0 +1,6 @@
+Contact: mailto:assistanceteam101@gmail.com
+Expires: 2027-04-23T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://outreach-github.vercel.app/.well-known/security.txt
+Policy: https://outreach-github.vercel.app/security
+Encryption: not yet available

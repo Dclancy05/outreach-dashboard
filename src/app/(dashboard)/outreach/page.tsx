@@ -2085,7 +2085,12 @@ export default function OutreachPage() {
                 {!vncGridView && (
                   <iframe
                     src={activeVncTab === "default"
-                      ? "https://srv1197943.taild42583.ts.net:9443/vnc.html?autoconnect=true&resize=scale&password=RGNNa3RnMjAyNiE="
+                      ? (() => {
+                          const base = process.env.NEXT_PUBLIC_VNC_URL || "https://srv1197943.taild42583.ts.net/vnc.html"
+                          const pw = process.env.NEXT_PUBLIC_VNC_PASSWORD || ""
+                          const sep = base.includes("?") ? "&" : "?"
+                          return `${base}${sep}autoconnect=true&resize=scale${pw ? `&password=${encodeURIComponent(pw)}` : ""}`
+                        })()
                       : `https://srv1197943.taild42583.ts.net:18790/novnc/vnc_lite.html?path=websockify/${activeVncTab}&autoconnect=true&resize=scale`
                     }
                     className="w-full h-[450px] border-0"
