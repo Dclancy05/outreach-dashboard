@@ -21,6 +21,7 @@ import {
 import { ReplayAutomationDialog } from "@/components/replay-automation-dialog"
 import { RetryQueueWidget } from "@/components/retry-queue-widget"
 import { NudgeBanners } from "@/components/nudge-banners"
+import PlatformLoginModal from "@/components/platform-login-modal"
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.08 } } }
 const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.5 } } }
@@ -1737,6 +1738,17 @@ export default function AutomationsPage() {
   const [recordingModalOpen, setRecordingModalOpen] = useState(false)
   const [recordingModalAuto, setRecordingModalAuto] = useState<AutomationDef | null>(null)
 
+  // Platform login modal state. Replaces the old behavior where clicking
+  // "Log in to Instagram" popped a raw noVNC window with no instructions — now
+  // it opens a guided side-panel dialog (mirrors the recording modal UX) that
+  // drives the shared VPS Chrome to the right login URL and verifies the
+  // result via /api/platforms/login-status on confirm. `remaining` carries the
+  // other platforms that still need login so the modal can chain them without
+  // closing.
+  const [loginModalOpen, setLoginModalOpen] = useState(false)
+  const [loginModalPlatform, setLoginModalPlatform] = useState<string>("instagram")
+  const [loginModalRemaining, setLoginModalRemaining] = useState<string[]>([])
+
   // New-style "Add Automation" modal (Phase 2 — writes to /api/automations).
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [addModalPlatformKey, setAddModalPlatformKey] = useState<string | null>(null)
@@ -2317,19 +2329,20 @@ export default function AutomationsPage() {
               {loggedOutPlatforms.map(p => (
                 <button
                   key={p.platform}
-                  onClick={async () => {
-                    setToast(`🔑 Opening ${p.platform} login...`)
-                    // Point the VPS Chrome at the login page first, then open the VNC
-                    // window so Dylan's looking at the sign-in form immediately.
-                    await fetch("/api/platforms/goto", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ url: p.loginUrl || `https://www.${p.platform}.com` }),
-                    }).catch(() => {})
-                    window.open(VNC_EMBED_URL, "outreach-vnc-login", "width=1280,height=800,noopener,noreferrer")
+                  onClick={() => {
+                    // Open the guided login modal — shared VPS Chrome +
+                    // side-panel instructions + "I'm Logged In" verification.
+                    // Queue the rest of the logged-out platforms as `remaining`
+                    // so the user can chain logins without closing the dialog.
+                    const others = loggedOutPlatforms
+                      .map(x => x.platform)
+                      .filter(name => name !== p.platform)
+                    setLoginModalPlatform(p.platform)
+                    setLoginModalRemaining(others)
+                    setLoginModalOpen(true)
                   }}
                   className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold bg-red-500 hover:bg-red-600 text-white transition-colors shadow-md shadow-red-500/40"
-                  title={`Open ${p.platform} login in the automation browser — log in once and the status turns green.`}
+                  title={`Open a guided ${p.platform} login with step-by-step instructions.`}
                 >
                   <AlertTriangle className="h-3 w-3" />
                   Log in to {p.platform.charAt(0).toUpperCase() + p.platform.slice(1)}
@@ -3047,6 +3060,26 @@ export default function AutomationsPage() {
           />
         )}
       </AnimatePresence>
+
+      {/* Guided platform login modal — replaces the old raw-VNC popup for
+          the "Log in to X" buttons in the health bar. Gets side-panel
+          instructions + embedded VNC + "I'm Logged In" verification. */}
+      <PlatformLoginModal
+        open={loginModalOpen}
+        initialPlatform={loginModalPlatform}
+        remainingPlatforms={loginModalRemaining}
+        onClose={() => {
+          setLoginModalOpen(false)
+          // Re-poll health so the red banner flips green if the user logged
+          // in successfully but didn't click 'I'm Logged In'.
+          fetchHealth()
+        }}
+        onComplete={() => {
+          // Each successful probe re-pulls health so the banner count
+          // decreases in real time as platforms flip to logged-in.
+          fetchHealth()
+        }}
+      />
     </motion.div>
   )
 }
