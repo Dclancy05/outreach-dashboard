@@ -192,7 +192,11 @@ function instructionsFor(platform: string) {
     }
 }
 
-const VNC_LOAD_TIMEOUT_MS = 6000
+// Reduced from 6s — the VPS nginx sets X-Frame-Options: DENY which blocks the
+// iframe silently (Chrome renders "refused to connect" without firing onLoad).
+// Fall back to the pop-out window after 2.5s instead of making Dylan stare at
+// an error message for 6 full seconds before something happens.
+const VNC_LOAD_TIMEOUT_MS = 2500
 
 interface PlatformLoginModalProps {
   open: boolean
@@ -221,12 +225,30 @@ interface PlatformLoginModalProps {
    * the endpoint isn't available, we silently skip the snapshot write.
    */
   accountId?: string
+  /**
+   * Platforms this business actually has accounts for. When provided, the
+   * top-bar switcher only shows buttons for these platforms (so Dylan never
+   * sees a ghost "TikTok" button when his group has no TikTok account).
+   * If omitted or empty, the switcher falls back to the full default list.
+   */
+  connectedPlatforms?: string[]
 }
 
 export default function PlatformLoginModal({
   open, onClose, initialPlatform, remainingPlatforms,
-  onComplete, accountId,
+  onComplete, accountId, connectedPlatforms,
 }: PlatformLoginModalProps) {
+  // Normalize + stabilize the connected list. Default to the full set so
+  // callers that don't pass the prop behave like before (IG/FB/LI/TikTok).
+  const connectedKey = (connectedPlatforms || []).map(p => p.toLowerCase()).sort().join(",")
+  const switcherPlatforms = useMemo(() => {
+    const list = (connectedPlatforms || [])
+      .map(p => p.toLowerCase())
+      .filter(p => p && p !== "google") // Google accounts don't log in via this flow
+    if (list.length === 0) return ["instagram", "facebook", "linkedin", "tiktok"]
+    return list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectedKey])
   // Stabilize remainingPlatforms: callers often omit this prop or pass a
   // fresh `[]` literal on every render. Before this memo, the default `[]`
   // created a new array identity each render, which cascaded through the
@@ -544,47 +566,54 @@ export default function PlatformLoginModal({
                 next (e.g. staying logged into Google across IG/FB/LI). */}
             <div className="shrink-0 border-b border-border/40 bg-card/70 backdrop-blur px-3 py-2 flex flex-wrap items-center gap-2">
               <span className="text-[11px] text-muted-foreground mr-1">Jump to:</span>
-              <button
-                onClick={() => navigateTo("instagram")}
-                disabled={!!navigating || verifying}
-                title="Navigate this browser to Instagram login"
-                className={cn(
-                  "p-1.5 rounded-md transition-all disabled:opacity-40",
-                  currentPlatform === "instagram" ? "bg-pink-500/20 ring-1 ring-pink-500/40" : "hover:bg-pink-500/20"
-                )}
-              >
-                <Instagram className="h-4 w-4 text-pink-400" />
-              </button>
-              <button
-                onClick={() => navigateTo("facebook")}
-                disabled={!!navigating || verifying}
-                title="Navigate this browser to Facebook login"
-                className={cn(
-                  "p-1.5 rounded-md transition-all disabled:opacity-40",
-                  currentPlatform === "facebook" ? "bg-blue-500/20 ring-1 ring-blue-500/40" : "hover:bg-blue-500/20"
-                )}
-              >
-                <Facebook className="h-4 w-4 text-blue-400" />
-              </button>
-              <button
-                onClick={() => navigateTo("linkedin")}
-                disabled={!!navigating || verifying}
-                title="Navigate this browser to LinkedIn login"
-                className={cn(
-                  "p-1.5 rounded-md transition-all disabled:opacity-40",
-                  currentPlatform === "linkedin" ? "bg-sky-500/20 ring-1 ring-sky-500/40" : "hover:bg-sky-500/20"
-                )}
-              >
-                <Linkedin className="h-4 w-4 text-sky-400" />
-              </button>
-              <button
-                onClick={() => navigateTo("tiktok")}
-                disabled={!!navigating || verifying}
-                title="Navigate this browser to TikTok login"
-                className="p-1.5 rounded-md hover:bg-muted/40 transition-all disabled:opacity-40"
-              >
-                <Globe className="h-4 w-4 text-muted-foreground" />
-              </button>
+              {switcherPlatforms.map(p => {
+                const meta: Record<string, { icon: JSX.Element; activeRing: string; hover: string; label: string }> = {
+                  instagram: {
+                    icon: <Instagram className="h-4 w-4 text-pink-400" />,
+                    activeRing: "bg-pink-500/20 ring-1 ring-pink-500/40",
+                    hover: "hover:bg-pink-500/20",
+                    label: "Instagram",
+                  },
+                  facebook: {
+                    icon: <Facebook className="h-4 w-4 text-blue-400" />,
+                    activeRing: "bg-blue-500/20 ring-1 ring-blue-500/40",
+                    hover: "hover:bg-blue-500/20",
+                    label: "Facebook",
+                  },
+                  linkedin: {
+                    icon: <Linkedin className="h-4 w-4 text-sky-400" />,
+                    activeRing: "bg-sky-500/20 ring-1 ring-sky-500/40",
+                    hover: "hover:bg-sky-500/20",
+                    label: "LinkedIn",
+                  },
+                  tiktok: {
+                    icon: <Globe className="h-4 w-4 text-muted-foreground" />,
+                    activeRing: "bg-muted/40 ring-1 ring-border/60",
+                    hover: "hover:bg-muted/40",
+                    label: "TikTok",
+                  },
+                }
+                const m = meta[p] || {
+                  icon: <Globe className="h-4 w-4 text-muted-foreground" />,
+                  activeRing: "bg-muted/40 ring-1 ring-border/60",
+                  hover: "hover:bg-muted/40",
+                  label: p.charAt(0).toUpperCase() + p.slice(1),
+                }
+                return (
+                  <button
+                    key={p}
+                    onClick={() => navigateTo(p)}
+                    disabled={!!navigating || verifying}
+                    title={`Navigate this browser to ${m.label} login`}
+                    className={cn(
+                      "p-1.5 rounded-md transition-all disabled:opacity-40",
+                      currentPlatform.toLowerCase() === p ? m.activeRing : m.hover
+                    )}
+                  >
+                    {m.icon}
+                  </button>
+                )
+              })}
               <Button
                 size="sm"
                 variant="outline"

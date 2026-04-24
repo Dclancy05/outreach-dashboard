@@ -22,6 +22,7 @@ import { ReplayAutomationDialog } from "@/components/replay-automation-dialog"
 import { RetryQueueWidget } from "@/components/retry-queue-widget"
 import { NudgeBanners } from "@/components/nudge-banners"
 import PlatformLoginModal from "@/components/platform-login-modal"
+import { useBusinessId } from "@/lib/use-business"
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.08 } } }
 const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.5 } } }
@@ -1749,6 +1750,13 @@ export default function AutomationsPage() {
   const [loginModalPlatform, setLoginModalPlatform] = useState<string>("instagram")
   const [loginModalRemaining, setLoginModalRemaining] = useState<string[]>([])
 
+  // Connected platforms for the current business — used to suppress ghost
+  // "Log in to X" buttons for platforms the business doesn't actually have
+  // accounts for (Dylan's "don't show TikTok when I have no TikTok" ask).
+  // Empty list = unknown (show everything the VPS probe returns, as fallback).
+  const businessId = useBusinessId()
+  const [connectedPlatforms, setConnectedPlatforms] = useState<string[]>([])
+
   // New-style "Add Automation" modal (Phase 2 — writes to /api/automations).
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [addModalPlatformKey, setAddModalPlatformKey] = useState<string | null>(null)
@@ -1840,6 +1848,24 @@ export default function AutomationsPage() {
     } catch { setHealth(null) }
   }, [])
 
+  // Pull the distinct list of platforms this business has accounts for so the
+  // health bar can hide "Log in to TikTok" when there's no TikTok account.
+  // Runs once on mount + whenever the selected business changes.
+  const fetchConnectedPlatforms = useCallback(async () => {
+    if (!businessId) { setConnectedPlatforms([]); return }
+    try {
+      const res = await fetch(`/api/accounts?business_id=${encodeURIComponent(businessId)}`)
+      const data = await res.json()
+      const rows: Array<{ platform?: string }> = Array.isArray(data?.data) ? data.data : []
+      const distinct = Array.from(new Set(
+        rows.map(r => (r.platform || "").toLowerCase()).filter(Boolean)
+      ))
+      setConnectedPlatforms(distinct)
+    } catch {
+      setConnectedPlatforms([])
+    }
+  }, [businessId])
+
   const fetchDayStats = useCallback(async () => {
     try {
       const res = await fetch("/api/recordings/stats")
@@ -1853,11 +1879,13 @@ export default function AutomationsPage() {
     fetchHealth()
     fetchDayStats()
     fetchDbAutomations()
+    fetchConnectedPlatforms()
     const h = setInterval(fetchHealth, 15000)
     const s = setInterval(fetchDayStats, 30000)
     const a = setInterval(fetchDbAutomations, 30000)
-    return () => { clearInterval(h); clearInterval(s); clearInterval(a) }
-  }, [fetchRecordings, fetchHealth, fetchDayStats, fetchDbAutomations])
+    const p = setInterval(fetchConnectedPlatforms, 30000)
+    return () => { clearInterval(h); clearInterval(s); clearInterval(a); clearInterval(p) }
+  }, [fetchRecordings, fetchHealth, fetchDayStats, fetchDbAutomations, fetchConnectedPlatforms])
 
   // ═══ Add / Edit / Delete / Rename handlers for DB automations ═══
   const openAddModal = (platformKey: string) => {
@@ -2145,7 +2173,16 @@ export default function AutomationsPage() {
 
   const healthCount = health ? [health.chrome, health.xvfb, health.proxy, health.queueProcessor].filter(Boolean).length : 0
   const healthTotal = 4
-  const loggedOutPlatforms = (health?.loginResults || []).filter(r => r.loggedIn === false)
+  // Only surface "logged out" for platforms this business actually has
+  // accounts for. The VPS probe always tests IG/FB/LI/TikTok — this avoids
+  // telling Dylan to log into TikTok when he has zero TikTok accounts.
+  // If we haven't loaded the connected list yet (empty), fall through to the
+  // raw probe result to avoid a flash of "all green" on first paint.
+  const loggedOutPlatforms = (health?.loginResults || []).filter(r => {
+    if (r.loggedIn !== false) return false
+    if (connectedPlatforms.length === 0) return true
+    return connectedPlatforms.includes((r.platform || "").toLowerCase())
+  })
   const hasLoggedOut = loggedOutPlatforms.length > 0
   const healthColor = !health
     ? "text-muted-foreground"
@@ -3068,6 +3105,7 @@ export default function AutomationsPage() {
         open={loginModalOpen}
         initialPlatform={loginModalPlatform}
         remainingPlatforms={loginModalRemaining}
+        connectedPlatforms={connectedPlatforms}
         onClose={() => {
           setLoginModalOpen(false)
           // Re-poll health so the red banner flips green if the user logged
