@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 
+const { withSentryConfig } = require('@sentry/nextjs')
+
 // Security headers applied at the framework level.
 // src/middleware.ts also sets these so a middleware bypass still has them.
 const securityHeaders = [
@@ -21,4 +23,12 @@ const nextConfig = {
   },
 }
 
-module.exports = nextConfig
+module.exports = withSentryConfig(nextConfig, {
+  org: 'outreach-dashboard',
+  project: 'javascript-nextjs',
+  silent: true,
+  widenClientFileUpload: true,
+  tunnelRoute: '/monitoring',
+  disableLogger: true,
+  automaticVercelMonitors: true,
+})
