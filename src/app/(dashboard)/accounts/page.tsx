@@ -904,6 +904,14 @@ export default function AccountsPage() {
                                 : ageHrs < 24 ? `${ageHrs}h ago`
                                 : `${Math.floor(ageHrs / 24)}d ago`
 
+                              // Google accounts are band-quality boosters, never used to
+                              // send. They must never surface a "Sign In Now" affordance or
+                              // trigger a login modal — hiding the buttons + short-circuiting
+                              // the handler keeps the row visible in admin without letting
+                              // anyone (or a click handler bubble) drive the VPS Chrome to
+                              // a Google login URL.
+                              const isGoogleBooster = a.platform === "google"
+
                               // One-click re-login: opens the guided PlatformLoginModal for
                               // this account's platform. Same shared VPS Chrome + side-panel
                               // instructions + "I'm Logged In" verification the Automations
@@ -911,6 +919,7 @@ export default function AccountsPage() {
                               // call can associate captured cookies with this Supabase row.
                               const openVnc = (e?: React.MouseEvent) => {
                                 if (e) e.stopPropagation()
+                                if (isGoogleBooster) return
                                 setLoginModalPlatform(a.platform)
                                 setLoginModalAccountId(a.account_id)
                                 setLoginModalOpen(true)
@@ -926,8 +935,8 @@ export default function AccountsPage() {
                                       ? "border-amber-500/40 bg-amber-500/5 hover:bg-amber-500/10 hover:border-amber-500/60 ring-1 ring-amber-500/20"
                                       : "border-border/40 bg-card/40 hover:bg-card/60 hover:border-border",
                                   )}
-                                  onClick={() => needsAttn ? openVnc() : setDetailAccountId(a.account_id)}
-                                  title={needsAttn ? "Click to sign in — opens your saved Chrome profile" : "Click for full details"}
+                                  onClick={() => (needsAttn && !isGoogleBooster) ? openVnc() : setDetailAccountId(a.account_id)}
+                                  title={(needsAttn && !isGoogleBooster) ? "Click to sign in — opens your saved Chrome profile" : "Click for full details"}
                                 >
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2 min-w-0">
@@ -939,7 +948,7 @@ export default function AccountsPage() {
                                     </div>
                                     <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                                       <Badge className={cn("text-[10px]", statusColors[effStatus] || "bg-muted/30")}>{statusLabel(effStatus)}</Badge>
-                                      {isActive && (
+                                      {isActive && !isGoogleBooster && (
                                         <button
                                           onClick={openVnc}
                                           className="text-blue-400 hover:text-blue-300 transition-colors"
@@ -950,7 +959,7 @@ export default function AccountsPage() {
                                       )}
                                     </div>
                                   </div>
-                                  {needsAttn && (
+                                  {needsAttn && !isGoogleBooster && (
                                     <Button
                                       size="sm"
                                       onClick={openVnc}
@@ -958,6 +967,11 @@ export default function AccountsPage() {
                                     >
                                       <Monitor className="h-3 w-3 mr-1" /> Sign In Now
                                     </Button>
+                                  )}
+                                  {needsAttn && isGoogleBooster && (
+                                    <div className="text-[10px] text-muted-foreground/80 italic px-1">
+                                      Booster account — no sign-in needed
+                                    </div>
                                   )}
                                   {isActive && (
                                     <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
@@ -1844,6 +1858,12 @@ export default function AccountsPage() {
         onClose={() => setDetailAccountId(null)}
         onChanged={fetchAll}
         onLoginClick={(account) => {
+          // Google accounts are band boosters, never used for sending. Never
+          // let the detail dialog drive the VPS Chrome to a Google login URL.
+          if (account.platform === "google") {
+            toast.error("Google accounts are band-quality boosters — no login needed.")
+            return
+          }
           if (!account.proxy_group_id) {
             toast.error("Assign a proxy group to this account first — login needs a proxy to route through.")
             return

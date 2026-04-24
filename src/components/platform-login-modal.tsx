@@ -224,15 +224,29 @@ interface PlatformLoginModalProps {
 }
 
 export default function PlatformLoginModal({
-  open, onClose, initialPlatform, remainingPlatforms = [],
+  open, onClose, initialPlatform, remainingPlatforms,
   onComplete, accountId,
 }: PlatformLoginModalProps) {
+  // Stabilize remainingPlatforms: callers often omit this prop or pass a
+  // fresh `[]` literal on every render. Before this memo, the default `[]`
+  // created a new array identity each render, which cascaded through the
+  // reset effect below → reset `hasNavigatedRef` → re-run the nav effect →
+  // `setCurrentPlatform` → re-render → new `[]` → infinite loop (React #185).
+  // Keying the memo on the JSON content gives us a stable reference unless
+  // the actual list changes.
+  const remainingKey = remainingPlatforms ? remainingPlatforms.join(",") : ""
+  const stableRemaining = useMemo(
+    () => remainingPlatforms ?? [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [remainingKey]
+  )
+
   const [currentPlatform, setCurrentPlatform] = useState(initialPlatform)
   const [navigating, setNavigating] = useState<string | null>(null)
   const [vncLoaded, setVncLoaded] = useState(false)
   const [vncTimedOut, setVncTimedOut] = useState(false)
   const [verifying, setVerifying] = useState(false)
-  const [remaining, setRemaining] = useState<string[]>(remainingPlatforms)
+  const [remaining, setRemaining] = useState<string[]>(stableRemaining)
   const [lastResult, setLastResult] = useState<"ok" | "still_logged_out" | null>(null)
   const hasNavigatedRef = useRef(false)
   const popoutOpenedRef = useRef(false)
@@ -241,17 +255,18 @@ export default function PlatformLoginModal({
 
   // Reset on open / new initial platform. We want a fresh slate every time
   // the modal is shown so the "step 1" guidance isn't stale from a prior
-  // close.
+  // close. Using the stable memoized `stableRemaining` (not the raw prop)
+  // keeps this effect from firing on every parent re-render.
   useEffect(() => {
     if (!open) return
     setCurrentPlatform(initialPlatform)
-    setRemaining(remainingPlatforms)
+    setRemaining(stableRemaining)
     setVncLoaded(false)
     setVncTimedOut(false)
     setLastResult(null)
     hasNavigatedRef.current = false
     popoutOpenedRef.current = false
-  }, [open, initialPlatform, remainingPlatforms])
+  }, [open, initialPlatform, stableRemaining])
 
   // Navigate VPS Chrome to the platform's login URL on first open. We
   // fire-and-forget — if the /goto endpoint is momentarily down the user can
@@ -284,13 +299,24 @@ export default function PlatformLoginModal({
     }
   }, [info.label])
 
+  // Keep a ref to the latest navigateTo so the auto-nav effect below doesn't
+  // need it in its deps. navigateTo's identity changes whenever info.label
+  // changes (which happens when navigateTo itself sets currentPlatform on
+  // success). Including it in the dep array + resetting hasNavigatedRef in
+  // the other effect caused an infinite re-entry loop (React error #185).
+  const navigateToRef = useRef(navigateTo)
+  useEffect(() => {
+    navigateToRef.current = navigateTo
+  }, [navigateTo])
+
   // Auto-navigate once on open so the user lands on the right login page
-  // without having to click anything first.
+  // without having to click anything first. The ref-guard + reading the
+  // latest navigateTo from a ref prevents the re-render cycle.
   useEffect(() => {
     if (!open || hasNavigatedRef.current) return
     hasNavigatedRef.current = true
-    navigateTo(initialPlatform).catch(() => {})
-  }, [open, initialPlatform, navigateTo])
+    navigateToRef.current(initialPlatform).catch(() => {})
+  }, [open, initialPlatform])
 
   // VNC iframe load timeout — same pattern as RecordingModal. If the iframe
   // doesn't fire onLoad within 6s (x-frame-options: DENY silently kills

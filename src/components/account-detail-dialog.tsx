@@ -554,13 +554,19 @@ export default function AccountDetailDialog({ open, accountId, onClose, onLoginC
 
             {/* Actions */}
             <div className="pt-2 border-t border-border/30 flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                onClick={() => onLoginClick?.(data.account)}
-                className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl text-xs"
-              >
-                <LogIn className="h-3.5 w-3.5 mr-1" /> {data.session.hasCookie ? "Re-login" : "Log In"}
-              </Button>
+              {/* Google accounts are band-quality boosters — never send, never
+                  need a login flow on the VPS Chrome. Hide the Log In button
+                  entirely for them so nobody (or stray click handler) can drive
+                  the shared browser to a Google login URL. */}
+              {data.account.platform !== "google" && (
+                <Button
+                  size="sm"
+                  onClick={() => onLoginClick?.(data.account)}
+                  className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl text-xs"
+                >
+                  <LogIn className="h-3.5 w-3.5 mr-1" /> {data.session.hasCookie ? "Re-login" : "Log In"}
+                </Button>
+              )}
               <Button
                 size="sm"
                 variant="outline"
