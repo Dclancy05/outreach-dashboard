@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
@@ -398,6 +398,15 @@ export default function PlatformLoginModal({
   return (
     <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
       <DialogContent className="max-w-6xl h-[88vh] p-0 overflow-hidden bg-card/95 backdrop-blur-xl">
+        {/* Screen-reader title + description — visually hidden because the
+            left-side header already shows the same info in the main layout.
+            Without these Radix warns and some assistive tech skips the modal. */}
+        <DialogTitle className="sr-only">Log into {info.label}</DialogTitle>
+        <DialogDescription className="sr-only">
+          Guided login flow for {info.label}. Follow the numbered steps on the
+          left. The shared browser opens on the right — sign in there, then
+          click &quot;I&apos;m Logged In&quot; when your feed shows.
+        </DialogDescription>
         <div className="flex h-full">
           {/* ───────────── Left: instructions side panel ───────────── */}
           <div className="w-[340px] shrink-0 border-r border-border/30 bg-gradient-to-b from-card to-muted/20 flex flex-col">
@@ -416,11 +425,16 @@ export default function PlatformLoginModal({
               <Badge className="capitalize text-sm px-3 py-1">
                 {info.label}
               </Badge>
-              {remaining.length > 0 && (
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  After this: {remaining.join(", ")}
-                </p>
-              )}
+              {(() => {
+                const others = remaining.filter(
+                  p => p.toLowerCase() !== currentPlatform.toLowerCase()
+                )
+                return others.length > 0 ? (
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    After this: {others.join(", ")}
+                  </p>
+                ) : null
+              })()}
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
