@@ -266,10 +266,17 @@ export default function PlatformLoginModal({
   const [currentPlatform, setCurrentPlatform] = useState(initialPlatform)
   const [navigating, setNavigating] = useState<string | null>(null)
   const [vncLoaded, setVncLoaded] = useState(false)
-  const [vncTimedOut, setVncTimedOut] = useState(false)
+  // Start in "timed out" state — the VPS nginx sends X-Frame-Options: DENY, so
+  // the iframe renders an error page with onLoad still firing. That made the
+  // iframe look permanently broken for Dylan. Default to the pop-out window
+  // UX (which actually works) until the nginx config is relaxed. When
+  // NEXT_PUBLIC_VNC_IFRAME_ENABLED=true is set, we'll try the iframe first.
+  const iframeEnabled = process.env.NEXT_PUBLIC_VNC_IFRAME_ENABLED === "true"
+  const [vncTimedOut, setVncTimedOut] = useState(!iframeEnabled)
   const [verifying, setVerifying] = useState(false)
   const [remaining, setRemaining] = useState<string[]>(stableRemaining)
   const [lastResult, setLastResult] = useState<"ok" | "still_logged_out" | null>(null)
+  const popupRef = useRef<Window | null>(null)
   const hasNavigatedRef = useRef(false)
   const popoutOpenedRef = useRef(false)
 
@@ -284,11 +291,13 @@ export default function PlatformLoginModal({
     setCurrentPlatform(initialPlatform)
     setRemaining(stableRemaining)
     setVncLoaded(false)
-    setVncTimedOut(false)
+    // Keep starting in "timed out" state when iframe is disabled — see the
+    // state init comment above for why we skip the iframe attempt.
+    setVncTimedOut(!iframeEnabled)
     setLastResult(null)
     hasNavigatedRef.current = false
     popoutOpenedRef.current = false
-  }, [open, initialPlatform, stableRemaining])
+  }, [open, initialPlatform, stableRemaining, iframeEnabled])
 
   // Navigate VPS Chrome to the platform's login URL on first open. We
   // fire-and-forget — if the /goto endpoint is momentarily down the user can
@@ -312,6 +321,11 @@ export default function PlatformLoginModal({
       }
       setCurrentPlatform(platform)
       toast.success(`Opened ${info.label} login`)
+      // Pull the user's attention back to the pop-out window (if it's still
+      // alive) so they see the newly-navigated page.
+      if (popupRef.current && !popupRef.current.closed) {
+        try { popupRef.current.focus() } catch {}
+      }
     } catch (e: any) {
       // Non-fatal — the iframe is still showing the VPS Chrome. Surface the
       // error so Dylan knows what happened but don't block the flow.
@@ -339,6 +353,39 @@ export default function PlatformLoginModal({
     hasNavigatedRef.current = true
     navigateToRef.current(initialPlatform).catch(() => {})
   }, [open, initialPlatform])
+
+  // Helper: open (or focus) the VNC pop-out window. We reuse the same window
+  // name so clicking "Open Browser Window" from an already-open modal just
+  // focuses the existing window instead of spawning new ones.
+  const openVncWindow = useCallback(() => {
+    if (typeof window === "undefined") return null
+    const url = VNC_EMBED_URL || VNC_URL
+    if (!url) return null
+    try {
+      // window.open returns the existing window for the same name if it's
+      // still open, giving us natural deduplication.
+      const w = window.open(url, "outreach-vnc-login", "width=1400,height=900,noopener=no")
+      popupRef.current = w
+      if (w && typeof w.focus === "function") {
+        try { w.focus() } catch {}
+      }
+      return w
+    } catch {
+      return null
+    }
+  }, [])
+
+  // Auto-open the VNC pop-out the first time the modal opens. The modal's
+  // own open event is a user gesture, so this won't be blocked by popup
+  // blockers. If the user closes the popup, they can reopen via the
+  // "Open Browser Window" CTA.
+  useEffect(() => {
+    if (!open) return
+    if (popoutOpenedRef.current) return
+    if (iframeEnabled) return // iframe path — no popup needed
+    popoutOpenedRef.current = true
+    openVncWindow()
+  }, [open, iframeEnabled, openVncWindow])
 
   // VNC iframe load timeout — same pattern as RecordingModal. If the iframe
   // doesn't fire onLoad within 6s (x-frame-options: DENY silently kills
@@ -656,42 +703,35 @@ export default function PlatformLoginModal({
                   />
                 </>
               ) : (
-                (() => {
-                  // Iframe blocked or no password env — auto-pop-out on first render
-                  // so the user doesn't have to click through to see anything.
-                  if (typeof window !== "undefined" && !popoutOpenedRef.current && VNC_EMBED_URL) {
-                    popoutOpenedRef.current = true
-                    try {
-                      window.open(VNC_EMBED_URL, "outreach-vnc-login", "width=1400,height=900")
-                    } catch {}
-                  }
-                  return (
-                    <div className="h-full flex items-center justify-center p-8">
-                      <div className="text-center space-y-4 max-w-sm">
-                        <Monitor className="h-12 w-12 text-muted-foreground mx-auto" />
-                        <h3 className="text-lg font-semibold">Your browser is in a new window</h3>
-                        <p className="text-sm text-muted-foreground">
-                          Finish the {info.label} login there, then come back
-                          here and click &quot;I&apos;m Logged In&quot;.
-                        </p>
-                        <motion.a
-                          whileHover={{ scale: 1.03 }}
-                          whileTap={{ scale: 0.97 }}
-                          href={VNC_EMBED_URL || VNC_URL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-semibold transition-colors"
-                        >
-                          <ExternalLink className="h-5 w-5" />
-                          Open Browser Window
-                        </motion.a>
-                        <p className="text-xs text-muted-foreground">
-                          Then come back to this screen and use the steps on the left <ArrowRight className="inline h-3 w-3" />
-                        </p>
-                      </div>
+                <div className="h-full flex items-center justify-center p-8">
+                  <div className="text-center space-y-5 max-w-md">
+                    <div className="relative mx-auto h-20 w-20 rounded-2xl bg-gradient-to-br from-violet-500/20 to-purple-500/20 border border-violet-500/30 flex items-center justify-center">
+                      <Monitor className="h-10 w-10 text-violet-300" />
+                      <span className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full bg-emerald-400 border-2 border-background animate-pulse" />
                     </div>
-                  )
-                })()
+                    <div className="space-y-1.5">
+                      <h3 className="text-xl font-bold">Your {info.label} browser is open</h3>
+                      <p className="text-sm text-muted-foreground">
+                        We opened a new window with the shared browser. Sign in
+                        to {info.label} there, then come back here and click
+                        <span className="font-semibold text-emerald-300"> I&apos;m Logged In</span>.
+                      </p>
+                    </div>
+                    <motion.button
+                      whileHover={{ scale: 1.03 }}
+                      whileTap={{ scale: 0.97 }}
+                      onClick={openVncWindow}
+                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-400 hover:to-purple-500 text-white font-semibold transition-all shadow-lg shadow-purple-500/30"
+                    >
+                      <ExternalLink className="h-5 w-5" />
+                      Re-open Browser Window
+                    </motion.button>
+                    <p className="text-[11px] text-muted-foreground/80">
+                      Lost the window? Click the button above to reopen it.
+                      Steps are on the left <ArrowRight className="inline h-3 w-3" />
+                    </p>
+                  </div>
+                </div>
               )}
             </div>
           </div>
