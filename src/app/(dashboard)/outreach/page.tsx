@@ -651,7 +651,8 @@ function QuickCampaignDialog({ open, onOpenChange, accounts, sequences, settings
           <div>
             <Label>Accounts</Label>
             <div className="flex flex-wrap gap-2 mt-1">
-              {accounts.filter(a => a.status === "active").map(a => {
+              {/* Google accounts are quality/age boosters tied to social accounts — never shown as a "send from" option. */}
+              {accounts.filter(a => a.status === "active" && a.platform !== "google").map(a => {
                 const sel = qcAccounts.includes(a.account_id)
                 return (
                   <button key={a.account_id} onClick={() => setQcAccounts(prev => sel ? prev.filter(x => x !== a.account_id) : [...prev, a.account_id])}
@@ -1244,7 +1245,8 @@ export default function OutreachPage() {
 
               <Label className="mb-2 block">Sending Accounts</Label>
               <motion.div variants={container} initial="hidden" animate="show" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {accounts.filter(a => a.status === "active").map(a => {
+                {/* Google accounts are quality/age boosters tied to social accounts — never shown as a "send from" option. */}
+                {accounts.filter(a => a.status === "active" && a.platform !== "google").map(a => {
                   const Icon = platformIcons[a.platform] || Users
                   const selected = selectedAccounts.includes(a.account_id)
                   const limit = parseInt(a.daily_limit || "40")
@@ -1271,7 +1273,7 @@ export default function OutreachPage() {
                   <Plus className="h-4 w-4" /> Add More Accounts
                 </button>
               </div>
-              {accounts.filter(a => a.status === "active").length === 0 && (
+              {accounts.filter(a => a.status === "active" && a.platform !== "google").length === 0 && (
                 <p className="text-sm text-muted-foreground py-4 text-center">No active accounts. <button onClick={() => router.push("/accounts")} className="text-violet-400 underline hover:text-violet-300">Set up accounts in Accounts & Proxies</button></p>
               )}
               {selectedAccounts.length > 0 && (

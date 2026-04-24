@@ -1,12 +1,25 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 
+// CRITICAL: Next.js extends global fetch with response caching. The
+// supabase-js client uses fetch internally, so without `cache: "no-store"`
+// every Supabase query response gets cached by Next.js and served stale.
+// This caused the "deleted automations come back 2 minutes later" bug — the
+// row really was deleted from Postgres, but the warm serverless function
+// kept handing the client the cached list from before the delete.
+// Passing a custom fetch that disables Next.js's cache fixes that.
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  {
+    global: {
+      fetch: (url, init) => fetch(url, { ...init, cache: "no-store" }),
+    },
+  }
 )
 
 export const dynamic = "force-dynamic"
+export const revalidate = 0
 
 /**
  * GET /api/automations/list

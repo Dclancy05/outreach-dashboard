@@ -769,6 +769,26 @@ function RecordingModal({
     }
   }, [isOpen])
 
+  // VNC load timeout — if the iframe doesn't fire `onLoad` within 6s, treat
+  // it as an error so the "Pop Out Browser" fallback surfaces. Without this
+  // the user just sees "Loading browser view..." forever when the iframe is
+  // silently blocked (e.g. by x-frame-options DENY on the VPS nginx, or when
+  // the VNC password env var is missing so VNC_EMBED_URL is empty).
+  useEffect(() => {
+    if (!isOpen || phase !== "guide") return
+    if (vncLoaded || vncError) return
+    // If VNC_EMBED_URL is empty, fire the fallback immediately so we don't
+    // even try to load a broken iframe.
+    if (!VNC_EMBED_URL) {
+      setVncError(true)
+      return
+    }
+    const timer = setTimeout(() => {
+      if (!vncLoaded) setVncError(true)
+    }, 6000)
+    return () => clearTimeout(timer)
+  }, [isOpen, phase, vncLoaded, vncError])
+
   // Recording timer
   useEffect(() => {
     if (isRecording) {
@@ -2683,6 +2703,15 @@ export default function AutomationsPage() {
                                       >
                                         <RotateCcw className="h-2.5 w-2.5" /> Re-record
                                       </button>
+                                      {dbRow && (
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); requestDelete(dbRow.id) }}
+                                          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[10px] font-medium transition-colors"
+                                          title="Delete this automation — the tile stays as an empty slot you can re-record later"
+                                        >
+                                          <Trash2 className="h-2.5 w-2.5" /> Delete
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
                                 )
@@ -2699,14 +2728,26 @@ export default function AutomationsPage() {
                                 </div>
                               )}
 
-                              {!active && !settingUp && (
-                                <div className="mt-3 pt-2 border-t border-amber-500/10">
-                                  <div className="flex items-center gap-1.5 text-[10px] text-amber-400 font-medium">
-                                    <Video className="h-3 w-3" />
-                                    <span>Click to record this action →</span>
+                              {!active && !settingUp && (() => {
+                                const dbRow = findDbAutoForCatalog(auto)
+                                return (
+                                  <div className="mt-3 pt-2 border-t border-amber-500/10 flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5 text-[10px] text-amber-400 font-medium">
+                                      <Video className="h-3 w-3" />
+                                      <span>{needsRerec ? "Click to re-record →" : "Click to record this action →"}</span>
+                                    </div>
+                                    {dbRow && (
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); requestDelete(dbRow.id) }}
+                                        className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[10px] font-medium transition-colors"
+                                        title="Delete this automation — the tile stays as an empty slot you can re-record later"
+                                      >
+                                        <Trash2 className="h-2.5 w-2.5" /> Delete
+                                      </button>
+                                    )}
                                   </div>
-                                </div>
-                              )}
+                                )
+                              })()}
 
                               {recording && (
                                 <motion.div
