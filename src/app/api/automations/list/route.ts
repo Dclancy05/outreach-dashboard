@@ -20,21 +20,25 @@ export const dynamic = "force-dynamic"
  *      extension writes to when a user hits Record. One header row plus
  *      N step rows in a child table.)
  *
- * Until the two ecosystems are fully merged at the DB layer, this route
- * does the union in application code and returns a normalized shape so
- * the UI can render everything in a single list without caring which
- * table a row originated from.
+ * This route returns a response shape that is a SUPERSET of the old
+ * /api/automations route so the /automations page can swap fetch URLs
+ * and render both dashboard-native and extension-recorded automations
+ * without any further refactor. Every row has a `source` field so the
+ * UI can badge extension rows.
  *
- * Response shape:
- *   { data: Array<NormalizedAutomation>, errors?: {...} }
- *
- * Each NormalizedAutomation:
- *   id, source: 'dashboard'|'extension',
- *   name, platform, status, tag (nullable),
- *   steps: Array<{ index, description, kind, selector, url, value }>,
- *   health_score (0-100), created_at, updated_at
- *
- * Does NOT mutate either table. This is a read-only bridge.
+ * Response:
+ *   {
+ *     data: Automation[],   // UNIONed, normalized
+ *     runs: Run[],          // latest 50 automation_runs (dashboard only)
+ *     counts: {
+ *       total, dashboard, extension,
+ *       draft, active, needs_rerecording, needs_recording, fixing, broken,
+ *       recent_runs,
+ *     },
+ *     success_rate: number | null,
+ *     last_run: string | null,
+ *     errors: { ... },
+ *   }
  */
 
 type NormalizedAutomation = {
@@ -44,35 +48,66 @@ type NormalizedAutomation = {
   platform: string
   status: string
   tag: string | null
-  steps: Array<{
-    index: number
-    description: string | null
-    kind: string | null
-    selector: string | null
-    url: string | null
-    value: string | null
-  }>
+  description: string | null
+  steps: Array<Record<string, unknown>>
   health_score: number
   created_at: string | null
   updated_at: string | null
+  last_tested_at: string | null
+  last_error: string | null
+  account_id: string | null
 }
 
-export async function GET(_req: NextRequest) {
-  const [dashRes, extRes, stepsRes] = await Promise.all([
-    supabase
-      .from("automations")
-      .select("id, name, platform, status, tag, steps, health_score, created_at, updated_at"),
+// Map extension platform strings to the dashboard's canonical set so the
+// platform-group renderer picks them up. Extension often stores 'ig',
+// 'facebook', 'linkedin.com', etc. Normalize to dashboard DB vocabulary.
+function normalizeExtensionPlatform(p: string | null | undefined): string {
+  if (!p) return "instagram"
+  const s = String(p).toLowerCase().trim()
+  if (s.includes("instagram") || s === "ig") return "instagram"
+  if (s.includes("facebook") || s === "fb") return "facebook"
+  if (s.includes("linkedin") || s === "li") return "linkedin"
+  if (s.includes("tiktok") || s === "tt") return "tiktok"
+  if (s.includes("youtube") || s === "yt") return "youtube"
+  if (s.includes("twitter") || s === "x.com" || s === "x") return "twitter"
+  if (s.includes("snapchat") || s === "snap") return "snapchat"
+  if (s.includes("pinterest") || s === "pin") return "pinterest"
+  return s
+}
+
+export async function GET(req: NextRequest) {
+  const tagFilter = req.nextUrl.searchParams.get("tag")
+
+  // NOTE: we keep the filter on the dashboard side only — extension rows
+  // have a derived `tag` computed from `category`, which we can apply in
+  // JS after normalization.
+  let dashQuery = supabase
+    .from("automations")
+    .select("id, name, platform, status, tag, description, steps, created_at, updated_at, last_tested_at, last_error, health_score, account_id")
+
+  if (tagFilter) {
+    dashQuery = dashQuery.eq("tag", tagFilter)
+  }
+
+  const [dashRes, extRes, stepsRes, runsRes] = await Promise.all([
+    dashQuery,
     supabase
       .from("autobot_automations")
       .select("id, name, platform, category, status, created_at, last_run_at"),
     supabase
       .from("autobot_steps")
       .select("automation_id, sort_order, type, description, selector, url, value"),
+    supabase
+      .from("automation_runs")
+      .select("id, automation_id, run_type, status, started_at, finished_at, error, steps_completed")
+      .order("started_at", { ascending: false })
+      .limit(50),
   ])
 
   const dashboardRows = dashRes.error ? [] : (dashRes.data || [])
   const extensionRows = extRes.error ? [] : (extRes.data || [])
   const allSteps = stepsRes.error ? [] : (stepsRes.data || [])
+  const runs = runsRes.error ? [] : (runsRes.data || [])
 
   // Group extension steps by their parent automation so we can inline them
   // into the normalized shape (matching dashboard's `steps jsonb` layout).
@@ -83,35 +118,28 @@ export async function GET(_req: NextRequest) {
     stepsByAutomation.set(s.automation_id, list)
   }
 
-  // ── Dashboard rows → normalized ──
+  // ── Dashboard rows → normalized (keep ALL old fields so the page UI
+  //    that currently binds to /api/automations still works 1:1) ──
   const dashNormalized: NormalizedAutomation[] = dashboardRows.map((r: any) => ({
     id: r.id,
-    source: "dashboard",
+    source: "dashboard" as const,
     name: r.name,
     platform: r.platform,
     status: r.status,
     tag: r.tag ?? null,
-    // dashboard stores steps inline as jsonb — already an array of step objects
-    steps: Array.isArray(r.steps)
-      ? r.steps.map((s: any, i: number) => ({
-          index: typeof s.index === "number" ? s.index : i,
-          description: s.description ?? null,
-          kind: s.kind ?? null,
-          selector: s.selectors?.css ?? s.selector ?? null,
-          url: s.url ?? null,
-          value: s.value ?? null,
-        }))
-      : [],
+    description: r.description ?? null,
+    // Keep the original jsonb step objects intact so the recorder /
+    // editor round-trip works unchanged.
+    steps: Array.isArray(r.steps) ? r.steps : [],
     health_score: typeof r.health_score === "number" ? r.health_score : 100,
     created_at: r.created_at,
     updated_at: r.updated_at,
+    last_tested_at: r.last_tested_at ?? null,
+    last_error: r.last_error ?? null,
+    account_id: r.account_id ?? null,
   }))
 
   // ── Extension rows → normalized ──
-  // Extension uses `category` (scrape/outreach) vs dashboard `tag`. We map:
-  //   outreach → outreach_action
-  //   scrape   → lead_enrichment
-  // so the UI can render them under the same tag filters.
   const extNormalized: NormalizedAutomation[] = extensionRows.map((r: any) => {
     const rawSteps = (stepsByAutomation.get(r.id) || [])
       .slice()
@@ -131,25 +159,33 @@ export async function GET(_req: NextRequest) {
 
     return {
       id: r.id,
-      source: "extension",
+      source: "extension" as const,
       name: r.name,
-      platform: r.platform,
+      platform: normalizeExtensionPlatform(r.platform),
       status,
       tag,
+      description: null,
+      // Reshape autobot step rows into objects that look close enough to
+      // dashboard `steps jsonb` that the edit-modal pre-fill works.
       steps: rawSteps.map((s: any, i: number) => ({
         index: i,
         description: s.description ?? null,
-        kind: s.type ?? null,
+        kind: s.type ?? "pending",
+        selectors: s.selector ? { css: s.selector } : {},
         selector: s.selector ?? null,
         url: s.url ?? null,
         value: s.value ?? null,
+        coords: null,
       })),
       // Extension doesn't track health_score; default to 100 unless status is failing.
       health_score: r.status === "failing" ? 50 : 100,
       created_at: r.created_at,
       updated_at: r.last_run_at || r.created_at,
+      last_tested_at: r.last_run_at || null,
+      last_error: null,
+      account_id: null,
     }
-  })
+  }).filter(a => !tagFilter || a.tag === tagFilter)
 
   const data = [...dashNormalized, ...extNormalized].sort((a, b) => {
     const at = a.updated_at ? Date.parse(a.updated_at) : 0
@@ -157,17 +193,37 @@ export async function GET(_req: NextRequest) {
     return bt - at
   })
 
+  // Success rate = (passed + healed) / finished runs. Matches the old
+  // /api/automations semantics exactly.
+  const finished = runs.filter(r => r.status === "passed" || r.status === "failed" || r.status === "healed")
+  const succeeded = finished.filter(r => r.status === "passed" || r.status === "healed").length
+  const success_rate = finished.length === 0 ? null : Math.round((succeeded / finished.length) * 100)
+  const last_run = runs[0]?.started_at || null
+
+  const counts = {
+    total: data.length,
+    dashboard: dashNormalized.length,
+    extension: extNormalized.length,
+    draft: data.filter(a => a.status === "draft").length,
+    needs_recording: data.filter(a => a.status === "needs_recording").length,
+    active: data.filter(a => a.status === "active").length,
+    needs_rerecording: data.filter(a => a.status === "needs_rerecording").length,
+    fixing: data.filter(a => a.status === "fixing").length,
+    broken: data.filter(a => a.status === "broken").length,
+    recent_runs: runs.length,
+  }
+
   return NextResponse.json({
     data,
-    counts: {
-      total: data.length,
-      dashboard: dashNormalized.length,
-      extension: extNormalized.length,
-    },
+    runs,
+    counts,
+    success_rate,
+    last_run,
     errors: {
       dashboard: dashRes.error?.message || null,
       extension: extRes.error?.message || null,
       extension_steps: stepsRes.error?.message || null,
+      runs: runsRes.error?.message || null,
     },
   })
 }

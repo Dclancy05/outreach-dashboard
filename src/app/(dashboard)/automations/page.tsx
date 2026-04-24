@@ -451,6 +451,12 @@ interface DbAutomation {
   last_error: string | null
   health_score: number
   account_id: string | null
+  // `source` is populated by the unified /api/automations/list endpoint.
+  // When present, it's 'dashboard' for native Phase-2 automations and
+  // 'extension' for rows pulled from `autobot_automations` (AutoBot
+  // Chrome extension recordings). The UI uses this to render a small
+  // "From Extension" badge so Dylan can tell where a row came from.
+  source?: "dashboard" | "extension"
 }
 
 interface DbAutomationRun {
@@ -1224,7 +1230,8 @@ function OverviewTab() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/automations")
+      // Unified list: dashboard + extension-recorded automations in one call
+      const res = await fetch("/api/automations/list")
       const data = await res.json()
       setCounts(data.counts || null)
       setSuccessRate(typeof data.success_rate === "number" ? data.success_rate : null)
@@ -1559,7 +1566,8 @@ function MaintenanceTab() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/automations")
+      // Unified list so Maintenance surfaces extension-recorded automations too
+      const res = await fetch("/api/automations/list")
       const data = await res.json()
       setItems(data.data || [])
     } catch {} finally { setLoading(false) }
@@ -1771,7 +1779,11 @@ export default function AutomationsPage() {
 
   const fetchDbAutomations = useCallback(async () => {
     try {
-      const res = await fetch("/api/automations")
+      // Unified list: dashboard-native + AutoBot extension recordings. The
+      // unified endpoint is a superset of /api/automations (same shape +
+      // `source` field on each row), so no other downstream code needs to
+      // change for the merged list to render.
+      const res = await fetch("/api/automations/list")
       const data = await res.json()
       setDbAutomations(data.data || [])
       setDbRuns(data.runs || [])
@@ -2786,12 +2798,23 @@ export default function AutomationsPage() {
                                 {statusBadge}
                               </div>
 
-                              {auto.tag && (
-                                <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-semibold bg-muted/30 text-muted-foreground border border-border/50 mb-2">
-                                  <Tag className="h-2.5 w-2.5" />
-                                  {AUTOMATION_TAGS.find(t => t.value === auto.tag)?.label || auto.tag}
-                                </span>
-                              )}
+                              <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                                {auto.tag && (
+                                  <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-semibold bg-muted/30 text-muted-foreground border border-border/50">
+                                    <Tag className="h-2.5 w-2.5" />
+                                    {AUTOMATION_TAGS.find(t => t.value === auto.tag)?.label || auto.tag}
+                                  </span>
+                                )}
+                                {auto.source === "extension" && (
+                                  <span
+                                    className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-semibold bg-violet-500/20 text-violet-300 border border-violet-500/30"
+                                    title="Recorded via the AutoBot Chrome extension"
+                                  >
+                                    <Video className="h-2.5 w-2.5" />
+                                    From Extension
+                                  </span>
+                                )}
+                              </div>
 
                               <div className="flex items-center justify-between mt-3 pt-2 border-t border-border/20">
                                 <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
