@@ -23,7 +23,7 @@ import {
 import { ALL_PLATFORMS, SOCIAL_PLATFORMS, getPlatform } from "@/lib/platforms"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import VncLoginFlow from "@/components/vnc-login-flow"
+import PlatformLoginModal from "@/components/platform-login-modal"
 import AccountDetailDialog from "@/components/account-detail-dialog"
 import BulkImportDialog from "@/components/bulk-import-dialog"
 import { CookieHealthBadge } from "@/components/cookie-health-badge"
@@ -376,11 +376,13 @@ export default function AccountsPage() {
     steps.push({ day_start: stepCount * d + 1, day_end: 999, daily_limit: m })
     setWarmupForm(f => ({ ...f, steps }))
   }
-  const [vncFlowOpen, setVncFlowOpen] = useState(false)
-  const [vncProxyGroupId, setVncProxyGroupId] = useState("")
-  const [vncProxyIp, setVncProxyIp] = useState("")
-  const [vncProxyLocation, setVncProxyLocation] = useState("")
-  const [vncExistingAccount, setVncExistingAccount] = useState<{ account_id: string; platform: string; username: string } | null>(null)
+  // Guided platform-login modal — replaces the old raw-VNC popup. Uses the
+  // shared VPS Chrome + side-panel instructions + "I'm Logged In" verification
+  // (same component the Automations banner uses). We still track the account
+  // being re-logged so the modal can hand it off to the cookies-snapshot call.
+  const [loginModalOpen, setLoginModalOpen] = useState(false)
+  const [loginModalPlatform, setLoginModalPlatform] = useState<string>("instagram")
+  const [loginModalAccountId, setLoginModalAccountId] = useState<string | undefined>(undefined)
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
   const [editingGroupName, setEditingGroupName] = useState("")
   const [showEditProxyDialog, setShowEditProxyDialog] = useState(false)
@@ -902,21 +904,16 @@ export default function AccountsPage() {
                                 : ageHrs < 24 ? `${ageHrs}h ago`
                                 : `${Math.floor(ageHrs / 24)}d ago`
 
-                              // One-click re-login: opens noVNC pointed at this account's saved
-                              // Chrome profile directory + hydrates cookies from Supabase so Dylan
-                              // either lands on the feed (cookies still valid) or sees the platform's
-                              // own login page with Chrome's saved form prefilled.
+                              // One-click re-login: opens the guided PlatformLoginModal for
+                              // this account's platform. Same shared VPS Chrome + side-panel
+                              // instructions + "I'm Logged In" verification the Automations
+                              // banner uses, with the accountId wired so the cookies-snapshot
+                              // call can associate captured cookies with this Supabase row.
                               const openVnc = (e?: React.MouseEvent) => {
                                 if (e) e.stopPropagation()
-                                setVncProxyGroupId(proxy.id)
-                                setVncProxyIp(proxy.ip)
-                                setVncProxyLocation(proxy.location_city || "")
-                                setVncExistingAccount({
-                                  account_id: a.account_id,
-                                  platform: a.platform,
-                                  username: a.username || a.display_name || "",
-                                })
-                                setVncFlowOpen(true)
+                                setLoginModalPlatform(a.platform)
+                                setLoginModalAccountId(a.account_id)
+                                setLoginModalOpen(true)
                               }
 
                               return (
@@ -1829,14 +1826,16 @@ export default function AccountsPage() {
         </DialogContent>
       </Dialog>
 
-      <VncLoginFlow
-        open={vncFlowOpen}
-        onClose={() => setVncFlowOpen(false)}
-        onComplete={() => { setVncFlowOpen(false); fetchAll() }}
-        proxyGroupId={vncProxyGroupId}
-        proxyIp={vncProxyIp}
-        proxyLocation={vncProxyLocation}
-        existingAccount={vncExistingAccount}
+      {/* Guided platform login modal — replaces the old raw-VNC popup so the
+          "Sign In Now" / "Log into X" buttons behave identically to the
+          Automations page banner: shared VPS Chrome, side-panel instructions,
+          "I'm Logged In" verification. */}
+      <PlatformLoginModal
+        open={loginModalOpen}
+        initialPlatform={loginModalPlatform}
+        accountId={loginModalAccountId}
+        onClose={() => setLoginModalOpen(false)}
+        onComplete={() => { fetchAll() }}
       />
 
       <AccountDetailDialog
@@ -1846,20 +1845,13 @@ export default function AccountsPage() {
         onChanged={fetchAll}
         onLoginClick={(account) => {
           if (!account.proxy_group_id) {
-            toast.error("Assign a proxy group to this account first — VNC login needs a proxy to route through.")
+            toast.error("Assign a proxy group to this account first — login needs a proxy to route through.")
             return
           }
-          const proxy = proxies.find(p => p.id === account.proxy_group_id)
-          setVncProxyGroupId(account.proxy_group_id)
-          setVncProxyIp(proxy?.ip || "")
-          setVncProxyLocation(proxy?.location_city || "")
-          setVncExistingAccount({
-            account_id: account.account_id,
-            platform: account.platform,
-            username: account.username || account.display_name || "",
-          })
+          setLoginModalPlatform(account.platform)
+          setLoginModalAccountId(account.account_id)
           setDetailAccountId(null)
-          setVncFlowOpen(true)
+          setLoginModalOpen(true)
         }}
       />
 
