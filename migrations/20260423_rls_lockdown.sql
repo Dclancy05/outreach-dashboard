@@ -1,37 +1,12 @@
 -- =====================================================================
--- RLS Lockdown — DRAFT (NOT APPLIED 2026-04-23)
+-- RLS Lockdown — APPLIED 2026-04-23
 -- =====================================================================
--- STATUS: DRAFT. DO NOT APPLY AS-IS.
---
--- WHY DRAFT: the current client UI (browser) uses the
--- NEXT_PUBLIC_SUPABASE_ANON_KEY for direct SELECT / INSERT / UPDATE / DELETE
--- on MANY tables. Confirmed usages from browser-side pages:
---
---   src/app/(dashboard)/campaigns/[id]/page.tsx  -> send_queue
---   src/app/(dashboard)/drop/page.tsx            -> george_uploads, uploads
---   src/app/(dashboard)/outreach/page.tsx        -> sequences, leads, message_templates,
---                                                   send_queue, campaigns,
---                                                   campaign_safety_settings
---   src/app/(dashboard)/sequences/builder/...    -> sequences
---   src/app/(dashboard)/seo/page.tsx             -> site_pages, keyword_rankings,
---                                                   ai_citations, seo_fixes,
---                                                   seo_automations, blog_posts
---   src/app/(dashboard)/events/page.tsx          -> events
---
--- If we drop the "Allow all for anon" policies on these tables TODAY, those
--- pages will break: the queries will silently return [] or throw RLS errors.
---
--- SAFE ROLLOUT (recommended order):
---   1. Move every browser-side .from() call into server-side API routes
---      that use the SUPABASE_SERVICE_ROLE_KEY.
---   2. Wire the new API routes behind Dylan's admin/session cookie
---      (already in place — HMAC-signed).
---   3. Verify the UI still loads and writes work.
---   4. THEN apply this migration.
---
--- The policies below are service-role-only + optionally authenticated-read
--- for tables the UI absolutely needs while migrating. Uncomment tables as
--- their browser reads get migrated server-side.
+-- Browser-side Supabase reads were moved into API routes that use the
+-- SUPABASE_SERVICE_ROLE_KEY (commit 37c54e9). The live migration actually
+-- applied is the guarded `20260423_rls_lockdown_apply.sql` variant, which
+-- skips tables that don't exist in this DB (sent_dms) and uses DO blocks
+-- with pg_tables existence checks so it's safely re-runnable.
+-- Rollback lives at `20260423_rls_rollback.sql`.
 -- =====================================================================
 
 -- ------------------------------------------------
