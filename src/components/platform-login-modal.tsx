@@ -38,7 +38,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import {
   Loader2, CheckCircle2, Shield,
   ChevronRight, Instagram, Facebook, Linkedin, Globe,
-  RefreshCw, LogIn, XCircle,
+  RefreshCw, LogIn, XCircle, Save, Clipboard,
 } from "lucide-react"
 import NoVncViewer from "@/components/novnc-viewer"
 
@@ -260,6 +260,22 @@ export default function PlatformLoginModal({
   const [verifying, setVerifying] = useState(false)
   const [remaining, setRemaining] = useState<string[]>(stableRemaining)
   const [lastResult, setLastResult] = useState<"ok" | "still_logged_out" | null>(null)
+  // Cookie-capture status — drives the "Session saved" vs "Saved" chip shown
+  // after a successful "I'm Logged In". `null` = hasn't happened yet or not
+  // applicable (no accountId). "saved_persistent" = cookies written to
+  // Supabase + account row bumped; "saved_soft" = login verified but cookies
+  // couldn't be captured (VPS endpoint not up yet). "failed" = we tried and
+  // something broke we want the user to see.
+  const [captureState, setCaptureState] = useState<
+    null | "saved_persistent" | "saved_soft" | "failed"
+  >(null)
+  // Running tally of consecutive 502s from /api/platforms/cookies-dump across
+  // this session. When it hits 3, we reveal the "I pasted cookies manually"
+  // fallback — belt-and-suspenders for the VPS-SSH saga.
+  const [dump502Streak, setDump502Streak] = useState(0)
+  const [showManualPaste, setShowManualPaste] = useState(false)
+  const [manualPasteText, setManualPasteText] = useState("")
+  const [manualPasteSaving, setManualPasteSaving] = useState(false)
   const hasNavigatedRef = useRef(false)
 
   const info = useMemo(() => instructionsFor(currentPlatform), [currentPlatform])
@@ -273,6 +289,10 @@ export default function PlatformLoginModal({
     setCurrentPlatform(initialPlatform)
     setRemaining(stableRemaining)
     setLastResult(null)
+    setCaptureState(null)
+    setDump502Streak(0)
+    setShowManualPaste(false)
+    setManualPasteText("")
     hasNavigatedRef.current = false
   }, [open, initialPlatform, stableRemaining])
 
@@ -346,31 +366,59 @@ export default function PlatformLoginModal({
       const thisPlatform = results.find(r => r.platform === currentPlatform.toLowerCase())
       const stillLoggedOut = results.filter(r => r.loggedIn === false).map(r => r.platform)
 
-      // Optional: attempt to persist cookies for this account. The VPS doesn't
-      // expose a cookie-dump endpoint yet, so this silently no-ops on 404 —
-      // we'll flip it on the instant Dylan ships the /cookies/dump route.
+      // Persist cookies for this account. After Part B ships, the VPS exposes
+      // GET /cookies/dump which returns the freshest auth cookies straight
+      // from the running Chrome. Until that's live on the deployed VPS, this
+      // path returns 502 and we fall back to a "soft save" chip (login was
+      // verified but cookies won't survive a restart). After 3 consecutive
+      // 502s we reveal a manual-paste escape hatch.
+      let capturedHere: "saved_persistent" | "saved_soft" | "failed" | null = null
       if (accountId) {
         try {
-          const dump = await fetch(`/api/platforms/cookies-dump?platform=${encodeURIComponent(currentPlatform)}`)
+          const dump = await fetch(
+            `/api/platforms/cookies-dump?platform=${encodeURIComponent(currentPlatform)}`,
+            { cache: "no-store" }
+          )
           if (dump.ok) {
+            setDump502Streak(0)
             const dumpBody = await dump.json()
             const cookies = dumpBody?.cookies
             if (Array.isArray(cookies) && cookies.length > 0) {
-              await fetch(`/api/accounts/${encodeURIComponent(accountId)}/cookies/snapshot`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  cookies,
-                  local_storage: dumpBody?.localStorage || null,
-                  captured_by: "platform_login_modal",
-                }),
-              }).catch(() => {})
+              const snap = await fetch(
+                `/api/accounts/${encodeURIComponent(accountId)}/cookies/snapshot`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    cookies,
+                    local_storage: dumpBody?.localStorage || null,
+                    captured_by: "platform_login_modal",
+                    platform: currentPlatform,
+                  }),
+                }
+              )
+              if (snap.ok) {
+                capturedHere = "saved_persistent"
+              } else {
+                capturedHere = "failed"
+              }
+            } else {
+              // VPS responded but jar had no cookies for this domain — treat
+              // as soft save; the login-status probe itself passed.
+              capturedHere = "saved_soft"
             }
+          } else if (dump.status === 502) {
+            setDump502Streak((n) => n + 1)
+            capturedHere = "saved_soft"
+          } else {
+            capturedHere = "saved_soft"
           }
         } catch {
-          // VPS cookie-dump endpoint not deployed yet — ignore silently.
+          // Network error reaching our own /api route — soft save.
+          capturedHere = "saved_soft"
         }
       }
+      setCaptureState(capturedHere)
 
       if (thisPlatform?.loggedIn) {
         setLastResult("ok")
@@ -404,6 +452,81 @@ export default function PlatformLoginModal({
       toast.error(msg)
     } finally {
       setVerifying(false)
+    }
+  }
+
+  // Once the 502 streak hits 3, quietly reveal the manual-paste escape. We
+  // only flip it on — never off — so a subsequent successful capture doesn't
+  // make the fallback disappear mid-flow if the user started pasting.
+  useEffect(() => {
+    if (dump502Streak >= 3) setShowManualPaste(true)
+  }, [dump502Streak])
+
+  // Manual paste: accepts either an array of CDP-style cookies or a newline-
+  // delimited "Cookie: name=value; Domain=.x.com" block. We parse both forms
+  // and hand the normalised array to the snapshot route. Belt-and-suspenders
+  // for the VPS-SSH saga — Dylan can paste cookies from DevTools directly.
+  async function submitManualPaste() {
+    if (!accountId) {
+      toast.error("No account selected — can't save manual cookies.")
+      return
+    }
+    const raw = manualPasteText.trim()
+    if (!raw) {
+      toast.error("Paste cookies first.")
+      return
+    }
+    setManualPasteSaving(true)
+    try {
+      let cookies: unknown = null
+      // Try JSON first — either an array or an object with .cookies
+      try {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) cookies = parsed
+        else if (parsed && Array.isArray((parsed as { cookies?: unknown }).cookies)) {
+          cookies = (parsed as { cookies: unknown }).cookies
+        }
+      } catch {
+        // Not JSON — try "name=value; name2=value2" header format
+        const pairs = raw.split(/;|\n/).map((s) => s.trim()).filter(Boolean)
+        const parsedPairs = pairs.map((p) => {
+          const eq = p.indexOf("=")
+          if (eq <= 0) return null
+          const name = p.slice(0, eq).trim().replace(/^Cookie:\s*/i, "")
+          const value = p.slice(eq + 1).trim()
+          if (!name) return null
+          return { name, value, domain: "", path: "/", httpOnly: false, secure: true, expires: -1 }
+        }).filter(Boolean)
+        if (parsedPairs.length) cookies = parsedPairs
+      }
+      if (!Array.isArray(cookies) || cookies.length === 0) {
+        toast.error("Couldn't read any cookies out of that paste — try exporting as JSON.")
+        return
+      }
+      const res = await fetch(
+        `/api/accounts/${encodeURIComponent(accountId)}/cookies/snapshot`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cookies,
+            captured_by: "manual_paste",
+            platform: currentPlatform,
+          }),
+        }
+      )
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body?.error || `snapshot failed (${res.status})`)
+      }
+      setCaptureState("saved_persistent")
+      setManualPasteText("")
+      toast.success("Cookies saved — this account is set.")
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Couldn't save cookies"
+      toast.error(msg)
+    } finally {
+      setManualPasteSaving(false)
     }
   }
 
@@ -523,6 +646,91 @@ export default function PlatformLoginModal({
                     <span>All set — closing this window in a moment.</span>
                   </div>
                 )}
+                {/* Capture-state chip — tells the user whether we just wrote
+                    their session to Supabase (persistent) or only verified the
+                    login (soft). Different copy so we don't lie about
+                    restart-proofing when the VPS dump endpoint is still down. */}
+                <AnimatePresence>
+                  {captureState === "saved_persistent" && (
+                    <motion.div
+                      key="saved-persistent"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      className="rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-3 text-[11px] text-emerald-200 flex items-start gap-2"
+                    >
+                      <Save className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>Session saved — you won&apos;t need to log in again.</span>
+                    </motion.div>
+                  )}
+                  {captureState === "saved_soft" && (
+                    <motion.div
+                      key="saved-soft"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      className="rounded-xl bg-sky-500/10 border border-sky-500/25 p-3 text-[11px] text-sky-200 flex items-start gap-2"
+                    >
+                      <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>Saved.</span>
+                    </motion.div>
+                  )}
+                  {captureState === "failed" && (
+                    <motion.div
+                      key="saved-failed"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      className="rounded-xl bg-amber-500/10 border border-amber-500/25 p-3 text-[11px] text-amber-200 flex items-start gap-2"
+                    >
+                      <XCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>Login looks good, but we couldn&apos;t save the session. Try again in a moment.</span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Manual paste fallback. Revealed after 3 consecutive 502s
+                    from /cookies/dump (VPS endpoint down). Accepts JSON or
+                    a raw "name=value; name2=value2" header string. */}
+                <AnimatePresence>
+                  {showManualPaste && accountId && (
+                    <motion.div
+                      key="manual-paste"
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="rounded-xl bg-muted/30 border border-border/40 p-3 text-[11px] space-y-2 overflow-hidden"
+                    >
+                      <div className="flex items-center gap-1.5 text-foreground font-medium">
+                        <Clipboard className="h-3.5 w-3.5" />
+                        I pasted cookies manually
+                      </div>
+                      <p className="text-muted-foreground leading-relaxed">
+                        Session-capture service is slow right now. Paste your
+                        cookies as JSON (from DevTools → Application → Cookies
+                        → Copy all as JSON) and we&apos;ll save them directly.
+                      </p>
+                      <textarea
+                        value={manualPasteText}
+                        onChange={(e) => setManualPasteText(e.target.value)}
+                        placeholder='[{"name":"sessionid","value":"..."}]'
+                        className="w-full h-24 rounded-md bg-background/80 border border-border/50 p-2 text-[10px] font-mono resize-none focus:outline-none focus:ring-1 focus:ring-violet-500/50"
+                      />
+                      <Button
+                        size="sm"
+                        onClick={submitManualPaste}
+                        disabled={manualPasteSaving || !manualPasteText.trim()}
+                        className="w-full h-7 rounded-lg text-[11px] bg-violet-600 hover:bg-violet-500"
+                      >
+                        {manualPasteSaving ? (
+                          <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Saving...</>
+                        ) : (
+                          <><Save className="h-3 w-3 mr-1" /> Save cookies</>
+                        )}
+                      </Button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </div>
           </div>

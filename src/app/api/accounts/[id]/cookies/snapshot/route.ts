@@ -32,6 +32,10 @@ export async function POST(
   const local_storage = body?.local_storage ?? null
   const session_id = body?.session_id ?? null
   const captured_by = body?.captured_by || "user_login"
+  const platform =
+    typeof body?.platform === "string" && body.platform.trim()
+      ? body.platform.trim().toLowerCase()
+      : null
 
   if (!Array.isArray(cookies)) {
     return NextResponse.json(
@@ -42,7 +46,9 @@ export async function POST(
 
   const now = new Date().toISOString()
 
-  // 1. Insert snapshot
+  // 1. Insert snapshot. `platform` was added in migration
+  // 20260424_cookie_snapshots_platform.sql — it's nullable so older callers
+  // that don't pass it still work.
   const { data: snap, error: insertErr } = await supabase
     .from("account_cookie_snapshots")
     .insert({
@@ -53,6 +59,7 @@ export async function POST(
       captured_by,
       cookie_count: cookies.length,
       session_id,
+      platform,
     })
     .select("id")
     .single()

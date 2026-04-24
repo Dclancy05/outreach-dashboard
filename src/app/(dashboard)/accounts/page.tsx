@@ -18,7 +18,7 @@ import {
   Server, ChevronDown, ChevronUp, Settings, Zap, Calendar,
   Activity, RefreshCw, Trash2, Edit2, ExternalLink, MapPin, Sparkles,
   Monitor, Layers, Pencil, Check, X, Eye, Link2, CheckCircle2, AlertTriangle,
-  ArrowRight, Info,
+  ArrowRight, Info, Loader2,
 } from "lucide-react"
 import { ALL_PLATFORMS, SOCIAL_PLATFORMS, getPlatform } from "@/lib/platforms"
 import Link from "next/link"
@@ -383,6 +383,13 @@ export default function AccountsPage() {
   const [loginModalOpen, setLoginModalOpen] = useState(false)
   const [loginModalPlatform, setLoginModalPlatform] = useState<string>("instagram")
   const [loginModalAccountId, setLoginModalAccountId] = useState<string | undefined>(undefined)
+  // Tracks accounts whose Connected badge should play a "just went green"
+  // ring-pulse animation. Set by the optimistic flip in handleLoginComplete,
+  // auto-cleared ~1.6s later. Keyed by account_id so each row animates
+  // independently. Empty set = no rows animating.
+  const [flipFlash, setFlipFlash] = useState<Set<string>>(new Set())
+  // Per-row "Verify Now" spinner state. Keyed by account_id.
+  const [verifyingAcct, setVerifyingAcct] = useState<Set<string>>(new Set())
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
   const [editingGroupName, setEditingGroupName] = useState("")
   const [showEditProxyDialog, setShowEditProxyDialog] = useState(false)
@@ -409,6 +416,101 @@ export default function AccountsPage() {
   }, [])
 
   useEffect(() => { fetchAll() }, [fetchAll])
+
+  // Lightweight refetch that doesn't toggle the top-level spinner — used when
+  // the login modal reports back so Dylan sees the badge flip in-place
+  // instead of the whole page flashing a skeleton.
+  const refreshAccounts = useCallback(async () => {
+    try {
+      const accountRes = await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "get_accounts", limit: 1000 }),
+      }).then((r) => r.json())
+      if (Array.isArray(accountRes?.data)) setAccounts(accountRes.data)
+    } catch {
+      // Non-fatal — the full fetchAll() still runs later as a belt-and-suspenders.
+    }
+  }, [])
+
+  // Called by the PlatformLoginModal after each successful verify. We:
+  //   1. Optimistically flip any accounts whose platform just turned green
+  //      so the badge goes green in < 16ms — no waiting on the DB round-trip.
+  //   2. Trigger the flash animation on those rows.
+  //   3. Kick a silent refetch so the server-computed fields (session_age,
+  //      has_auth_cookie, etc) catch up.
+  const handleLoginComplete = useCallback(
+    ({ stillLoggedOut }: { stillLoggedOut: string[] }) => {
+      const loggedOut = new Set((stillLoggedOut || []).map((p) => p.toLowerCase()))
+      const nowFlashing = new Set<string>()
+      setAccounts((prev) => {
+        if (!Array.isArray(prev)) return prev
+        return prev.map((a) => {
+          if (!a?.platform) return a
+          const p = a.platform.toLowerCase()
+          // Google is a band booster — never flag as "needs login"
+          if (p === "google") return a
+          if (loggedOut.has(p)) return a
+          // Platform is green now. Only flip rows that were actually in a
+          // needs-signin / expired state before — don't re-flash already-
+          // active ones every time Dylan closes the modal.
+          const prevEff = effectiveStatus(a)
+          if (prevEff === "needs_signin" || prevEff === "expired" || prevEff === "pending_setup") {
+            nowFlashing.add(a.account_id)
+            return { ...a, session_status: "active", has_auth_cookie: true }
+          }
+          return a
+        })
+      })
+      if (nowFlashing.size > 0) {
+        setFlipFlash((s) => {
+          const next = new Set(s)
+          nowFlashing.forEach((id) => next.add(id))
+          return next
+        })
+        window.setTimeout(() => {
+          setFlipFlash((s) => {
+            const next = new Set(s)
+            nowFlashing.forEach((id) => next.delete(id))
+            return next
+          })
+        }, 1600)
+      }
+      // Silent refetch so server-derived fields catch up, keeping the flipped
+      // optimistic state in the meantime.
+      refreshAccounts()
+    },
+    [refreshAccounts]
+  )
+
+  // Per-row "Verify Now" — re-probes login-status for this account's platform
+  // without opening the full modal. Updates the badge optimistically if the
+  // probe comes back green.
+  const verifyAccountNow = useCallback(async (accountId: string, platform: string) => {
+    if (!accountId || !platform) return
+    setVerifyingAcct((s) => { const n = new Set(s); n.add(accountId); return n })
+    try {
+      const r = await fetch(
+        `/api/platforms/login-status?refresh=1&platforms=${encodeURIComponent(platform)}`,
+        { cache: "no-store" }
+      )
+      const data = await r.json().catch(() => ({}))
+      const hit = Array.isArray(data?.results)
+        ? data.results.find((x: { platform?: string }) => String(x?.platform || "").toLowerCase() === platform.toLowerCase())
+        : null
+      if (hit?.loggedIn) {
+        handleLoginComplete({ stillLoggedOut: [] })
+        toast.success(`${platform} — still signed in`)
+      } else {
+        toast.error(`${platform} — looks signed out. Click the row to sign in.`)
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Couldn't verify"
+      toast.error(msg)
+    } finally {
+      setVerifyingAcct((s) => { const n = new Set(s); n.delete(accountId); return n })
+    }
+  }, [handleLoginComplete])
 
   async function createProxy() {
     const res = await fetch("/api/proxy-groups", {
@@ -925,6 +1027,19 @@ export default function AccountsPage() {
                                 setLoginModalOpen(true)
                               }
 
+                              // Flash ring — briefly highlights a row whose
+                              // login just flipped to Connected in this session.
+                              // Driven by `handleLoginComplete` in the page-
+                              // level state; auto-clears after ~1.6s.
+                              const justFlipped = flipFlash.has(a.account_id)
+                              // If the platform is active but we have no auth
+                              // cookie on file, cookies didn't get captured
+                              // (VPS dump endpoint down or offline profile).
+                              // We show a subtle nudge so Dylan knows a
+                              // restart will lose the session.
+                              const needsCookieCapture = isActive && !a.has_auth_cookie && !isGoogleBooster
+                              const verifyBusy = verifyingAcct.has(a.account_id)
+
                               return (
                                 <div
                                   key={a.account_id}
@@ -934,6 +1049,7 @@ export default function AccountsPage() {
                                     needsAttn
                                       ? "border-amber-500/40 bg-amber-500/5 hover:bg-amber-500/10 hover:border-amber-500/60 ring-1 ring-amber-500/20"
                                       : "border-border/40 bg-card/40 hover:bg-card/60 hover:border-border",
+                                    justFlipped && "ring-2 ring-emerald-400/70 shadow-[0_0_20px_-4px_rgba(16,185,129,0.55)] animate-pulse",
                                   )}
                                   onClick={() => (needsAttn && !isGoogleBooster) ? openVnc() : setDetailAccountId(a.account_id)}
                                   title={(needsAttn && !isGoogleBooster) ? "Click to sign in — opens your saved Chrome profile" : "Click for full details"}
@@ -947,18 +1063,44 @@ export default function AccountsPage() {
                                       {(effStatus === "banned" || a.status === "flagged") && <AlertTriangle className="h-3 w-3 text-red-400 shrink-0" />}
                                     </div>
                                     <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-                                      <Badge className={cn("text-[10px]", statusColors[effStatus] || "bg-muted/30")}>{statusLabel(effStatus)}</Badge>
+                                      <motion.div
+                                        initial={false}
+                                        animate={justFlipped ? { scale: [1, 1.15, 1] } : { scale: 1 }}
+                                        transition={{ duration: 0.55, ease: "easeOut" }}
+                                      >
+                                        <Badge className={cn("text-[10px]", statusColors[effStatus] || "bg-muted/30")}>{statusLabel(effStatus)}</Badge>
+                                      </motion.div>
                                       {isActive && !isGoogleBooster && (
-                                        <button
-                                          onClick={openVnc}
-                                          className="text-blue-400 hover:text-blue-300 transition-colors"
-                                          title="Re-login / Swap account"
-                                        >
-                                          <RefreshCw className="h-3 w-3" />
-                                        </button>
+                                        <>
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); verifyAccountNow(a.account_id, a.platform) }}
+                                            disabled={verifyBusy}
+                                            className="text-emerald-400 hover:text-emerald-300 transition-colors disabled:opacity-50"
+                                            title="Verify this login is still active (no re-login needed)"
+                                          >
+                                            {verifyBusy ? (
+                                              <Loader2 className="h-3 w-3 animate-spin" />
+                                            ) : (
+                                              <CheckCircle2 className="h-3 w-3" />
+                                            )}
+                                          </button>
+                                          <button
+                                            onClick={openVnc}
+                                            className="text-blue-400 hover:text-blue-300 transition-colors"
+                                            title="Re-login / Swap account"
+                                          >
+                                            <RefreshCw className="h-3 w-3" />
+                                          </button>
+                                        </>
                                       )}
                                     </div>
                                   </div>
+                                  {needsCookieCapture && (
+                                    <div className="text-[10px] text-amber-300/80 italic px-1 flex items-start gap-1">
+                                      <Info className="h-2.5 w-2.5 mt-0.5 shrink-0" />
+                                      <span>Login may not persist — click <b>Sign In</b> again to save it.</span>
+                                    </div>
+                                  )}
                                   {needsAttn && !isGoogleBooster && (
                                     <Button
                                       size="sm"
@@ -1150,7 +1292,8 @@ export default function AccountsPage() {
                             "bg-card/60 shadow-lg",
                             "hover:shadow-xl hover:border-border transition-all duration-300",
                             platformBorders[platform] || "border-l-muted-foreground",
-                            selectedAccounts.has(a.account_id) ? "border-emerald-500/60 ring-2 ring-emerald-500/30" : "border-border/50"
+                            selectedAccounts.has(a.account_id) ? "border-emerald-500/60 ring-2 ring-emerald-500/30" : "border-border/50",
+                            flipFlash.has(a.account_id) && "ring-2 ring-emerald-400/70 shadow-[0_0_22px_-2px_rgba(16,185,129,0.55)] animate-pulse"
                           )}
                           onClick={() => setDetailAccountId(a.account_id)}
                         >
@@ -1849,7 +1992,7 @@ export default function AccountsPage() {
         initialPlatform={loginModalPlatform}
         accountId={loginModalAccountId}
         onClose={() => setLoginModalOpen(false)}
-        onComplete={() => { fetchAll() }}
+        onComplete={handleLoginComplete}
       />
 
       <AccountDetailDialog

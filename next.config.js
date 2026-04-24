@@ -21,6 +21,24 @@ const nextConfig = {
       },
     ]
   },
+  // @novnc/novnc's compiled CJS emits a top-level await for a WebCodecs H264
+  // feature check. Webpack refuses that in non-ESM modules, so we (a) opt
+  // into the `topLevelAwait` experiment and (b) tell webpack to parse the
+  // novnc source as ESM so TLA is legal there. Both are safe — Next.js only
+  // ships to modern browsers that support top-level await.
+  webpack: (config) => {
+    config.experiments = {
+      ...(config.experiments || {}),
+      topLevelAwait: true,
+    }
+    config.module = config.module || {}
+    config.module.rules = config.module.rules || []
+    config.module.rules.push({
+      test: /node_modules[\\/]@novnc[\\/]novnc[\\/]lib[\\/].*\.js$/,
+      type: 'javascript/esm',
+    })
+    return config
+  },
 }
 
 module.exports = withSentryConfig(nextConfig, {
