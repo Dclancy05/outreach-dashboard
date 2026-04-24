@@ -12,6 +12,11 @@
  * between Instagram / Facebook / LinkedIn / etc. using `/api/platforms/goto`,
  * so we reuse ONE persistent browser (no new VNC session per platform).
  *
+ * The VNC view is rendered by `NoVncViewer`, which speaks the RFB protocol
+ * over WebSocket directly to the VPS. There's no iframe and no pop-out window
+ * anymore — the viewer lives inside the modal, connection lifecycle (loading
+ * / connected / error + reconnect) is owned by that component.
+ *
  * On "I'm Logged In", the modal:
  *   1. Refreshes `/api/platforms/login-status` to re-probe the platforms
  *   2. Reports which are now green / still needing login via toast
@@ -31,18 +36,11 @@ import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { motion, AnimatePresence } from "framer-motion"
 import {
-  Monitor, Loader2, CheckCircle2, ArrowRight, Shield,
+  Loader2, CheckCircle2, Shield,
   ChevronRight, Instagram, Facebook, Linkedin, Globe,
-  RefreshCw, LogIn, ExternalLink, XCircle,
+  RefreshCw, LogIn, XCircle,
 } from "lucide-react"
-
-// Public VNC iframe URL + plaintext password (Vercel env). The URL itself is
-// public and auth still requires the noVNC password + Tailscale reachability.
-const VNC_URL = process.env.NEXT_PUBLIC_VNC_URL || "https://srv1197943.taild42583.ts.net/vnc.html"
-const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || ""
-const VNC_EMBED_URL = VNC_PASSWORD
-  ? `${VNC_URL}${VNC_URL.includes("?") ? "&" : "?"}autoconnect=true&resize=scale&password=${encodeURIComponent(VNC_PASSWORD)}`
-  : ""
+import NoVncViewer from "@/components/novnc-viewer"
 
 // Canonical login URL per platform. /api/platforms/goto forwards this to the
 // VPS's single Chrome instance so the user lands on the right login page
@@ -192,12 +190,6 @@ function instructionsFor(platform: string) {
     }
 }
 
-// Reduced from 6s — the VPS nginx sets X-Frame-Options: DENY which blocks the
-// iframe silently (Chrome renders "refused to connect" without firing onLoad).
-// Fall back to the pop-out window after 2.5s instead of making Dylan stare at
-// an error message for 6 full seconds before something happens.
-const VNC_LOAD_TIMEOUT_MS = 2500
-
 interface PlatformLoginModalProps {
   open: boolean
   onClose: () => void
@@ -265,20 +257,10 @@ export default function PlatformLoginModal({
 
   const [currentPlatform, setCurrentPlatform] = useState(initialPlatform)
   const [navigating, setNavigating] = useState<string | null>(null)
-  const [vncLoaded, setVncLoaded] = useState(false)
-  // Start in "timed out" state — the VPS nginx sends X-Frame-Options: DENY, so
-  // the iframe renders an error page with onLoad still firing. That made the
-  // iframe look permanently broken for Dylan. Default to the pop-out window
-  // UX (which actually works) until the nginx config is relaxed. When
-  // NEXT_PUBLIC_VNC_IFRAME_ENABLED=true is set, we'll try the iframe first.
-  const iframeEnabled = process.env.NEXT_PUBLIC_VNC_IFRAME_ENABLED === "true"
-  const [vncTimedOut, setVncTimedOut] = useState(!iframeEnabled)
   const [verifying, setVerifying] = useState(false)
   const [remaining, setRemaining] = useState<string[]>(stableRemaining)
   const [lastResult, setLastResult] = useState<"ok" | "still_logged_out" | null>(null)
-  const popupRef = useRef<Window | null>(null)
   const hasNavigatedRef = useRef(false)
-  const popoutOpenedRef = useRef(false)
 
   const info = useMemo(() => instructionsFor(currentPlatform), [currentPlatform])
 
@@ -290,14 +272,9 @@ export default function PlatformLoginModal({
     if (!open) return
     setCurrentPlatform(initialPlatform)
     setRemaining(stableRemaining)
-    setVncLoaded(false)
-    // Keep starting in "timed out" state when iframe is disabled — see the
-    // state init comment above for why we skip the iframe attempt.
-    setVncTimedOut(!iframeEnabled)
     setLastResult(null)
     hasNavigatedRef.current = false
-    popoutOpenedRef.current = false
-  }, [open, initialPlatform, stableRemaining, iframeEnabled])
+  }, [open, initialPlatform, stableRemaining])
 
   // Navigate VPS Chrome to the platform's login URL on first open. We
   // fire-and-forget — if the /goto endpoint is momentarily down the user can
@@ -321,15 +298,11 @@ export default function PlatformLoginModal({
       }
       setCurrentPlatform(platform)
       toast.success(`Opened ${info.label} login`)
-      // Pull the user's attention back to the pop-out window (if it's still
-      // alive) so they see the newly-navigated page.
-      if (popupRef.current && !popupRef.current.closed) {
-        try { popupRef.current.focus() } catch {}
-      }
-    } catch (e: any) {
-      // Non-fatal — the iframe is still showing the VPS Chrome. Surface the
+    } catch (e: unknown) {
+      // Non-fatal — the viewer is still showing the VPS Chrome. Surface the
       // error so Dylan knows what happened but don't block the flow.
-      toast.error(`Couldn't auto-open ${platform} — use the platform buttons or type the URL: ${e?.message || "unknown error"}`)
+      const msg = e instanceof Error ? e.message : "unknown error"
+      toast.error(`Couldn't auto-open ${platform} — use the platform buttons or type the URL: ${msg}`)
     } finally {
       setNavigating(null)
     }
@@ -354,57 +327,6 @@ export default function PlatformLoginModal({
     navigateToRef.current(initialPlatform).catch(() => {})
   }, [open, initialPlatform])
 
-  // Helper: open (or focus) the VNC pop-out window. We reuse the same window
-  // name so clicking "Open Browser Window" from an already-open modal just
-  // focuses the existing window instead of spawning new ones.
-  const openVncWindow = useCallback(() => {
-    if (typeof window === "undefined") return null
-    const url = VNC_EMBED_URL || VNC_URL
-    if (!url) return null
-    try {
-      // window.open returns the existing window for the same name if it's
-      // still open, giving us natural deduplication.
-      const w = window.open(url, "outreach-vnc-login", "width=1400,height=900,noopener=no")
-      popupRef.current = w
-      if (w && typeof w.focus === "function") {
-        try { w.focus() } catch {}
-      }
-      return w
-    } catch {
-      return null
-    }
-  }, [])
-
-  // Auto-open the VNC pop-out the first time the modal opens. The modal's
-  // own open event is a user gesture, so this won't be blocked by popup
-  // blockers. If the user closes the popup, they can reopen via the
-  // "Open Browser Window" CTA.
-  useEffect(() => {
-    if (!open) return
-    if (popoutOpenedRef.current) return
-    if (iframeEnabled) return // iframe path — no popup needed
-    popoutOpenedRef.current = true
-    openVncWindow()
-  }, [open, iframeEnabled, openVncWindow])
-
-  // VNC iframe load timeout — same pattern as RecordingModal. If the iframe
-  // doesn't fire onLoad within 6s (x-frame-options: DENY silently kills
-  // onLoad), fall back to the "Pop Out Browser" button so the user can still
-  // complete the login.
-  useEffect(() => {
-    if (!open) return
-    if (vncLoaded || vncTimedOut) return
-    if (!VNC_EMBED_URL) {
-      // No password env — skip straight to pop-out fallback.
-      setVncTimedOut(true)
-      return
-    }
-    const t = setTimeout(() => {
-      if (!vncLoaded) setVncTimedOut(true)
-    }, VNC_LOAD_TIMEOUT_MS)
-    return () => clearTimeout(t)
-  }, [open, vncLoaded, vncTimedOut])
-
   async function confirmLogin() {
     setVerifying(true)
     setLastResult(null)
@@ -416,10 +338,11 @@ export default function PlatformLoginModal({
           ["instagram", "facebook", "linkedin", "tiktok"].join(",")
         )}`
       )
-      const data = await probe.json().catch(() => ({} as any))
-      const results: Array<{ platform: string; loggedIn: boolean }> = Array.isArray(data?.results)
-        ? data.results
-        : []
+      const data = await probe.json().catch(() => ({} as unknown))
+      const results: Array<{ platform: string; loggedIn: boolean }> =
+        Array.isArray((data as { results?: unknown })?.results)
+          ? (data as { results: Array<{ platform: string; loggedIn: boolean }> }).results
+          : []
       const thisPlatform = results.find(r => r.platform === currentPlatform.toLowerCase())
       const stillLoggedOut = results.filter(r => r.loggedIn === false).map(r => r.platform)
 
@@ -476,16 +399,15 @@ export default function PlatformLoginModal({
         // All done — close after a short victory moment.
         setTimeout(() => onClose(), 900)
       }
-    } catch (e: any) {
-      toast.error(e?.message || "Couldn't verify login status")
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Couldn't verify login status"
+      toast.error(msg)
     } finally {
       setVerifying(false)
     }
   }
 
   function handleClose() {
-    setVncLoaded(false)
-    setVncTimedOut(false)
     setLastResult(null)
     onClose()
   }
@@ -605,7 +527,7 @@ export default function PlatformLoginModal({
             </div>
           </div>
 
-          {/* ───────────── Right: VNC iframe ───────────── */}
+          {/* ───────────── Right: embedded VNC viewer ───────────── */}
           <div className="flex-1 relative bg-black/90 flex flex-col">
             {/* Platform switcher — jumps the shared VPS Chrome between socials
                 without killing the session. Hitting any of these navigates the
@@ -671,68 +593,10 @@ export default function PlatformLoginModal({
                 <RefreshCw className={cn("h-3 w-3 mr-1", navigating && "animate-spin")} />
                 Reload login page
               </Button>
-              <a
-                href={VNC_EMBED_URL || VNC_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="ml-auto text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
-                title="Open the browser in a separate window — helpful on slow connections"
-              >
-                <ExternalLink className="h-3 w-3" /> Pop Out
-              </a>
             </div>
 
             <div className="relative flex-1">
-              {VNC_EMBED_URL && !vncTimedOut ? (
-                <>
-                  {!vncLoaded && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-10">
-                      <Loader2 className="h-8 w-8 text-violet-400 animate-spin" />
-                      <p className="text-sm text-muted-foreground">Loading browser view...</p>
-                      <p className="text-[11px] text-muted-foreground/80 max-w-sm text-center">
-                        Waiting for {info.label} to load. If this hangs for more
-                        than a few seconds, click Pop Out Browser.
-                      </p>
-                    </div>
-                  )}
-                  <iframe
-                    src={VNC_EMBED_URL}
-                    className="w-full h-full border-0"
-                    onLoad={() => setVncLoaded(true)}
-                    allow="clipboard-read; clipboard-write"
-                  />
-                </>
-              ) : (
-                <div className="h-full flex items-center justify-center p-8">
-                  <div className="text-center space-y-5 max-w-md">
-                    <div className="relative mx-auto h-20 w-20 rounded-2xl bg-gradient-to-br from-violet-500/20 to-purple-500/20 border border-violet-500/30 flex items-center justify-center">
-                      <Monitor className="h-10 w-10 text-violet-300" />
-                      <span className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full bg-emerald-400 border-2 border-background animate-pulse" />
-                    </div>
-                    <div className="space-y-1.5">
-                      <h3 className="text-xl font-bold">Your {info.label} browser is open</h3>
-                      <p className="text-sm text-muted-foreground">
-                        We opened a new window with the shared browser. Sign in
-                        to {info.label} there, then come back here and click
-                        <span className="font-semibold text-emerald-300"> I&apos;m Logged In</span>.
-                      </p>
-                    </div>
-                    <motion.button
-                      whileHover={{ scale: 1.03 }}
-                      whileTap={{ scale: 0.97 }}
-                      onClick={openVncWindow}
-                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-400 hover:to-purple-500 text-white font-semibold transition-all shadow-lg shadow-purple-500/30"
-                    >
-                      <ExternalLink className="h-5 w-5" />
-                      Re-open Browser Window
-                    </motion.button>
-                    <p className="text-[11px] text-muted-foreground/80">
-                      Lost the window? Click the button above to reopen it.
-                      Steps are on the left <ArrowRight className="inline h-3 w-3" />
-                    </p>
-                  </div>
-                </div>
-              )}
+              <NoVncViewer />
             </div>
           </div>
         </div>
