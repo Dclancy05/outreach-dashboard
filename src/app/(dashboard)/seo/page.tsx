@@ -13,7 +13,6 @@ import { Switch } from "@/components/ui/switch"
 import ReactMarkdown from "react-markdown"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { createClient } from "@supabase/supabase-js"
 import {
   Search, Globe, FileText, BarChart3, Bot, Shield, Zap, Plus, RefreshCw,
   TrendingUp, TrendingDown, Minus, Eye, Edit3, Copy, Trash2, ExternalLink,
@@ -25,10 +24,29 @@ import {
 
 const PageBuilder = lazy(() => import("@/components/seo/page-builder"))
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://yfufocegjhxxffqtkvkr.supabase.co",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlmdWZvY2Vnamh4eGZmcXRrdmtyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkyOTIyODYsImV4cCI6MjA4NDg2ODI4Nn0.uqgHS-X8K-0vM37BJPTzc6a0cFUreON3P6zgmp2HSjA"
-)
+// All DB reads/writes on this page go through /api/seo/* routes so we can
+// lock the DB down with RLS — the browser never touches Supabase REST directly.
+async function apiGET<T>(url: string): Promise<T[]> {
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return []
+    const json = await res.json()
+    return (json.data || []) as T[]
+  } catch { return [] }
+}
+async function apiJSON(method: string, url: string, body?: unknown): Promise<{ ok: boolean; error?: string; data?: unknown }> {
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+    const json = await res.json().catch(() => ({}))
+    return { ok: res.ok, error: json.error, data: json.data }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Network error" }
+  }
+}
 
 const ctn = { hidden: {}, show: { transition: { staggerChildren: 0.06 } } }
 const itm = { hidden: { opacity: 0, y: 16 }, show: { opacity: 1, y: 0, transition: { duration: 0.4 } } }
@@ -112,14 +130,14 @@ export default function SEOCommandCenter() {
   const fetchAll = useCallback(async () => {
     setLoading(true)
     const [p, k, c, f, a, b] = await Promise.all([
-      supabase.from("site_pages").select("*").order("created_at", { ascending: false }),
-      supabase.from("keyword_rankings").select("*").order("created_at", { ascending: false }),
-      supabase.from("ai_citations").select("*").order("checked_at", { ascending: false }).limit(50),
-      supabase.from("seo_fixes").select("*").order("applied_at", { ascending: false }).limit(50),
-      supabase.from("seo_automations").select("*").order("created_at", { ascending: false }),
-      supabase.from("blog_posts").select("*").order("created_at", { ascending: false }),
+      apiGET<SitePage>("/api/seo/pages"),
+      apiGET<KeywordRanking>("/api/seo/keywords"),
+      apiGET<AiCitation>("/api/seo/citations"),
+      apiGET<SeoFix>("/api/seo/fixes"),
+      apiGET<SeoAutomation>("/api/seo/automations"),
+      apiGET<BlogPost>("/api/seo/blog"),
     ])
-    setPages(p.data || []); setKeywords(k.data || []); setCitations(c.data || []); setFixes(f.data || []); setAutomations(a.data || []); setBlogs(b.data || [])
+    setPages(p); setKeywords(k); setCitations(c.slice(0, 50)); setFixes(f.slice(0, 50)); setAutomations(a); setBlogs(b)
     setLoading(false)
   }, [])
   useEffect(() => { fetchAll() }, [fetchAll])
@@ -152,62 +170,74 @@ export default function SEOCommandCenter() {
     return g
   }, [keywords])
 
-  // CRUD
+  // CRUD — all DB ops now go through /api/seo/* (service_role, RLS-safe)
   async function createPage() {
     if (!npTitle || !npUrl) { toast.error("Title and URL required"); return }
-    const { error } = await supabase.from("site_pages").insert({ title: npTitle, url_path: npUrl.startsWith("/") ? npUrl : "/" + npUrl, niche: npNiche || null, service: npService || null, page_type: npType, status: "draft" })
-    if (error) toast.error(error.message); else { toast.success("Page created!"); setShowNewPage(false); setNpTitle(""); setNpUrl(""); fetchAll() }
+    const r = await apiJSON("POST", "/api/seo/pages", { title: npTitle, url_path: npUrl.startsWith("/") ? npUrl : "/" + npUrl, niche: npNiche || null, service: npService || null, page_type: npType, status: "draft" })
+    if (!r.ok) toast.error(r.error || "Create failed"); else { toast.success("Page created!"); setShowNewPage(false); setNpTitle(""); setNpUrl(""); fetchAll() }
   }
   async function generatePages() {
     if (!genService || !genNiches.length) { toast.error("Select service and niches"); return }
     setGenLoading(true)
     const ins = genNiches.map(n => ({ title: `${n} ${genService} — Current`, url_path: `/services/${n.toLowerCase().replace(/\s+/g, "-")}/${genService.toLowerCase().replace(/\s+/g, "-")}`, niche: n, service: genService, page_type: "landing", status: "draft", meta_description: `Professional ${genService.toLowerCase()} for ${n.toLowerCase()} businesses in NYC.`, h1: `${genService} for ${n} Businesses` }))
-    const { error } = await supabase.from("site_pages").insert(ins)
-    if (error) toast.error(error.message); else { toast.success(`${genNiches.length} pages generated!`); setShowGenPages(false); setGenNiches([]); fetchAll() }
+    // API accepts a single row or array via upsert
+    const results = await Promise.all(ins.map(row => apiJSON("POST", "/api/seo/pages", row)))
+    const firstErr = results.find(r => !r.ok)
+    if (firstErr) toast.error(firstErr.error || "Generate failed"); else { toast.success(`${genNiches.length} pages generated!`); setShowGenPages(false); setGenNiches([]); fetchAll() }
     setGenLoading(false)
   }
-  async function deletePage(id: string) { await supabase.from("site_pages").delete().eq("id", id); toast.success("Deleted"); fetchAll() }
-  async function clonePage(p: SitePage) { const { id, created_at, updated_at, ...rest } = p; await supabase.from("site_pages").insert({ ...rest, title: rest.title + " (Copy)", url_path: rest.url_path + "-copy", status: "draft", is_published: false }); toast.success("Cloned!"); fetchAll() }
-  async function savePage(pid: string, data: { grapejs_data: unknown; grapejs_html: string; grapejs_css: string }) { await supabase.from("site_pages").update({ ...data, updated_at: new Date().toISOString() }).eq("id", pid); toast.success("Saved!"); fetchAll() }
-  async function togglePub(p: SitePage) { await supabase.from("site_pages").update({ is_published: !p.is_published, status: p.is_published ? "draft" : "published" }).eq("id", p.id); toast.success(p.is_published ? "Unpublished" : "Published!"); fetchAll() }
+  async function deletePage(id: string) { await apiJSON("DELETE", `/api/seo/pages?id=${encodeURIComponent(id)}`); toast.success("Deleted"); fetchAll() }
+  async function clonePage(p: SitePage) { const { id, created_at, updated_at, ...rest } = p; await apiJSON("POST", "/api/seo/pages", { ...rest, title: rest.title + " (Copy)", url_path: rest.url_path + "-copy", status: "draft", is_published: false }); toast.success("Cloned!"); fetchAll() }
+  async function savePage(pid: string, data: { grapejs_data: unknown; grapejs_html: string; grapejs_css: string }) { await apiJSON("POST", "/api/seo/pages", { id: pid, ...data, updated_at: new Date().toISOString() }); toast.success("Saved!"); fetchAll() }
+  async function togglePub(p: SitePage) { await apiJSON("POST", "/api/seo/pages", { id: p.id, is_published: !p.is_published, status: p.is_published ? "draft" : "published" }); toast.success(p.is_published ? "Unpublished" : "Published!"); fetchAll() }
   async function addKws() {
     const kws = nkText.split("\n").map(k => k.trim()).filter(Boolean)
     if (!kws.length) { toast.error("Enter keywords"); return }
-    const { error } = await supabase.from("keyword_rankings").insert(kws.map(kw => ({ keyword: kw, cluster: nkCluster || null, niche: nkNiche || null, service: nkService || null, status: "tracking" })))
-    if (error) toast.error(error.message); else { toast.success(`${kws.length} keywords added!`); setShowNewKw(false); setNkText(""); fetchAll() }
+    const r = await apiJSON("POST", "/api/seo/keywords", { keywords: kws.map(kw => ({ keyword: kw, cluster: nkCluster || null, niche: nkNiche || null, service: nkService || null, status: "tracking" })) })
+    if (!r.ok) toast.error(r.error || "Add failed"); else { toast.success(`${kws.length} keywords added!`); setShowNewKw(false); setNkText(""); fetchAll() }
   }
-  async function delKw(id: string) { await supabase.from("keyword_rankings").delete().eq("id", id); toast.success("Removed"); fetchAll() }
+  async function delKw(id: string) { await apiJSON("DELETE", `/api/seo/keywords?id=${encodeURIComponent(id)}`); toast.success("Removed"); fetchAll() }
   async function createBlog() {
     if (!nbTitle) { toast.error("Title required"); return }
     const slug = nbTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")
-    await supabase.from("blog_posts").insert({ title: nbTitle, slug, target_keywords: nbKws.split(",").map(k => k.trim()).filter(Boolean), status: "draft", content_markdown: `# ${nbTitle}\n\n${nbTopic || "Start writing..."}`, featured_image_url: nbImage || null, meta_description: nbTopic ? nbTopic.slice(0, 160) : null })
+    await apiJSON("POST", "/api/seo/blog", { title: nbTitle, slug, target_keywords: nbKws.split(",").map(k => k.trim()).filter(Boolean), status: "draft", content_markdown: `# ${nbTitle}\n\n${nbTopic || "Start writing..."}`, featured_image_url: nbImage || null, meta_description: nbTopic ? nbTopic.slice(0, 160) : null })
     toast.success("Blog created!"); setShowNewBlog(false); setNbTitle(""); setNbTopic(""); setNbKws(""); setNbImage(""); fetchAll()
   }
   async function updateBlogStatus(id: string, status: string, feedback?: string) {
     setBlogUpdating(true)
-    const u: Record<string, unknown> = { status, updated_at: new Date().toISOString() }
-    if (status === "published") u.published_at = new Date().toISOString()
-    if (feedback !== undefined) u.feedback = feedback
-    const { data } = await supabase.from("blog_posts").update(u).eq("id", id).select().single()
-    if (data) {
-      setBlogs(prev => prev.map(b => b.id === id ? data : b))
-      if (selectedBlog?.id === id) setSelectedBlog(data)
+    const body: Record<string, unknown> = { id, status }
+    if (feedback !== undefined) body.feedback = feedback
+    if (status === "published") body.publish_at = new Date().toISOString()
+    const r = await apiJSON("PUT", "/api/seo/blog", body)
+    if (r.ok) {
+      // /api/seo/blog PUT returns data as an array
+      const arr = Array.isArray(r.data) ? r.data as BlogPost[] : []
+      const updated = arr[0]
+      if (updated) {
+        setBlogs(prev => prev.map(b => b.id === id ? updated : b))
+        if (selectedBlog?.id === id) setSelectedBlog(updated)
+      }
       toast.success(`Blog ${status}!`)
     }
     setBlogUpdating(false)
   }
-  async function blogStatus(id: string, s: string) { const u: Record<string, unknown> = { status: s, updated_at: new Date().toISOString() }; if (s === "published") u.published_at = new Date().toISOString(); await supabase.from("blog_posts").update(u).eq("id", id); toast.success(`Blog ${s}`); fetchAll() }
-  async function delBlog(id: string) { await supabase.from("blog_posts").delete().eq("id", id); toast.success("Deleted"); fetchAll() }
+  async function blogStatus(id: string, s: string) {
+    const body: Record<string, unknown> = { id, status: s }
+    if (s === "published") body.publish_at = new Date().toISOString()
+    await apiJSON("PUT", "/api/seo/blog", body)
+    toast.success(`Blog ${s}`); fetchAll()
+  }
+  async function delBlog(id: string) { await apiJSON("DELETE", `/api/seo/blog?id=${encodeURIComponent(id)}`); toast.success("Deleted"); fetchAll() }
   async function createAuto() {
     if (!naName) { toast.error("Name required"); return }
-    await supabase.from("seo_automations").insert({ name: naName, description: naDesc || null, trigger_type: naTrig, trigger_config: naTrig === "schedule" ? { frequency: naFreq } : {}, action_type: naAct, action_config: {}, is_active: true })
+    await apiJSON("POST", "/api/seo/automations", { name: naName, description: naDesc || null, trigger_type: naTrig, trigger_config: naTrig === "schedule" ? { frequency: naFreq } : {}, action_type: naAct, action_config: {}, is_active: true })
     toast.success("Automation created!"); setShowNewAuto(false); setNaName(""); setNaDesc(""); fetchAll()
   }
-  async function toggleAuto(a: SeoAutomation) { await supabase.from("seo_automations").update({ is_active: !a.is_active }).eq("id", a.id); toast.success(a.is_active ? "Paused" : "Activated"); fetchAll() }
-  async function delAuto(id: string) { await supabase.from("seo_automations").delete().eq("id", id); toast.success("Deleted"); fetchAll() }
+  async function toggleAuto(a: SeoAutomation) { await apiJSON("PUT", "/api/seo/automations", { id: a.id, is_active: !a.is_active }); toast.success(a.is_active ? "Paused" : "Activated"); fetchAll() }
+  async function delAuto(id: string) { await apiJSON("DELETE", `/api/seo/automations?id=${encodeURIComponent(id)}`); toast.success("Deleted"); fetchAll() }
   async function addCit() {
     if (!cq) { toast.error("Enter a query"); return }
-    await supabase.from("ai_citations").insert({ query: cq, ai_platform: cp, was_cited: false, checked_at: new Date().toISOString() })
+    await apiJSON("POST", "/api/seo/citations", { query: cq, ai_platform: cp, was_cited: false, checked_at: new Date().toISOString() })
     toast.success("Check added!"); setShowCitCheck(false); setCq(""); fetchAll()
   }
 

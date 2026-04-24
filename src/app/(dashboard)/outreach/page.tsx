@@ -18,7 +18,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
-import { createClient } from "@supabase/supabase-js"
 import {
   Zap, Send, Play, Pause, Square, Settings, Target, Clock, Users, MessageCircle,
   Activity, RefreshCw, AlertTriangle, CheckCircle, XCircle, Search, ChevronRight, ChevronDown,
@@ -33,11 +32,6 @@ import { NotificationsBell } from "@/components/notifications-bell"
 
 const LeadsPage = lazy(() => import("@/app/(dashboard)/leads/page"))
 const OutreachCalendar = lazy(() => import("@/components/outreach/outreach-calendar"))
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://yfufocegjhxxffqtkvkr.supabase.co",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlmdWZvY2Vnamh4eGZmcXRrdmtyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkyOTIyODYsImV4cCI6MjA4NDg2ODI4Nn0.uqgHS-X8K-0vM37BJPTzc6a0cFUreON3P6zgmp2HSjA"
-)
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.08 } } }
 const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0, transition: { duration: 0.5 } } }
@@ -278,10 +272,15 @@ function SequenceBuilderDialog({ open, onOpenChange, editSequence, onSaved }: {
           template_group: "default",
         }
       })
-      const { error } = await supabase.from("sequences").upsert({
-        sequence_id: id, sequence_name: name, steps: stepsJson, is_active: true,
+      const seqRes = await fetch("/api/sequences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sequence_id: id, sequence_name: name, steps: stepsJson, is_active: true }),
       })
-      if (error) throw error
+      if (!seqRes.ok) {
+        const j = await seqRes.json().catch(() => ({}))
+        throw new Error(j.error || "Save failed")
+      }
       toast.success(editSequence ? "Sequence updated!" : "Sequence created!")
       onSaved({ sequence_id: id, sequence_name: name, steps: stepsJson as Sequence["steps"], is_active: true })
       onOpenChange(false)
@@ -579,10 +578,13 @@ function QuickCampaignDialog({ open, onOpenChange, accounts, sequences, settings
     }
     setLaunching(true)
     try {
-      const { data: leads } = await supabase.from("leads")
-        .select("lead_id, name, business_type, instagram_url, facebook_url, linkedin_url, email, phone, status, tags")
-        .or(`tags.ilike.%${qcFilter}%,business_type.ilike.%${qcFilter}%,name.ilike.%${qcFilter}%`)
-        .eq("status", "new").limit(2000)
+      const leadsRes = await fetch("/api/leads/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filter: qcFilter, status: "new", limit: 2000 }),
+      })
+      const leadsJson = await leadsRes.json().catch(() => ({}))
+      const leads = (leadsJson.data || []) as Lead[]
 
       if (!leads || leads.length === 0) { toast.error("No matching leads found"); setLaunching(false); return }
 
@@ -590,9 +592,11 @@ function QuickCampaignDialog({ open, onOpenChange, accounts, sequences, settings
       if (!seq) { toast.error("Sequence not found"); setLaunching(false); return }
 
       const campaignId = `camp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-      const { data: templates } = await supabase.from("message_templates").select("*").eq("is_active", true)
+      const tRes = await fetch("/api/message-templates?active=true")
+      const tJson = await tRes.json().catch(() => ({}))
+      const templates = (tJson.data || []) as Array<{ template_group: string; platform: string; text: string }>
       const templateMap: Record<string, string> = {}
-      for (const t of templates || []) { templateMap[`${t.template_group}:${t.platform}`] = t.text }
+      for (const t of templates) { templateMap[`${t.template_group}:${t.platform}`] = t.text }
 
       const entries: Array<Record<string, unknown>> = []
       for (const lead of leads as Lead[]) {
@@ -615,10 +619,14 @@ function QuickCampaignDialog({ open, onOpenChange, accounts, sequences, settings
       }
 
       if (entries.length === 0) { toast.error("No messages to queue"); setLaunching(false); return }
-      const BATCH = 500
-      for (let i = 0; i < entries.length; i += BATCH) {
-        const { error } = await supabase.from("send_queue").insert(entries.slice(i, i + BATCH))
-        if (error) throw new Error(error.message)
+      const queueRes = await fetch("/api/send-queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries }),
+      })
+      if (!queueRes.ok) {
+        const j = await queueRes.json().catch(() => ({}))
+        throw new Error(j.error || "Queue insert failed")
       }
       toast.success(`🚀 Quick Campaign launched! ${entries.length} messages queued for ${leads.length} leads`)
       onOpenChange(false)
@@ -752,23 +760,23 @@ export default function OutreachPage() {
 
   useEffect(() => { fetchAll() }, [fetchAll])
 
-  // Fetch matching leads when filter changes
+  // Fetch matching leads when filter changes (via server API)
   useEffect(() => {
     const timer = setTimeout(async () => {
       setLoadingLeadCount(true)
       try {
-        let query = supabase.from("leads").select("lead_id, name, business_type, instagram_url, facebook_url, linkedin_url, email, phone, status, tags", { count: "exact" })
-        if (selectedLeadFilter) {
-          query = query.or(`tags.ilike.%${selectedLeadFilter}%,business_type.ilike.%${selectedLeadFilter}%,name.ilike.%${selectedLeadFilter}%`)
-        }
-        if (selectedLeadStatus && selectedLeadStatus !== "all") {
-          query = query.eq("status", selectedLeadStatus === "in_sequence" ? "in_sequence" : "new")
-        }
-        query = query.limit(2000)
-        const { data, count, error } = await query
-        if (!error) {
-          setMatchingLeadCount(count || 0)
-          setMatchingLeads((data || []) as Lead[])
+        const status = selectedLeadStatus && selectedLeadStatus !== "all"
+          ? (selectedLeadStatus === "in_sequence" ? "in_sequence" : "new")
+          : ""
+        const res = await fetch("/api/leads/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filter: selectedLeadFilter, status, limit: 2000 }),
+        })
+        const j = await res.json().catch(() => ({}))
+        if (res.ok) {
+          setMatchingLeadCount(j.count || 0)
+          setMatchingLeads((j.data || []) as Lead[])
         }
       } catch { /* ignore */ }
       setLoadingLeadCount(false)
@@ -789,16 +797,15 @@ export default function OutreachPage() {
     return () => clearInterval(interval)
   }, [tab, feedPolling])
 
-  // Poll active campaign stats
+  // Poll active campaign stats (via server API)
   useEffect(() => {
     if (!activeCampaign || !pollingCampaign) return
     const interval = setInterval(async () => {
       try {
-        const { data, error } = await supabase
-          .from("send_queue")
-          .select("status")
-          .eq("campaign_id", activeCampaign.campaignId)
-        if (!error && data) {
+        const res = await fetch(`/api/send-queue?campaign_id=${encodeURIComponent(activeCampaign.campaignId)}&mode=stats`)
+        const json = await res.json().catch(() => ({}))
+        const data = (json.data || []) as { status: string }[]
+        if (res.ok) {
           const queued = data.filter(d => d.status === "queued").length
           const sent = data.filter(d => d.status === "sent").length
           const failed = data.filter(d => d.status === "failed").length
@@ -873,44 +880,47 @@ export default function OutreachPage() {
       const name = campaignName || `Campaign ${new Date().toLocaleDateString()}`
 
       if (!dryRun) {
+        const safety = seqPlatforms.map(platform => ({
+          campaign_id: campaignId, platform,
+          delay_between_dms_min: settings.min_delay_seconds,
+          delay_between_dms_max: settings.max_delay_seconds,
+          batch_pause_after: settings.pause_after_n_sends,
+          batch_pause_duration: settings.pause_duration_minutes,
+          active_hours_start: settings.active_hours_start,
+          active_hours_end: settings.active_hours_end,
+          typing_speed_min: settings.min_typing_delay_ms,
+          typing_speed_max: settings.max_typing_delay_ms,
+          mouse_speed: settings.mouse_speed,
+          random_scroll: settings.random_scroll_enabled,
+          random_page_visit: settings.random_page_visit,
+          profile_view_before_dm: settings.random_profile_view_enabled,
+          profile_view_duration_min: settings.profile_view_duration_min,
+          profile_view_duration_max: settings.profile_view_duration_max,
+          like_before_dm_pct: settings.like_before_dm_pct,
+          session_max_duration: settings.session_max_duration,
+        }))
         try {
-          await supabase.from("campaigns").insert({
-            id: campaignId, name, business_id: "default", status: "active",
-            accounts: selectedAccounts, lead_ids: matchingLeads.map(l => l.lead_id),
-            lead_count: matchingLeads.length, sequence_id: selectedSequence,
-            total_scheduled: 0, started_at: new Date().toISOString(),
+          await fetch("/api/outreach/campaign-settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              campaign: {
+                id: campaignId, name, business_id: "default", status: "active",
+                accounts: selectedAccounts, lead_ids: matchingLeads.map(l => l.lead_id),
+                lead_count: matchingLeads.length, sequence_id: selectedSequence,
+                total_scheduled: 0, started_at: new Date().toISOString(),
+              },
+              safety,
+            }),
           })
         } catch {}
       }
 
-      for (const platform of seqPlatforms) {
-        if (dryRun) break
-        try {
-          await supabase.from("campaign_safety_settings").insert({
-            campaign_id: campaignId, platform,
-            delay_between_dms_min: settings.min_delay_seconds,
-            delay_between_dms_max: settings.max_delay_seconds,
-            batch_pause_after: settings.pause_after_n_sends,
-            batch_pause_duration: settings.pause_duration_minutes,
-            active_hours_start: settings.active_hours_start,
-            active_hours_end: settings.active_hours_end,
-            typing_speed_min: settings.min_typing_delay_ms,
-            typing_speed_max: settings.max_typing_delay_ms,
-            mouse_speed: settings.mouse_speed,
-            random_scroll: settings.random_scroll_enabled,
-            random_page_visit: settings.random_page_visit,
-            profile_view_before_dm: settings.random_profile_view_enabled,
-            profile_view_duration_min: settings.profile_view_duration_min,
-            profile_view_duration_max: settings.profile_view_duration_max,
-            like_before_dm_pct: settings.like_before_dm_pct,
-            session_max_duration: settings.session_max_duration,
-          })
-        } catch {}
-      }
-
-      const { data: templates } = await supabase.from("message_templates").select("*").eq("is_active", true)
+      const tRes = await fetch("/api/message-templates?active=true")
+      const tJson = await tRes.json().catch(() => ({}))
+      const templates = (tJson.data || []) as Array<{ template_group: string; platform: string; text: string }>
       const templateMap: Record<string, string> = {}
-      for (const t of templates || []) {
+      for (const t of templates) {
         const key = `${t.template_group}:${t.platform}`
         if (!templateMap[key]) templateMap[key] = t.text
       }
@@ -969,11 +979,14 @@ export default function OutreachPage() {
         return
       }
 
-      const BATCH = 500
-      for (let i = 0; i < queueEntries.length; i += BATCH) {
-        const batch = queueEntries.slice(i, i + BATCH)
-        const { error } = await supabase.from("send_queue").insert(batch)
-        if (error) throw new Error(error.message)
+      const qRes = await fetch("/api/send-queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries: queueEntries }),
+      })
+      if (!qRes.ok) {
+        const j = await qRes.json().catch(() => ({}))
+        throw new Error(j.error || "Queue insert failed")
       }
 
       toast.success(`🚀 Campaign launched! ${queueEntries.length} messages queued across ${seqPlatforms.length} platforms`)
@@ -992,8 +1005,16 @@ export default function OutreachPage() {
 
   async function stopCampaign() {
     if (!activeCampaign) return
-    const { error } = await supabase.from("send_queue").update({ status: "cancelled" }).eq("campaign_id", activeCampaign.campaignId).eq("status", "queued")
-    if (error) { toast.error("Failed to stop campaign") }
+    const res = await fetch("/api/send-queue", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        campaign_id: activeCampaign.campaignId,
+        where_status: "queued",
+        set: { status: "cancelled" },
+      }),
+    })
+    if (!res.ok) { toast.error("Failed to stop campaign") }
     else {
       toast.success("Campaign stopped — remaining queued messages cancelled")
       setPollingCampaign(false)
@@ -1001,28 +1022,36 @@ export default function OutreachPage() {
     }
   }
 
-  // Sequence helpers
+  // Sequence helpers — via /api/sequences (service_role, RLS-safe)
   async function duplicateSequence(seq: Sequence) {
     const newId = crypto.randomUUID()
-    const { error } = await supabase.from("sequences").insert({
-      sequence_id: newId, sequence_name: `${seq.sequence_name} (Copy)`, steps: seq.steps, is_active: true,
+    const res = await fetch("/api/sequences", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sequence_id: newId, sequence_name: `${seq.sequence_name} (Copy)`, steps: seq.steps, is_active: true,
+      }),
     })
-    if (error) { toast.error("Duplicate failed"); return }
+    if (!res.ok) { toast.error("Duplicate failed"); return }
     toast.success("Sequence duplicated!")
     fetchAll()
   }
 
   async function deleteSequence(id: string) {
-    const { error } = await supabase.from("sequences").delete().eq("sequence_id", id)
-    if (error) { toast.error("Delete failed"); return }
+    const res = await fetch(`/api/sequences?id=${encodeURIComponent(id)}`, { method: "DELETE" })
+    if (!res.ok) { toast.error("Delete failed"); return }
     toast.success("Sequence deleted")
     setSequences(prev => prev.filter(s => s.sequence_id !== id))
   }
 
   async function toggleSequenceActive(seq: Sequence) {
     const currentlyActive = seq.is_active !== false
-    const { error } = await supabase.from("sequences").update({ is_active: !currentlyActive }).eq("sequence_id", seq.sequence_id)
-    if (error) { toast.error("Toggle failed"); return }
+    const res = await fetch("/api/sequences", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sequence_id: seq.sequence_id, is_active: !currentlyActive }),
+    })
+    if (!res.ok) { toast.error("Toggle failed"); return }
     setSequences(prev => prev.map(s => s.sequence_id === seq.sequence_id ? { ...s, is_active: !currentlyActive } : s))
     toast.success(currentlyActive ? "Sequence deactivated" : "Sequence activated")
   }

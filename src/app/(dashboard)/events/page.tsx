@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useCallback } from "react"
 import useSWR from "swr"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -18,9 +18,6 @@ import {
   Loader2,
 } from "lucide-react"
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-
 interface EventItem {
   id: string
   name: string
@@ -34,10 +31,10 @@ interface EventItem {
 }
 
 async function fetchEvents(): Promise<EventItem[]> {
-  const { createClient } = await import("@supabase/supabase-js")
-  const supabase = createClient(supabaseUrl, supabaseKey)
-  const { data } = await supabase.from("events").select("*").order("created_at", { ascending: false })
-  return (data || []) as EventItem[]
+  const res = await fetch("/api/events")
+  if (!res.ok) return []
+  const json = await res.json()
+  return (json.data || []) as EventItem[]
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -72,9 +69,11 @@ export default function EventsPage() {
   }, [location, eventType, mutate])
 
   const updateStatus = useCallback(async (id: string, status: string) => {
-    const { createClient } = await import("@supabase/supabase-js")
-    const supabase = createClient(supabaseUrl, supabaseKey)
-    await supabase.from("events").update({ status }).eq("id", id)
+    await fetch("/api/events", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status }),
+    })
     mutate()
   }, [mutate])
 
@@ -90,9 +89,11 @@ export default function EventsPage() {
       })
       const data = await res.json()
       const pitch = data.pitch || data.data || "Could not generate pitch"
-      const { createClient } = await import("@supabase/supabase-js")
-      const supabase = createClient(supabaseUrl, supabaseKey)
-      await supabase.from("events").update({ elevator_pitch: pitch }).eq("id", event.id)
+      await fetch("/api/events", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: event.id, elevator_pitch: pitch }),
+      })
       setPitchDialog({ name: event.name, pitch })
       mutate()
     } catch {

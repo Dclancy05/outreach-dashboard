@@ -12,7 +12,6 @@ import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "sonner"
-import { createClient } from "@supabase/supabase-js"
 import {
   ArrowLeft,
   Loader2,
@@ -38,11 +37,6 @@ import {
   Phone,
   MessageSquare,
 } from "lucide-react"
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://yfufocegjhxxffqtkvkr.supabase.co",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlmdWZvY2Vnamh4eGZmcXRrdmtyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkyOTIyODYsImV4cCI6MjA4NDg2ODI4Nn0.uqgHS-X8K-0vM37BJPTzc6a0cFUreON3P6zgmp2HSjA"
-)
 
 const PLATFORM_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   instagram: Instagram,
@@ -126,40 +120,37 @@ export default function CampaignEditPage() {
   })
 
   const fetchStats = useCallback(async () => {
-    const { data } = await supabase
-      .from("send_queue")
-      .select("status")
-      .eq("campaign_id", campaignId)
-
-    if (data) {
-      const counts = { queued: 0, sent: 0, failed: 0, skipped: 0 }
-      data.forEach((row: { status: string }) => {
-        if (row.status === "pending" || row.status === "queued") counts.queued++
-        else if (row.status === "sent") counts.sent++
-        else if (row.status === "failed" || row.status === "error") counts.failed++
-        else if (row.status === "skipped") counts.skipped++
-      })
-      setStats(counts)
-    }
+    try {
+      const res = await fetch(`/api/send-queue?campaign_id=${encodeURIComponent(campaignId)}&mode=stats`)
+      const json = await res.json()
+      const data = json.data as { status: string }[] | undefined
+      if (data) {
+        const counts = { queued: 0, sent: 0, failed: 0, skipped: 0 }
+        data.forEach((row) => {
+          if (row.status === "pending" || row.status === "queued") counts.queued++
+          else if (row.status === "sent") counts.sent++
+          else if (row.status === "failed" || row.status === "error") counts.failed++
+          else if (row.status === "skipped") counts.skipped++
+        })
+        setStats(counts)
+      }
+    } catch { /* ignore */ }
   }, [campaignId])
 
   const fetchRecentSends = useCallback(async () => {
-    const { data } = await supabase
-      .from("send_queue")
-      .select("*")
-      .eq("campaign_id", campaignId)
-      .order("created_at", { ascending: false })
-      .limit(20)
-    if (data) setRecentSends(data as SendQueueItem[])
+    try {
+      const res = await fetch(`/api/send-queue?campaign_id=${encodeURIComponent(campaignId)}&mode=list&limit=20`)
+      const json = await res.json()
+      if (json.data) setRecentSends(json.data as SendQueueItem[])
+    } catch { /* ignore */ }
   }, [campaignId])
 
   const fetchLeads = useCallback(async () => {
-    const { data } = await supabase
-      .from("send_queue")
-      .select("*")
-      .eq("campaign_id", campaignId)
-      .order("created_at", { ascending: false })
-    if (data) setLeads(data as SendQueueItem[])
+    try {
+      const res = await fetch(`/api/send-queue?campaign_id=${encodeURIComponent(campaignId)}&mode=list`)
+      const json = await res.json()
+      if (json.data) setLeads(json.data as SendQueueItem[])
+    } catch { /* ignore */ }
   }, [campaignId])
 
   // Initial load
@@ -167,19 +158,19 @@ export default function CampaignEditPage() {
     async function load() {
       setLoading(true)
       // Try to load from send_queue to infer campaign data
-      const { data: queueData } = await supabase
-        .from("send_queue")
-        .select("*")
-        .eq("campaign_id", campaignId)
-        .order("created_at", { ascending: false })
-        .limit(1)
+      let queueData: { created_at?: string }[] = []
+      try {
+        const res = await fetch(`/api/send-queue?campaign_id=${encodeURIComponent(campaignId)}&mode=list&limit=1`)
+        const json = await res.json()
+        queueData = (json.data as { created_at?: string }[]) || []
+      } catch { /* ignore */ }
 
       // Build campaign object from available data
       const campData: CampaignData = {
         campaign_id: campaignId,
         campaign_name: campaignId.replace(/^camp_/, "Campaign "),
         status: "active",
-        created_at: queueData?.[0]?.created_at || new Date().toISOString(),
+        created_at: queueData[0]?.created_at || new Date().toISOString(),
         sequence_id: null,
         settings: null,
       }
@@ -215,11 +206,15 @@ export default function CampaignEditPage() {
   const stopCampaign = async () => {
     if (!campaign) return
     // Mark remaining pending as skipped
-    await supabase
-      .from("send_queue")
-      .update({ status: "skipped" })
-      .eq("campaign_id", campaignId)
-      .eq("status", "pending")
+    await fetch("/api/send-queue", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        campaign_id: campaignId,
+        where_status: "pending",
+        set: { status: "skipped" },
+      }),
+    })
 
     setCampaign({ ...campaign, status: "completed" })
     toast.success("Campaign stopped")

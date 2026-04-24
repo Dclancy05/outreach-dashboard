@@ -5,7 +5,9 @@ import { createClient } from "@supabase/supabase-js"
 import { motion } from "framer-motion"
 import { Upload, FileCheck, Clock, AlertCircle } from "lucide-react"
 
-const supabase = createClient(
+// Supabase client kept ONLY for storage uploads (anon is fine for storage —
+// DB rows go through /api/uploads/george so we can lock down RLS on the DB).
+const storageClient = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
@@ -50,13 +52,13 @@ export default function DropPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const fetchUploads = useCallback(async () => {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-    const { data } = await supabase
-      .from("george_uploads")
-      .select("*")
-      .gte("created_at", since)
-      .order("created_at", { ascending: false })
-    if (data) setUploads(data)
+    try {
+      const res = await fetch("/api/uploads/george?since_hours=24")
+      const json = await res.json()
+      if (json.data) setUploads(json.data as UploadItem[])
+    } catch {
+      /* ignore */
+    }
   }, [])
 
   useEffect(() => {
@@ -84,7 +86,7 @@ export default function DropPage() {
 
       setProgress(p => [...p, `Uploading ${file.name}...`])
 
-      const { error: uploadError } = await supabase.storage
+      const { error: uploadError } = await storageClient.storage
         .from("uploads")
         .upload(path, file, { contentType: file.type, upsert: false })
 
@@ -93,19 +95,25 @@ export default function DropPage() {
         continue
       }
 
-      const { error: insertError } = await supabase
-        .from("george_uploads")
-        .insert({
-          filename: file.name,
-          path,
-          size: file.size,
-          mime_type: file.type || "application/octet-stream",
+      try {
+        const res = await fetch("/api/uploads/george", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: file.name,
+            path,
+            size: file.size,
+            mime_type: file.type || "application/octet-stream",
+          }),
         })
-
-      if (insertError) {
-        setProgress(p => [...p, `❌ ${file.name}: ${insertError.message}`])
-      } else {
-        setProgress(p => [...p, `✅ ${file.name}`])
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}))
+          setProgress(p => [...p, `❌ ${file.name}: ${j.error || res.statusText}`])
+        } else {
+          setProgress(p => [...p, `✅ ${file.name}`])
+        }
+      } catch (e) {
+        setProgress(p => [...p, `❌ ${file.name}: ${e instanceof Error ? e.message : "upload error"}`])
       }
     }
 

@@ -1,7 +1,8 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextRequest, NextResponse } from "next/server"
 import { signVaSession } from "@/lib/session-crypto"
-import { rateLimit, ipFromRequest } from "@/lib/rate-limit"
+import { ipFromRequest, rateLimitAuthDb, retryAfterHeaders } from "@/lib/rate-limit"
+import { auditLogAsync } from "@/lib/audit"
 import crypto from "crypto"
 
 export const runtime = "nodejs"
@@ -20,11 +21,13 @@ function constantTimeEq(a: string, b: string): boolean {
 
 export async function POST(req: NextRequest) {
   const ip = ipFromRequest(req)
-  const rl = rateLimit(`va-login:${ip}`, 5, 10 * 60 * 1000)
+  const ua = req.headers.get("user-agent")
+  const rl = await rateLimitAuthDb(ip, "va-login")
   if (!rl.ok) {
+    auditLogAsync({ action: "POST /api/auth/va-login", resource: "/api/auth/va-login", payload: { rate_limited: true }, ip, ua })
     return NextResponse.json(
       { error: "Too many attempts. Try again later." },
-      { status: 429, headers: { "Retry-After": String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))) } }
+      { status: 429, headers: retryAfterHeaders(rl.resetAt) }
     )
   }
 
@@ -62,6 +65,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!matched) {
+      auditLogAsync({ action: "auth.va_login_failed", resource: "/api/auth/va-login", ip, ua })
       return NextResponse.json({ error: "Invalid PIN" }, { status: 401 })
     }
 
@@ -93,6 +97,7 @@ export async function POST(req: NextRequest) {
       maxAge: 60 * 60 * 12,
       path: "/",
     })
+    auditLogAsync({ user_id: `va:${sessionData.id}`, action: "auth.va_login", resource: "/api/auth/va-login", ip, ua })
     return res
   } catch {
     return NextResponse.json({ error: "Bad request" }, { status: 400 })

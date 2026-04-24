@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-const BRAVE_API_KEY = "BSAt6U205GDCWifXCriIi35-P27-vWx"
+const BRAVE_API_KEY = process.env.BRAVE_SEARCH_API_KEY || process.env.BRAVE_API_KEY || ""
 
 interface BraveResult {
   title: string
@@ -27,6 +27,10 @@ export async function POST(req: NextRequest) {
     const now = new Date()
     const month = now.toLocaleString("en-US", { month: "long" })
     const year = now.getFullYear()
+
+    if (!BRAVE_API_KEY) {
+      return NextResponse.json({ success: false, error: "BRAVE_SEARCH_API_KEY missing on server" }, { status: 500 })
+    }
 
     const queries = [
       `${niche} trending content ideas ${month} ${year}`,

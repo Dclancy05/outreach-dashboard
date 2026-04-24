@@ -6,9 +6,12 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const LATE_API_KEY = "sk_546633e01d1e0942f6015a423965d0dccd66af0d364a3bcbe43bafeabc47e616"
+const LATE_API_KEY = process.env.LATE_API_KEY || ""
 
 export async function POST(req: NextRequest) {
+  if (!LATE_API_KEY) {
+    return NextResponse.json({ error: "LATE_API_KEY missing on server" }, { status: 500 })
+  }
   const body = await req.json()
   const { cross_post_id } = body
 

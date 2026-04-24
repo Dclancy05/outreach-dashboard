@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { createClient } from "@supabase/supabase-js"
 import {
   DndContext,
   DragOverlay,
@@ -47,11 +46,6 @@ import {
   Loader2,
 } from "lucide-react"
 import { Suspense } from "react"
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://yfufocegjhxxffqtkvkr.supabase.co",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlmdWZvY2Vnamh4eGZmcXRrdmtyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkyOTIyODYsImV4cCI6MjA4NDg2ODI4Nn0.uqgHS-X8K-0vM37BJPTzc6a0cFUreON3P6zgmp2HSjA"
-)
 
 const PLATFORM_COLORS: Record<string, string> = {
   instagram: "#E4405F",
@@ -365,9 +359,11 @@ function SequenceBuilderInner() {
   useEffect(() => {
     if (!editId) return
     setLoading(true)
-    supabase.from("sequences").select("*").eq("sequence_id", editId).single()
-      .then(({ data, error }) => {
-        if (error || !data) {
+    fetch(`/api/sequences?id=${encodeURIComponent(editId)}`)
+      .then(r => r.json())
+      .then(json => {
+        const data = json?.data
+        if (!data) {
           toast.error("Sequence not found")
           setLoading(false)
           return
@@ -394,6 +390,10 @@ function SequenceBuilderInner() {
             }
           })
         setSteps(loadedSteps)
+        setLoading(false)
+      })
+      .catch(() => {
+        toast.error("Failed to load sequence")
         setLoading(false)
       })
   }, [editId])
@@ -474,13 +474,17 @@ function SequenceBuilderInner() {
         }
       })
 
-      const { error } = await supabase.from("sequences").upsert({
-        sequence_id: id,
-        sequence_name: sequenceName,
-        steps: stepsJson,
+      const res = await fetch("/api/sequences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sequence_id: id,
+          sequence_name: sequenceName,
+          steps: stepsJson,
+        }),
       })
-
-      if (error) throw error
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(j.error || "Save failed")
       setSequenceId(id)
       toast.success("Sequence saved!")
       if (!editId) {
@@ -504,12 +508,16 @@ function SequenceBuilderInner() {
         subject: step.subject || null,
       }
     })
-    const { error } = await supabase.from("sequences").insert({
-      sequence_id: newId,
-      sequence_name: `${sequenceName} (Copy)`,
-      steps: stepsJson,
+    const res = await fetch("/api/sequences", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sequence_id: newId,
+        sequence_name: `${sequenceName} (Copy)`,
+        steps: stepsJson,
+      }),
     })
-    if (error) {
+    if (!res.ok) {
       toast.error("Clone failed")
       return
     }

@@ -23,6 +23,7 @@ npm-debug.log*
 
 # credentials / sensitive local-only data
 scripts/accounts-data.local.json
+scripts/migration-accounts-proxies.sql
 *.credentials.json
 *.secrets.json
 credentials.json

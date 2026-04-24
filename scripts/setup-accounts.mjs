@@ -1,10 +1,20 @@
 import { createClient } from '@supabase/supabase-js'
 import { readFileSync } from 'fs'
 
-const supabase = createClient(
-  'https://yfufocegjhxxffqtkvkr.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlmdWZvY2Vnamh4eGZmcXRrdmtyIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2OTI5MjI4NiwiZXhwIjoyMDg0ODY4Mjg2fQ.KW316doByafkbM9hZyWgPj4fho5NY1p4RBuUN0MTrNA'
-)
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
+const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY
+const PROXY_PASSWORD = process.env.IPROYAL_PROXY_PASSWORD
+
+if (!SUPABASE_URL || !SERVICE_ROLE) {
+  console.error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in environment')
+  process.exit(1)
+}
+if (!PROXY_PASSWORD) {
+  console.error('Missing IPROYAL_PROXY_PASSWORD in environment')
+  process.exit(1)
+}
+
+const supabase = createClient(SUPABASE_URL, SERVICE_ROLE)
 
 const today = new Date().toISOString().split('T')[0]
 
@@ -25,7 +35,7 @@ fbLines.forEach((line, i) => {
   const email = parts[3]
   const emailPass = parts[4]
   const cookie = parts[5]
-  
+
   accounts.push({
     username,
     password,
@@ -43,7 +53,7 @@ fbLines.forEach((line, i) => {
     proxy_host: 'brd.superproxy.io',
     proxy_port: '22225',
     proxy_username: `${proxyBase}-ip-${String(i + 1).padStart(2, '0')}`,
-    proxy_password: '4tv2tjpt6ppq',
+    proxy_password: PROXY_PASSWORD,
     notes: `FB account from order7885288, proxy #${i + 1}`,
   })
 })
@@ -67,7 +77,7 @@ for (let i = 0; i < 10; i++) {
     proxy_host: 'brd.superproxy.io',
     proxy_port: '22225',
     proxy_username: `${proxyBase}-ip-${String(i + 1).padStart(2, '0')}`,
-    proxy_password: '4tv2tjpt6ppq',
+    proxy_password: PROXY_PASSWORD,
     notes: 'Placeholder - needs IG account purchase. Change status to warming once set up.',
   })
 }
@@ -91,7 +101,7 @@ for (let i = 0; i < 10; i++) {
     proxy_host: 'brd.superproxy.io',
     proxy_port: '22225',
     proxy_username: `${proxyBase}-ip-${String(i + 1).padStart(2, '0')}`,
-    proxy_password: '4tv2tjpt6ppq',
+    proxy_password: PROXY_PASSWORD,
     notes: 'Placeholder - needs LI account purchase. Change status to warming once set up.',
   })
 }
@@ -105,5 +115,5 @@ if (error) {
   process.exit(1)
 }
 
-console.log(`✅ Inserted ${data.length} accounts:`)
+console.log(`Inserted ${data.length} accounts:`)
 data.forEach(a => console.log(`  ${a.platform} | ${a.username} | ${a.status}`))

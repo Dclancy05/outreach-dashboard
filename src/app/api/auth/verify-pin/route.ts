@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { signAdminSession } from "@/lib/session-crypto"
-import { rateLimit, ipFromRequest } from "@/lib/rate-limit"
+import { ipFromRequest, rateLimitAuthDb, retryAfterHeaders } from "@/lib/rate-limit"
+import { auditLogAsync } from "@/lib/audit"
 import crypto from "crypto"
 
 export const runtime = "nodejs"
@@ -14,11 +15,13 @@ function constantTimeEq(a: string, b: string): boolean {
 
 export async function POST(req: NextRequest) {
   const ip = ipFromRequest(req)
-  const rl = rateLimit(`verify-pin:${ip}`, 5, 10 * 60 * 1000)
+  const ua = req.headers.get("user-agent")
+  const rl = await rateLimitAuthDb(ip, "verify-pin")
   if (!rl.ok) {
+    auditLogAsync({ action: "POST /api/auth/verify-pin", resource: "/api/auth/verify-pin", payload: { rate_limited: true }, ip, ua })
     return NextResponse.json(
       { error: "Too many attempts. Try again later." },
-      { status: 429, headers: { "Retry-After": String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))) } }
+      { status: 429, headers: retryAfterHeaders(rl.resetAt) }
     )
   }
 
@@ -35,6 +38,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!constantTimeEq(pin, adminPin)) {
+      auditLogAsync({ action: "auth.admin_login_failed", resource: "/api/auth/verify-pin", ip, ua })
       return NextResponse.json({ error: "Invalid PIN" }, { status: 401 })
     }
 
@@ -47,6 +51,7 @@ export async function POST(req: NextRequest) {
       maxAge: 60 * 60 * 24,
       path: "/",
     })
+    auditLogAsync({ user_id: "admin", action: "auth.admin_login", resource: "/api/auth/verify-pin", ip, ua })
     return res
   } catch {
     return NextResponse.json({ error: "Bad request" }, { status: 400 })

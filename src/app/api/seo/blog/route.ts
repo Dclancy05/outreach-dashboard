@@ -27,11 +27,19 @@ export async function POST(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   const body = await req.json()
-  const { id, status, publish_at } = body
+  const { id, ...rest } = body
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 })
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-  if (status) updates.status = status
-  if (publish_at) updates.publish_at = publish_at
+  const allowed = [
+    "title", "slug", "content_markdown", "content_html", "meta_description",
+    "target_keywords", "featured_image_url", "estimated_read_time",
+    "status", "feedback", "seo_score", "published_at", "publish_at",
+  ]
+  for (const f of allowed) {
+    if (rest[f] !== undefined) updates[f] = rest[f]
+  }
+  // Handle legacy publish_at -> published_at
+  if (rest.publish_at && !updates.published_at) updates.published_at = rest.publish_at
   const { data, error } = await supabase.from("blog_posts").update(updates).eq("id", id).select()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ data })
