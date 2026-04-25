@@ -8,6 +8,7 @@ const PUBLIC_ROUTES = [
   "/api/auth/va-login",
   "/api/cron/",
   "/api/ai-agent/",
+  "/api/docs/",
   "/security",
   "/.well-known/",
 ]
