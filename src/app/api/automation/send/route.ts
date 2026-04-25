@@ -163,7 +163,7 @@ export async function POST(req: NextRequest) {
     username_or_url: targetUsername,
     message,
     account_id: account_id || null,
-    status: "pending",
+    status: "queued",
   })
 
   if (queueError) {

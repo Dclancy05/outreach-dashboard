@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
           campaign_id: campaign_id || null,
           platform: "email",
           message_text: emailBody,
-          status: "pending",
+          status: "queued",
           error: "Instantly API key not configured",
         })
       }

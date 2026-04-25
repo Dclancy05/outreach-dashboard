@@ -152,7 +152,7 @@ export async function POST(req: NextRequest) {
         platform: e.platform,
         campaign_id: campaign.id,
         message_text: "",
-        status: "pending",
+        status: "queued",
       }))
 
     if (queueEntries.length > 0) {
