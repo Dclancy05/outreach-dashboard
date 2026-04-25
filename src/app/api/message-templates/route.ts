@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
   const activeOnly = searchParams.get("active") === "true"
 
   let query = supabase.from("message_templates").select("*")
-  if (activeOnly) query = query.eq("is_active", true)
+  if (activeOnly) query = query.eq("active", true)
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
