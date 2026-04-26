@@ -145,24 +145,60 @@ All AI tooling lives in `/root/services/*` and `/root/.config/social-saas/`. To 
     └── backup-ai-vps.sh           ← daily backup script
 ```
 
-## Quick commands
+## Quick commands (after `source ~/.bashrc` or new shell)
 
 ```bash
-# Start a session
-cd /root/projects/outreach-dashboard && claude
+# One-shot start (auto git-pull + health check + opens Claude)
+start-claude
 
-# Pull latest from GitHub
-cd /root/projects/outreach-dashboard && git pull
+# One-page health check anytime
+claude-status
+
+# Jump to project dir
+cdproj
+
+# Tail Langfuse / FalkorDB
+logs-langfuse
+logs-falkordb
+
+# Pull latest manually
+cdproj && git pull
 
 # Check all Docker stacks
 docker ps
 
-# Tail any container's logs
-docker logs -f <container-name>
-
-# Verify Tailscale to prod VPS
+# Reach the production VPS over Tailscale
 tailscale ping srv1197943
+ssh root@100.70.3.3      # or via Tailscale magic DNS: ssh root@srv1197943
 
 # Free up RAM
 docker system prune
 ```
+
+## Reboot-survival guarantees (verified)
+
+After `reboot`, all of this comes back automatically:
+
+| Service | Survives reboot? | How |
+|---|---|---|
+| Docker daemon | yes | `systemctl is-enabled docker` → enabled |
+| FalkorDB container | yes | `restart=unless-stopped` |
+| Langfuse stack (6 containers) | yes | `restart=always` |
+| UFW firewall rules | yes | `systemctl is-enabled ufw` → enabled |
+| fail2ban SSH jail | yes | `systemctl is-enabled fail2ban` → enabled |
+| Unattended security upgrades | yes | enabled |
+| 4 GB swap | yes | listed in `/etc/fstab` |
+| Tailscale | yes | system service |
+| Bash credential auto-load | yes | `~/.bashrc` sources `/root/.config/social-saas/load-env.sh` |
+
+**To test:** `reboot`. Wait ~60s. SSH back in. Run `claude-status` — every line should be ✓.
+
+## Session hooks (auto-run)
+
+When you launch Claude Code in this repo, `.claude/session-start.sh` automatically runs and shows:
+- Current branch + ahead/behind/dirty count
+- Last 3 commits
+- Pointer to the most recent session log
+- Warnings if Memory HQ has uncommitted changes or any AI-VPS service is down
+
+This means you (and the AI) always have fresh orientation without lifting a finger.
