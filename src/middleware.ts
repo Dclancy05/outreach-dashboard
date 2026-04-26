@@ -17,6 +17,26 @@ const VA_ROUTES = ["/va", "/va-queue", "/api/team", "/api/businesses", "/api/lea
 
 const ADMIN_MAX_AGE_MS = 1000 * 60 * 60 * 24
 
+// Routes that an MCP client (e.g. outreach-memory MCP server) may hit using
+// only the x-mcp-key header. Bypasses cookie auth when the key matches the
+// server-side OUTREACH_MEMORY_MCP_KEY env var. Must mirror the keys generated
+// by /api/memory-settings (mcp_api_key column).
+const MCP_ALLOWED_PATHS = [
+  "/api/memories/inject",
+  "/api/memories",
+  "/api/personas",
+]
+
+function isMcpAuthed(req: NextRequest): boolean {
+  const expected = process.env.OUTREACH_MEMORY_MCP_KEY
+  if (!expected) return false
+  const provided = req.headers.get("x-mcp-key")
+  if (!provided) return false
+  // Constant-time compare not strictly required at the edge here; this header
+  // value is high-entropy (24 random bytes) and the route is internal-only.
+  return provided === expected
+}
+
 function generateNonce(): string {
   const arr = new Uint8Array(16)
   crypto.getRandomValues(arr)
@@ -61,6 +81,11 @@ export async function middleware(req: NextRequest) {
   }
 
   if (PUBLIC_ROUTES.some(r => pathname.startsWith(r))) {
+    return withSecurityHeaders(nextResponseWithNonce(req, nonce), nonce, pathname)
+  }
+
+  // MCP key bypass — only for the explicitly allowed memory/persona endpoints.
+  if (MCP_ALLOWED_PATHS.some(r => pathname === r || pathname.startsWith(r + "/")) && isMcpAuthed(req)) {
     return withSecurityHeaders(nextResponseWithNonce(req, nonce), nonce, pathname)
   }
 

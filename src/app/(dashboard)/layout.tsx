@@ -3,6 +3,7 @@
 import { Sidebar } from "@/components/dashboard/sidebar"
 import { BottomTabs } from "@/components/dashboard/bottom-tabs"
 import { SystemPulse } from "@/components/system-pulse"
+import { RememberPalette } from "@/components/memory/remember-palette"
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -13,6 +14,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </main>
       <BottomTabs />
       <SystemPulse />
+      <RememberPalette />
     </>
   )
 }
