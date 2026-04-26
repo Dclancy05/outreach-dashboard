@@ -45,8 +45,8 @@ async function resolvePersonaChain(personaId: string | null): Promise<string[]> 
   while (current && !seen.has(current)) {
     seen.add(current)
     chain.push(current)
-    const { data } = await supabase.from("memory_personas").select("parent_persona_id").eq("id", current).single()
-    current = data?.parent_persona_id ?? null
+    const res: { data: { parent_persona_id: string | null } | null } = await supabase.from("memory_personas").select("parent_persona_id").eq("id", current).single()
+    current = res.data?.parent_persona_id ?? null
   }
   return chain
 }
