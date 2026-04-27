@@ -42,11 +42,11 @@
     },
     {
       "path": "/api/cron/proxy-health-check",
-      "schedule": "0 */6 * * *"
+      "schedule": "15 14 * * *"
     },
     {
       "path": "/api/cron/account-health-monitor",
-      "schedule": "30 */6 * * *"
+      "schedule": "30 14 * * *"
     }
   ]
 }
