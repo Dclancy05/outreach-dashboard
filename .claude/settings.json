@@ -87,6 +87,18 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/root/projects/outreach-dashboard/.claude/session-end.sh",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
