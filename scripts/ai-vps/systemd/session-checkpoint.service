@@ -1,0 +1,9 @@
+[Unit]
+Description=Re-parse the active Claude session JSONL into the vault Conversations folder
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/root/services/checkpoint-active-session.sh
+StandardOutput=append:/var/log/session-checkpoint.log
+StandardError=append:/var/log/session-checkpoint.log
