@@ -660,20 +660,36 @@ export default function AccountsPage() {
     else toast.error("Failed to update proxy")
   }
 
-  function openEditProxy(proxy: ProxyGroup) {
+  async function openEditProxy(proxy: ProxyGroup) {
+    // Open immediately with placeholders, then fetch the unredacted
+    // creds so the form has them before the user starts editing.
     setEditProxyForm({
       id: proxy.id,
       provider: proxy.provider || "",
       ip: proxy.ip || "",
       port: proxy.port || "",
-      username: proxy.username || "",
-      password: proxy.password || "",
+      username: "",
+      password: "",
       location_city: proxy.location_city || "",
       location_state: proxy.location_state || "",
       location_country: proxy.location_country || "US",
       monthly_cost: String(proxy.monthly_cost || ""),
     })
     setShowEditProxyDialog(true)
+    try {
+      const r = await fetch("/api/proxy-groups?include_creds=true", { cache: "no-store" })
+      const j = await r.json().catch(() => ({}))
+      const full = Array.isArray(j?.data) ? j.data.find((p: ProxyGroup) => p.id === proxy.id) : null
+      if (full) {
+        setEditProxyForm(f =>
+          f.id === proxy.id
+            ? { ...f, username: full.username || "", password: full.password || "" }
+            : f
+        )
+      }
+    } catch {
+      // Fall through — user can still edit the visible fields.
+    }
   }
 
   function canAssignProxy(proxyId: string, platform: string, excludeAccountId?: string) {
