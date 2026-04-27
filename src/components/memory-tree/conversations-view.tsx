@@ -309,7 +309,7 @@ function MessageBubble({ role, time, body }: { role: "user" | "assistant"; time:
   const isUser = role === "user"
   return (
     <div className={cn(
-      "rounded-lg border text-[13px] leading-relaxed",
+      "rounded-lg border text-[13px] leading-relaxed overflow-hidden min-w-0",
       isUser
         ? "bg-blue-500/5 border-blue-500/20"
         : "bg-zinc-800/30 border-zinc-700/40"
@@ -322,7 +322,7 @@ function MessageBubble({ role, time, body }: { role: "user" | "assistant"; time:
         <span className="font-medium">{isUser ? "You" : "Claude"}</span>
         {time && <span className="text-zinc-500 tabular-nums ml-auto">{time}</span>}
       </div>
-      <div className="px-3 py-2.5">
+      <div className="px-3 py-2.5 min-w-0">
         <ReactMarkdownNoMargin source={body} />
       </div>
     </div>
@@ -332,13 +332,18 @@ function MessageBubble({ role, time, body }: { role: "user" | "assistant"; time:
 function ReactMarkdownNoMargin({ source }: { source: string }) {
   return (
     <article className={cn(
-      "prose prose-invert prose-sm max-w-none",
-      "prose-p:my-1.5 prose-pre:my-2 prose-pre:bg-zinc-950/60 prose-pre:text-[11px] prose-pre:leading-snug prose-pre:p-2 prose-pre:rounded",
-      "prose-code:text-[12px] prose-code:bg-zinc-800/60 prose-code:px-1 prose-code:rounded prose-code:before:content-none prose-code:after:content-none",
+      "prose prose-invert prose-sm max-w-none break-words",
+      // Long single-line tool calls or pasted output get a horizontal scrollbar
+      // inside the code block instead of pushing the bubble off-screen.
+      "prose-pre:my-2 prose-pre:bg-zinc-950/60 prose-pre:text-[11px] prose-pre:leading-snug prose-pre:p-2 prose-pre:rounded prose-pre:overflow-x-auto prose-pre:max-w-full",
+      "prose-code:text-[12px] prose-code:bg-zinc-800/60 prose-code:px-1 prose-code:rounded prose-code:before:content-none prose-code:after:content-none prose-code:break-all",
+      "prose-p:my-1.5 prose-p:break-words",
+      "prose-a:break-all",
       "prose-headings:my-2 prose-headings:text-zinc-200",
       "prose-li:my-0.5 prose-ul:my-1.5 prose-ol:my-1.5",
       "prose-blockquote:border-l-zinc-700 prose-blockquote:text-zinc-400",
-      "prose-hr:my-3 prose-hr:border-zinc-800/40"
+      "prose-hr:my-3 prose-hr:border-zinc-800/40",
+      "prose-img:max-w-full prose-img:h-auto"
     )}>
       <ReactMarkdown>{source || "_(empty)_"}</ReactMarkdown>
     </article>
