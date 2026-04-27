@@ -16,6 +16,7 @@ export interface Agent {
   tools: string[]
   max_tokens: number
   is_orchestrator: boolean
+  system_prompt?: string | null
   archived: boolean
   last_used_at: string | null
   use_count: number
