@@ -30,11 +30,23 @@ interface SessionFile {
   title: string        // human-readable title from name
 }
 
+function localDateString(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
 function parseDate(name: string, fallback?: string): string {
-  // Match YYYY-MM-DD prefix
+  // Prefer the file's mtime in the BROWSER's local timezone (so a file
+  // saved at 9pm EST shows as "today" even though the UTC date already
+  // rolled over). Fall back to the YYYY-MM-DD prefix in the filename.
+  if (fallback) {
+    const d = new Date(fallback)
+    if (!isNaN(d.getTime())) return localDateString(d)
+  }
   const m = name.match(/^(\d{4}-\d{2}-\d{2})/)
   if (m) return m[1]
-  if (fallback) return fallback.slice(0, 10)
   return "Unknown"
 }
 
@@ -48,11 +60,15 @@ function humanTitle(name: string): string {
 
 function dayLabel(iso: string): string {
   if (iso === "Unknown") return "Unknown"
-  const d = new Date(iso)
+  // Compare in the BROWSER's local timezone so EST users see "Today" for
+  // their last evening even when UTC has already ticked over to tomorrow.
   const today = new Date()
   const yest = new Date(); yest.setDate(today.getDate() - 1)
-  if (iso === today.toISOString().slice(0, 10)) return "Today"
-  if (iso === yest.toISOString().slice(0, 10)) return "Yesterday"
+  if (iso === localDateString(today)) return "Today"
+  if (iso === localDateString(yest)) return "Yesterday"
+  // Re-construct the date at noon-local so timezone math doesn't drift the rendered weekday/day.
+  const [y, m, day] = iso.split("-").map(Number)
+  const d = new Date(y, (m ?? 1) - 1, day ?? 1, 12, 0, 0)
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: today.getFullYear() === d.getFullYear() ? undefined : "numeric" })
 }
 

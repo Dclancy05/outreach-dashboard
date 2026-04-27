@@ -45,6 +45,10 @@ interface TreeViewProps {
   onSelect: (path: string) => void
 }
 
+// Top-level paths the tree should hide (they're surfaced elsewhere — Conversations
+// has its own tab; .trash is internal soft-delete storage).
+const HIDDEN_TOP_PATHS = new Set(["/Conversations", "/.trash"])
+
 export function TreeView({ selectedPath, onSelect }: TreeViewProps) {
   const [tree, setTree] = useState<TreeNode[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -255,21 +259,23 @@ export function TreeView({ selectedPath, onSelect }: TreeViewProps) {
 
       {/* Tree */}
       <div className="overflow-y-auto flex-1 text-sm py-1">
-        {(tree || []).map((node) => (
-          <TreeRow
-            key={node.path}
-            node={node}
-            depth={0}
-            selectedPath={selectedPath}
-            renaming={renaming}
-            onSelect={onSelect}
-            onStartRename={(path) => setRenaming(path)}
-            onCommitRename={rename}
-            onContextNew={(kind, parent) => setNewDialog({ kind, parent })}
-            onContextMove={(n) => setMoveDialog(n)}
-            onContextDelete={(n) => setDeleteDialog(n)}
-          />
-        ))}
+        {(tree || [])
+          .filter((node) => !HIDDEN_TOP_PATHS.has(node.path))
+          .map((node) => (
+            <TreeRow
+              key={node.path}
+              node={node}
+              depth={0}
+              selectedPath={selectedPath}
+              renaming={renaming}
+              onSelect={onSelect}
+              onStartRename={(path) => setRenaming(path)}
+              onCommitRename={rename}
+              onContextNew={(kind, parent) => setNewDialog({ kind, parent })}
+              onContextMove={(n) => setMoveDialog(n)}
+              onContextDelete={(n) => setDeleteDialog(n)}
+            />
+          ))}
       </div>
 
       {/* Dialogs */}
