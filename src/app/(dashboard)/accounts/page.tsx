@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -28,6 +28,8 @@ import AccountDetailDialog from "@/components/account-detail-dialog"
 import BulkImportDialog from "@/components/bulk-import-dialog"
 import { CookieHealthBadge } from "@/components/cookie-health-badge"
 import { HelpButton } from "@/components/help-button"
+import { VpsOfflineDialog } from "@/components/vps-offline-dialog"
+import { useVpsHealth } from "@/lib/use-vps-health"
 
 // ── Animation variants ──────────────────────────────────────────────
 
@@ -420,6 +422,21 @@ export default function AccountsPage() {
   const [testingProxyId, setTestingProxyId] = useState<string | null>(null)
   const [proxyTestResults, setProxyTestResults] = useState<Record<string, { ok: boolean; ip?: string; country?: string; city?: string; latency_ms?: number; error?: string }>>({})
   const router = useRouter()
+  // F1+F2: when the VPS is offline, "Sign In Now" and "Test proxy" need to
+  // intercept the click and explain why instead of firing failing requests.
+  const { vpsOffline } = useVpsHealth()
+  const [vpsOfflineDialog, setVpsOfflineDialog] = useState<null | "signin" | "test-proxy">(null)
+  // F4: filter inputs for the Accounts tab. Pure client-side over the
+  // already-loaded accounts list — Dylan has ~94 accounts and no filters.
+  const [accountsSearch, setAccountsSearch] = useState("")
+  const [accountsSearchDebounced, setAccountsSearchDebounced] = useState("")
+  const [accountsPlatformFilter, setAccountsPlatformFilter] = useState("all")
+  const [accountsStatusFilter, setAccountsStatusFilter] = useState("all")
+  const [accountsGroupFilter, setAccountsGroupFilter] = useState("all")
+  useEffect(() => {
+    const t = setTimeout(() => setAccountsSearchDebounced(accountsSearch.trim().toLowerCase()), 250)
+    return () => clearTimeout(t)
+  }, [accountsSearch])
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -599,6 +616,10 @@ export default function AccountsPage() {
   }
 
   async function testProxy(id: string) {
+    if (vpsOffline) {
+      setVpsOfflineDialog("test-proxy")
+      return
+    }
     setTestingProxyId(id)
     setProxyTestResults(prev => { const next = { ...prev }; delete next[id]; return next })
     try {
@@ -660,20 +681,36 @@ export default function AccountsPage() {
     else toast.error("Failed to update proxy")
   }
 
-  function openEditProxy(proxy: ProxyGroup) {
+  async function openEditProxy(proxy: ProxyGroup) {
+    // Open immediately with placeholders, then fetch the unredacted
+    // creds so the form has them before the user starts editing.
     setEditProxyForm({
       id: proxy.id,
       provider: proxy.provider || "",
       ip: proxy.ip || "",
       port: proxy.port || "",
-      username: proxy.username || "",
-      password: proxy.password || "",
+      username: "",
+      password: "",
       location_city: proxy.location_city || "",
       location_state: proxy.location_state || "",
       location_country: proxy.location_country || "US",
       monthly_cost: String(proxy.monthly_cost || ""),
     })
     setShowEditProxyDialog(true)
+    try {
+      const r = await fetch("/api/proxy-groups?include_creds=true", { cache: "no-store" })
+      const j = await r.json().catch(() => ({}))
+      const full = Array.isArray(j?.data) ? j.data.find((p: ProxyGroup) => p.id === proxy.id) : null
+      if (full) {
+        setEditProxyForm(f =>
+          f.id === proxy.id
+            ? { ...f, username: full.username || "", password: full.password || "" }
+            : f
+        )
+      }
+    } catch {
+      // Fall through — user can still edit the visible fields.
+    }
   }
 
   function canAssignProxy(proxyId: string, platform: string, excludeAccountId?: string) {
@@ -909,6 +946,56 @@ export default function AccountsPage() {
     const p = a.platform || "other"; if (!acc[p]) acc[p] = []; acc[p].push(a); return acc
   }, {})
 
+  // F4: client-side filter for the Accounts tab. Re-derived on every
+  // change to inputs but cheap (one pass over ~100 accounts).
+  const filteredAccountsByPlatform = useMemo(() => {
+    const q = accountsSearchDebounced
+    const filtered = accounts.filter(a => {
+      if (accountsPlatformFilter !== "all" && a.platform !== accountsPlatformFilter) return false
+      if (accountsStatusFilter !== "all") {
+        const eff = effectiveStatus(a)
+        const isUntested = !a.has_auth_cookie && eff !== "active" && eff !== "warming"
+        const matches =
+          accountsStatusFilter === "untested"
+            ? isUntested
+            : accountsStatusFilter === "active"
+              ? eff === "active"
+              : accountsStatusFilter === "paused"
+                ? eff === "paused"
+                : accountsStatusFilter === "cooldown"
+                  ? eff === "cooldown" || eff === "cooled_down"
+                  : accountsStatusFilter === "banned"
+                    ? eff === "banned"
+                    : false
+        if (!matches) return false
+      }
+      if (accountsGroupFilter !== "all") {
+        if (accountsGroupFilter === "__unassigned") {
+          if (a.proxy_group_id) return false
+        } else if (a.proxy_group_id !== accountsGroupFilter) {
+          return false
+        }
+      }
+      if (q) {
+        const u = (a.username || "").toLowerCase()
+        const d = (a.display_name || "").toLowerCase()
+        if (!u.includes(q) && !d.includes(q)) return false
+      }
+      return true
+    })
+    return filtered.reduce<Record<string, Account[]>>((acc, a) => {
+      const p = a.platform || "other"
+      if (!acc[p]) acc[p] = []
+      acc[p].push(a)
+      return acc
+    }, {})
+  }, [accounts, accountsSearchDebounced, accountsPlatformFilter, accountsStatusFilter, accountsGroupFilter])
+
+  const filteredAccountCount = useMemo(
+    () => Object.values(filteredAccountsByPlatform).reduce((n, arr) => n + arr.length, 0),
+    [filteredAccountsByPlatform]
+  )
+
   const totalMonthlyCost = proxies.reduce((s, p) => s + (p.monthly_cost || 0), 0)
 
   if (loading) {
@@ -1136,6 +1223,10 @@ export default function AccountsPage() {
                               const openVnc = (e?: React.MouseEvent) => {
                                 if (e) e.stopPropagation()
                                 if (isGoogleBooster) return
+                                if (vpsOffline) {
+                                  setVpsOfflineDialog("signin")
+                                  return
+                                }
                                 setLoginModalPlatform(a.platform)
                                 setLoginModalAccountId(a.account_id)
                                 setLoginModalOpen(true)
@@ -1166,7 +1257,7 @@ export default function AccountsPage() {
                                     justFlipped && "ring-2 ring-emerald-400/70 shadow-[0_0_20px_-4px_rgba(16,185,129,0.55)] animate-pulse",
                                   )}
                                   onClick={() => (needsAttn && !isGoogleBooster) ? openVnc() : setDetailAccountId(a.account_id)}
-                                  title={(needsAttn && !isGoogleBooster) ? "Click to sign in — opens your saved Chrome profile" : "Click for full details"}
+                                  title={(needsAttn && !isGoogleBooster) ? (vpsOffline ? "VPS is offline — start it from Maintenance first" : "Click to sign in — opens your saved Chrome profile") : "Click for full details"}
                                 >
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2 min-w-0">
@@ -1315,13 +1406,24 @@ export default function AccountsPage() {
                     {accounts.filter(a => !a.proxy_group_id).map(a => {
                       const Icon = platformIcons[a.platform] || Shield
                       return (
-                        <div key={a.account_id} className={cn("rounded-xl border border-border/40 p-3 bg-card/40", platformBorders[a.platform] || "border-l-muted", "border-l-4")}>
+                        <button
+                          type="button"
+                          key={a.account_id}
+                          onClick={() => setDetailAccountId(a.account_id)}
+                          className={cn(
+                            "text-left rounded-xl border border-border/40 p-3 bg-card/40 cursor-pointer transition-all",
+                            "hover:bg-card/70 hover:border-border focus:outline-none focus:ring-2 focus:ring-emerald-500/40",
+                            platformBorders[a.platform] || "border-l-muted",
+                            "border-l-4"
+                          )}
+                          title="Open account details"
+                        >
                           <div className="flex items-center gap-2">
                             <Icon className={cn("h-4 w-4", platformColors[a.platform])} />
                             <span className="text-sm font-medium">@{a.username || a.display_name}</span>
                           </div>
                           <p className="text-[10px] text-muted-foreground mt-1 pl-6 capitalize">{a.platform}</p>
-                        </div>
+                        </button>
                       )
                     })}
                   </div>
@@ -1353,14 +1455,19 @@ export default function AccountsPage() {
         {/* ═══ ACCOUNTS TAB ═══ */}
         <TabsContent value="accounts" className="space-y-6 mt-6">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <p className="text-sm text-muted-foreground">{accounts.length} accounts across {Object.keys(grouped).length} platforms · click the checkbox to multi-select, click the card for details</p>
+            <p className="text-sm text-muted-foreground">
+              Showing {filteredAccountCount} of {accounts.length} accounts across {Object.keys(grouped).length} platforms · click the checkbox to multi-select, click the card for details
+            </p>
             <div className="flex items-center gap-2">
-              {selectedAccounts.size === 0 && accounts.length > 0 && (
+              {selectedAccounts.size === 0 && filteredAccountCount > 0 && (
                 <Button
                   size="sm"
                   variant="outline"
                   className="rounded-xl text-xs"
-                  onClick={() => setSelectedAccounts(new Set(accounts.map(a => a.account_id)))}
+                  onClick={() => {
+                    const ids = Object.values(filteredAccountsByPlatform).flat().map(a => a.account_id)
+                    setSelectedAccounts(new Set(ids))
+                  }}
                 >
                   <Check className="h-3 w-3 mr-1" /> Select All
                 </Button>
@@ -1376,7 +1483,68 @@ export default function AccountsPage() {
             </div>
           </div>
 
-          {Object.entries(grouped).map(([platform, accts]) => {
+          {/* F4: filter row — pure client-side filter so Dylan can find a row in ~94. */}
+          <div className="flex flex-wrap items-center gap-2 rounded-xl bg-card/40 backdrop-blur-sm border border-border/40 p-3">
+            <Input
+              placeholder="Search @username or display name…"
+              value={accountsSearch}
+              onChange={(e) => setAccountsSearch(e.target.value)}
+              className="h-9 w-full sm:w-64 rounded-lg"
+            />
+            <Select value={accountsPlatformFilter} onValueChange={setAccountsPlatformFilter}>
+              <SelectTrigger className="h-9 w-full sm:w-40 rounded-lg"><SelectValue placeholder="Platform" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All platforms</SelectItem>
+                {ALL_PLATFORMS.map(p => (
+                  <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={accountsStatusFilter} onValueChange={setAccountsStatusFilter}>
+              <SelectTrigger className="h-9 w-full sm:w-36 rounded-lg"><SelectValue placeholder="Status" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="paused">Paused</SelectItem>
+                <SelectItem value="cooldown">Cooldown</SelectItem>
+                <SelectItem value="banned">Banned</SelectItem>
+                <SelectItem value="untested">Untested</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={accountsGroupFilter} onValueChange={setAccountsGroupFilter}>
+              <SelectTrigger className="h-9 w-full sm:w-44 rounded-lg"><SelectValue placeholder="Group" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All groups</SelectItem>
+                <SelectItem value="__unassigned">Unassigned</SelectItem>
+                {proxies.map(p => (
+                  <SelectItem key={p.id} value={p.id}>{p.name || p.location_city || p.ip || p.id}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {(accountsSearch || accountsPlatformFilter !== "all" || accountsStatusFilter !== "all" || accountsGroupFilter !== "all") && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9 rounded-lg text-xs"
+                onClick={() => {
+                  setAccountsSearch("")
+                  setAccountsPlatformFilter("all")
+                  setAccountsStatusFilter("all")
+                  setAccountsGroupFilter("all")
+                }}
+              >
+                <X className="h-3 w-3 mr-1" /> Clear
+              </Button>
+            )}
+          </div>
+
+          {filteredAccountCount === 0 && accounts.length > 0 && (
+            <div className="rounded-2xl border border-dashed border-border/50 bg-card/30 backdrop-blur-xl py-10 text-center">
+              <p className="text-sm text-muted-foreground">No accounts match these filters.</p>
+            </div>
+          )}
+
+          {Object.entries(filteredAccountsByPlatform).map(([platform, accts]) => {
             const Icon = platformIcons[platform] || Shield
             return (
               <motion.div key={platform} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
@@ -2247,6 +2415,11 @@ export default function AccountsPage() {
             toast.error("Assign a proxy group to this account first — login needs a proxy to route through.")
             return
           }
+          if (vpsOffline) {
+            setDetailAccountId(null)
+            setVpsOfflineDialog("signin")
+            return
+          }
           setLoginModalPlatform(account.platform)
           setLoginModalAccountId(account.account_id)
           setDetailAccountId(null)
@@ -2259,6 +2432,12 @@ export default function AccountsPage() {
         onClose={() => setShowBulkImport(false)}
         onImported={fetchAll}
         proxies={proxies.map(p => ({ id: p.id, ip: p.ip, location_city: p.location_city || "" }))}
+      />
+
+      <VpsOfflineDialog
+        open={vpsOfflineDialog !== null}
+        onOpenChange={(o) => { if (!o) setVpsOfflineDialog(null) }}
+        action={vpsOfflineDialog || "signin"}
       />
 
       {/* Floating bulk-action bar */}

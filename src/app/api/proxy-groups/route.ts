@@ -6,8 +6,15 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
+const REDACTED = "••••••••"
+
+function redactProxyCreds<T extends { username?: string | null; password?: string | null }>(row: T): T {
+  return { ...row, username: REDACTED, password: REDACTED }
+}
+
 export async function GET(req: NextRequest) {
   const businessId = req.nextUrl.searchParams.get("business_id") || "default"
+  const includeCreds = req.nextUrl.searchParams.get("include_creds") === "true"
 
   const { data, error } = await supabase
     .from("proxy_groups")
@@ -16,7 +23,8 @@ export async function GET(req: NextRequest) {
     .order("created_at", { ascending: false })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ data })
+  const safe = includeCreds ? data : (data || []).map(redactProxyCreds)
+  return NextResponse.json({ data: safe })
 }
 
 export async function POST(req: NextRequest) {
