@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 export async function POST(req: NextRequest) {
   try {
@@ -8,8 +9,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Email and refreshToken required" }, { status: 400 })
     }
 
-    const clientId = process.env.MICROSOFT_CLIENT_ID
-    const clientSecret = process.env.MICROSOFT_CLIENT_SECRET
+    const clientId = await getSecret("MICROSOFT_CLIENT_ID")
+    const clientSecret = await getSecret("MICROSOFT_CLIENT_SECRET")
     if (!clientId) {
       return NextResponse.json({ error: "MICROSOFT_CLIENT_ID not configured" }, { status: 500 })
     }

@@ -184,7 +184,8 @@ export async function GET() {
 
     // Fetch live GoLogin profiles (list + individual details for session status)
     let goLoginProfiles: Record<string, GoLoginProfile> = {}
-    const token = process.env.GOLOGIN_API_TOKEN
+    const { getSecret } = await import("@/lib/secrets")
+    const token = await getSecret("GOLOGIN_API_TOKEN")
     if (token) {
       try {
         // First get list for basic info

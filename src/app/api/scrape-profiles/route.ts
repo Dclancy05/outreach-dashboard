@@ -1,12 +1,19 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const APIFY_TOKEN = process.env.APIFY_API_TOKEN || ""
+async function apifyToken(): Promise<string> {
+  return (
+    (await getSecret("APIFY_TOKEN")) ||
+    (await getSecret("APIFY_API_TOKEN")) ||
+    ""
+  )
+}
 
 function extractUsername(url: string, platform: string): string {
   if (!url) return ""
@@ -21,6 +28,7 @@ function extractUsername(url: string, platform: string): string {
 }
 
 async function scrapeInstagram(username: string): Promise<Record<string, unknown>> {
+  const APIFY_TOKEN = await apifyToken()
   if (!APIFY_TOKEN) throw new Error("APIFY_API_TOKEN not configured")
 
   const res = await fetch("https://api.apify.com/v2/acts/apify~instagram-profile-scraper/run-sync-get-dataset-items?token=" + APIFY_TOKEN, {
@@ -61,6 +69,7 @@ async function scrapeInstagram(username: string): Promise<Record<string, unknown
 }
 
 async function scrapeFacebook(urlOrUsername: string): Promise<Record<string, unknown>> {
+  const APIFY_TOKEN = await apifyToken()
   if (!APIFY_TOKEN) throw new Error("APIFY_API_TOKEN not configured")
 
   // Use the Facebook Pages Scraper

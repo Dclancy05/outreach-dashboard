@@ -21,23 +21,24 @@
  *   MEMORY_VAULT_TOKEN     Bearer token (matches the AI VPS env)
  */
 import { NextRequest, NextResponse } from "next/server"
-
-const API_URL = (process.env.MEMORY_VAULT_API_URL || "").replace(/\/+$/, "")
-const TOKEN = process.env.MEMORY_VAULT_TOKEN || ""
+import { getSecret } from "@/lib/secrets"
 
 function noConfig(): NextResponse {
   return NextResponse.json(
     {
       error: "memory-vault not configured",
       hint:
-        "Set MEMORY_VAULT_API_URL and MEMORY_VAULT_TOKEN in Vercel env vars. " +
-        "MEMORY_VAULT_API_URL must be a publicly reachable HTTPS URL (Tailscale Funnel recommended).",
+        "Set MEMORY_VAULT_API_URL and MEMORY_VAULT_TOKEN in the API Keys tab " +
+        "(or as Vercel env vars). MEMORY_VAULT_API_URL must be a publicly " +
+        "reachable HTTPS URL (Tailscale Funnel recommended).",
     },
     { status: 503 }
   )
 }
 
 async function proxy(req: NextRequest, vaultPath: string): Promise<Response> {
+  const API_URL = ((await getSecret("MEMORY_VAULT_API_URL")) || "").replace(/\/+$/, "")
+  const TOKEN = (await getSecret("MEMORY_VAULT_TOKEN")) || ""
   if (!API_URL || !TOKEN) return noConfig()
   const url = new URL(req.url)
   const search = url.search // includes leading '?'

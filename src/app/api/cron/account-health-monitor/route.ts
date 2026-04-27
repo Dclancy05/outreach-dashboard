@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -9,7 +10,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const VPS_URL = process.env.VPS_URL || "https://srv1197943.taild42583.ts.net:10000"
 const BATCH_SIZE = 20
 const PROBE_TIMEOUT_MS = 15000
 
@@ -34,6 +34,7 @@ async function probeAccount(acct: AccountRow): Promise<
   | { kind: "error"; reason: string }
 > {
   try {
+    const VPS_URL = (await getSecret("VPS_URL")) || "https://srv1197943.taild42583.ts.net:10000"
     const res = await fetch(`${VPS_URL}/account-health/probe`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

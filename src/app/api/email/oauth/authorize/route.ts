@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 export async function GET(req: NextRequest) {
   const email = req.nextUrl.searchParams.get("email")
@@ -6,7 +7,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Email parameter required" }, { status: 400 })
   }
 
-  const clientId = process.env.MICROSOFT_CLIENT_ID
+  const clientId = await getSecret("MICROSOFT_CLIENT_ID")
   if (!clientId) {
     return NextResponse.json({ error: "MICROSOFT_CLIENT_ID not configured" }, { status: 500 })
   }

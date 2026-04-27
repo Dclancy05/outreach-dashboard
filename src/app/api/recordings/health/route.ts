@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server"
-
-const VPS_URL = process.env.VPS_URL || process.env.RECORDING_SERVER_URL || "https://srv1197943.taild42583.ts.net:10000"
+import { getSecret } from "@/lib/secrets"
 
 export async function GET() {
   try {
+    const VPS_URL =
+      (await getSecret("VPS_URL")) ||
+      (await getSecret("RECORDING_SERVER_URL")) ||
+      "https://srv1197943.taild42583.ts.net:10000"
     const res = await fetch(`${VPS_URL}/health`, { next: { revalidate: 0 } })
     const data = await res.json()
 

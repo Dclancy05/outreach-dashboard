@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 export async function GET(req: NextRequest) {
   const email = req.nextUrl.searchParams.get("email")
@@ -6,7 +7,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Email parameter required" }, { status: 400 })
   }
 
-  const clientId = process.env.GOOGLE_CLIENT_ID
+  const clientId = await getSecret("GOOGLE_CLIENT_ID")
   if (!clientId) {
     return NextResponse.json({ error: "GOOGLE_CLIENT_ID not configured" }, { status: 500 })
   }

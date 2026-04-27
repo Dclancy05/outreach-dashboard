@@ -5,13 +5,14 @@
  */
 
 import { createHmac } from 'crypto'
+import { getSecret } from '@/lib/secrets'
 
 const API_BASE = 'https://api.klingai.com/v1'
 
 /** Generate a JWT token for Kling API authentication */
-function generateKlingToken(): string | null {
-  const accessKey = process.env.KLING_ACCESS_KEY
-  const secretKey = process.env.KLING_SECRET_KEY
+async function generateKlingToken(): Promise<string | null> {
+  const accessKey = await getSecret('KLING_ACCESS_KEY')
+  const secretKey = await getSecret('KLING_SECRET_KEY')
   if (!accessKey || !secretKey) return null
 
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')
@@ -30,8 +31,8 @@ function generateKlingToken(): string | null {
   return `${header}.${payload}.${signature}`
 }
 
-function getAuthHeaders(): Record<string, string> | null {
-  const token = generateKlingToken()
+async function getAuthHeaders(): Promise<Record<string, string> | null> {
+  const token = await generateKlingToken()
   if (!token) return null
   return {
     'Content-Type': 'application/json',
@@ -46,7 +47,7 @@ export async function generateVideo(
   prompt: string,
   options?: { duration?: number; referenceImage?: string }
 ): Promise<{ taskId: string }> {
-  const headers = getAuthHeaders()
+  const headers = await getAuthHeaders()
   if (!headers) {
     console.log('[Kling] No KLING_ACCESS_KEY/KLING_SECRET_KEY configured — skipping')
     return { taskId: 'skipped' }
@@ -89,7 +90,7 @@ export async function generateVideo(
  * Poll for video generation completion
  */
 export async function checkStatus(taskId: string): Promise<{ status: string; videoUrl?: string }> {
-  const headers = getAuthHeaders()
+  const headers = await getAuthHeaders()
   if (!headers || taskId === 'skipped' || taskId === 'error') {
     return { status: 'skipped' }
   }
@@ -122,7 +123,7 @@ export async function imageToVideo(
   prompt: string,
   duration?: number
 ): Promise<{ taskId: string }> {
-  const headers = getAuthHeaders()
+  const headers = await getAuthHeaders()
   if (!headers) {
     console.log('[Kling] No credentials configured — skipping image-to-video')
     return { taskId: 'skipped' }

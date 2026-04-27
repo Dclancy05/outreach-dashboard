@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-
-const BRAVE_API_KEY = process.env.BRAVE_SEARCH_API_KEY || ""
+import { getSecret } from "@/lib/secrets"
 
 export async function POST(req: NextRequest) {
   const { location, business_type, limit = 20 } = await req.json()
@@ -8,6 +7,11 @@ export async function POST(req: NextRequest) {
   if (!location || !business_type) {
     return NextResponse.json({ error: "Location and business type required" }, { status: 400 })
   }
+
+  const BRAVE_API_KEY =
+    (await getSecret("BRAVE_SEARCH_API_KEY")) ||
+    (await getSecret("BRAVE_API_KEY")) ||
+    ""
 
   const query = `${business_type} in ${location}`
   const results: Array<{

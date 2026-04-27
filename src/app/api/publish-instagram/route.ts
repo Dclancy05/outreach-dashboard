@@ -23,8 +23,6 @@ import { NextResponse } from "next/server"
  * Meta Graph API docs: https://developers.facebook.com/docs/instagram-api/guides/content-publishing
  */
 
-const META_APP_ID = process.env.META_APP_ID || ""
-const META_APP_SECRET = process.env.META_APP_SECRET || ""
 const GRAPH_API_URL = "https://graph.facebook.com/v21.0"
 
 export async function POST(req: Request) {

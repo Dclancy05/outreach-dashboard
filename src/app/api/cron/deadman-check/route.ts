@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -7,7 +8,7 @@ const supabase = createClient(
 )
 
 async function sendTelegram(chatId: string, text: string) {
-  const token = process.env.TELEGRAM_BOT_TOKEN
+  const token = await getSecret("TELEGRAM_BOT_TOKEN")
   if (!token) return false
   try {
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {

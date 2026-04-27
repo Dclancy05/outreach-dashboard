@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -20,8 +21,8 @@ type ProxyRow = {
 }
 
 async function sendTelegram(text: string) {
-  const token = process.env.TELEGRAM_BOT_TOKEN
-  const chatId = process.env.TELEGRAM_CHAT_ID
+  const token = await getSecret("TELEGRAM_BOT_TOKEN")
+  const chatId = await getSecret("TELEGRAM_CHAT_ID")
   if (!token || !chatId) return false
   try {
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {

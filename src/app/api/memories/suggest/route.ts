@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || ""
-const OPENAI_KEY = process.env.OPENAI_API_KEY || ""
+import { getSecret } from "@/lib/secrets"
 
 const SYSTEM = `You extract durable memory candidates from a chat transcript.
 
@@ -19,12 +17,12 @@ Rules:
 - emoji: a single relevant emoji. tags: 1-3 short lowercase tags.
 - For "feedback": fill "why" with the rationale and "how_to_apply" with when it kicks in.`
 
-async function suggestWithAnthropic(transcript: string) {
+async function suggestWithAnthropic(transcript: string, apiKey: string) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_KEY,
+      "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
@@ -40,12 +38,12 @@ async function suggestWithAnthropic(transcript: string) {
   return JSON.parse(text.replace(/^```json\s*|\s*```$/g, "").trim())
 }
 
-async function suggestWithOpenAI(transcript: string) {
+async function suggestWithOpenAI(transcript: string, apiKey: string) {
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENAI_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: "gpt-4o-mini",
@@ -99,10 +97,13 @@ export async function POST(req: NextRequest) {
   const transcript = String(body.transcript || "").slice(0, 30000)
   if (!transcript) return NextResponse.json({ error: "transcript required" }, { status: 400 })
 
+  const ANTHROPIC_KEY = (await getSecret("ANTHROPIC_API_KEY")) || ""
+  const OPENAI_KEY = (await getSecret("OPENAI_API_KEY")) || ""
+
   try {
     let result
-    if (ANTHROPIC_KEY) result = await suggestWithAnthropic(transcript)
-    else if (OPENAI_KEY) result = await suggestWithOpenAI(transcript)
+    if (ANTHROPIC_KEY) result = await suggestWithAnthropic(transcript, ANTHROPIC_KEY)
+    else if (OPENAI_KEY) result = await suggestWithOpenAI(transcript, OPENAI_KEY)
     else result = heuristicSuggest(transcript)
     return NextResponse.json({ ...result, source: ANTHROPIC_KEY ? "anthropic" : OPENAI_KEY ? "openai" : "heuristic" })
   } catch (e) {

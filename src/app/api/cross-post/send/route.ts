@@ -1,14 +1,14 @@
 import { createClient } from "@supabase/supabase-js"
 import { NextRequest, NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const LATE_API_KEY = process.env.LATE_API_KEY || ""
-
 export async function POST(req: NextRequest) {
+  const LATE_API_KEY = (await getSecret("LATE_API_KEY")) || ""
   if (!LATE_API_KEY) {
     return NextResponse.json({ error: "LATE_API_KEY missing on server" }, { status: 500 })
   }

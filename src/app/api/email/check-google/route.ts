@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 export async function POST(req: NextRequest) {
   try {
@@ -8,8 +9,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Email and refreshToken required" }, { status: 400 })
     }
 
-    const clientId = process.env.GOOGLE_CLIENT_ID
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET
+    const clientId = await getSecret("GOOGLE_CLIENT_ID")
+    const clientSecret = await getSecret("GOOGLE_CLIENT_SECRET")
     if (!clientId || !clientSecret) {
       return NextResponse.json({ error: "Google OAuth not configured" }, { status: 500 })
     }

@@ -1,5 +1,6 @@
 import { google, docs_v1 } from "googleapis"
 import { JWT } from "google-auth-library"
+import { getSecret } from "@/lib/secrets"
 
 const DOCS_SCOPE = "https://www.googleapis.com/auth/documents"
 
@@ -9,8 +10,8 @@ interface ServiceAccountKey {
   [key: string]: unknown
 }
 
-function decodeServiceAccount(): ServiceAccountKey {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+async function decodeServiceAccount(): Promise<ServiceAccountKey> {
+  const raw = await getSecret("GOOGLE_SERVICE_ACCOUNT_JSON")
   if (!raw) {
     throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON not configured")
   }
@@ -32,8 +33,8 @@ function decodeServiceAccount(): ServiceAccountKey {
   return parsed
 }
 
-export function getDocsClient(): docs_v1.Docs {
-  const key = decodeServiceAccount()
+export async function getDocsClient(): Promise<docs_v1.Docs> {
+  const key = await decodeServiceAccount()
   const auth = new JWT({
     email: key.client_email,
     key: key.private_key,
@@ -60,7 +61,7 @@ export interface DocsWriteResult {
 export async function appendNote(docId: string, text: string): Promise<DocsWriteResult> {
   if (!docId) throw new Error("docId is required")
   if (typeof text !== "string") throw new Error("text must be a string")
-  const docs = getDocsClient()
+  const docs = await getDocsClient()
   const stamped = `\n\n[${formatTimestamp(new Date())}] ${text}`
   const res = await docs.documents.batchUpdate({
     documentId: docId,
@@ -98,7 +99,7 @@ function extractDocText(doc: docs_v1.Schema$Document): string {
 export async function markDone(docId: string, taskText: string): Promise<DocsWriteResult> {
   if (!docId) throw new Error("docId is required")
   if (!taskText) throw new Error("taskText is required")
-  const docs = getDocsClient()
+  const docs = await getDocsClient()
   const doc = await docs.documents.get({ documentId: docId })
   const fullText = extractDocText(doc.data)
   if (fullText.indexOf(taskText) === -1) {
@@ -130,7 +131,7 @@ export async function addSection(docId: string, heading: string, body: string): 
   if (!docId) throw new Error("docId is required")
   if (!heading) throw new Error("heading is required")
   if (typeof body !== "string") throw new Error("body must be a string")
-  const docs = getDocsClient()
+  const docs = await getDocsClient()
 
   const headingText = `\n${heading}\n`
   const bodyText = `${body}\n`

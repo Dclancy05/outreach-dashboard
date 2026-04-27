@@ -1,4 +1,6 @@
 // GHL API wrapper with error handling
+import { getSecret } from "@/lib/secrets"
+
 const GHL_BASE = "https://services.leadconnectorhq.com"
 const GHL_VERSION = "2021-07-28"
 
@@ -34,9 +36,14 @@ export async function ghlFetch(path: string, token: string, options?: RequestIni
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function getGhlToken(supabase: any): Promise<{ token: string; locationId: string } | null> {
-  // Try env var first
-  if (process.env.GHL_API_KEY) {
-    return { token: process.env.GHL_API_KEY, locationId: process.env.GHL_LOCATION_ID || "NmH7aRBeDRq1Wo9qwOqq" }
+  // Try the central secrets store first (api_keys → system_settings → env).
+  const apiKey = await getSecret("GHL_API_KEY")
+  if (apiKey) {
+    const locationId =
+      (await getSecret("GHL_SUBACCOUNT_ID")) ||
+      (await getSecret("GHL_LOCATION_ID")) ||
+      "NmH7aRBeDRq1Wo9qwOqq"
+    return { token: apiKey, locationId }
   }
   // Then try outreach_settings table
   try {

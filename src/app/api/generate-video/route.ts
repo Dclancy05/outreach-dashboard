@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import * as crypto from "crypto"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -9,18 +10,16 @@ const supabase = createClient(
 
 /**
  * AI Video Generation API
- * 
+ *
  * Uses Kling AI with JWT auth (access key + secret key).
  * Free tier: ~66 videos/month.
  * Falls back to manual queue if no keys configured.
  */
 
-const KLING_ACCESS_KEY = process.env.KLING_ACCESS_KEY || ""
-const KLING_SECRET_KEY = process.env.KLING_SECRET_KEY || ""
-const KLING_API_URL = process.env.KLING_API_URL || "https://api.klingai.com"
-
 // Generate JWT token for Kling API auth
-function generateKlingJWT(): string {
+async function generateKlingJWT(): Promise<string> {
+  const KLING_ACCESS_KEY = (await getSecret("KLING_ACCESS_KEY")) || ""
+  const KLING_SECRET_KEY = (await getSecret("KLING_SECRET_KEY")) || ""
   const header = { alg: "HS256", typ: "JWT" }
   const now = Math.floor(Date.now() / 1000)
   const payload = {
@@ -75,6 +74,9 @@ export async function POST(req: Request) {
 
     const id = `vid_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const now = new Date().toISOString()
+    const KLING_ACCESS_KEY = (await getSecret("KLING_ACCESS_KEY")) || ""
+    const KLING_SECRET_KEY = (await getSecret("KLING_SECRET_KEY")) || ""
+    const KLING_API_URL = (await getSecret("KLING_API_URL")) || "https://api.klingai.com"
 
     const record = {
       id,
@@ -104,7 +106,7 @@ export async function POST(req: Request) {
     // If Kling keys are configured, submit to Kling
     if (KLING_ACCESS_KEY && KLING_SECRET_KEY) {
       try {
-        const jwt = generateKlingJWT()
+        const jwt = await generateKlingJWT()
         const klingRes = await fetch(`${KLING_API_URL}/v1/videos/text2video`, {
           method: "POST",
           headers: {

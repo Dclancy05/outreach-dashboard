@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code")
@@ -7,8 +8,8 @@ export async function GET(req: NextRequest) {
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://outreach-dashboard-five.vercel.app"
   const redirectUri = `${baseUrl}/api/email/oauth/callback`
-  const clientId = process.env.MICROSOFT_CLIENT_ID || ""
-  const clientSecret = process.env.MICROSOFT_CLIENT_SECRET || ""
+  const clientId = (await getSecret("MICROSOFT_CLIENT_ID")) || ""
+  const clientSecret = (await getSecret("MICROSOFT_CLIENT_SECRET")) || ""
 
   if (error) {
     const desc = req.nextUrl.searchParams.get("error_description") || error

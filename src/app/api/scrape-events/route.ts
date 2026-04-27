@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
-const BRAVE_API_KEY = process.env.BRAVE_SEARCH_API_KEY || ""
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -9,6 +9,10 @@ const supabase = createClient(
 
 export async function POST(req: NextRequest) {
   const { location = "NYC", type = "business networking" } = await req.json()
+  const BRAVE_API_KEY =
+    (await getSecret("BRAVE_SEARCH_API_KEY")) ||
+    (await getSecret("BRAVE_API_KEY")) ||
+    ""
 
   const events: Array<{
     name: string

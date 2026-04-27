@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 /**
  * GET /api/platforms/cookies-dump?platform=instagram
@@ -20,14 +21,13 @@ import { NextResponse } from "next/server"
  * Until the VPS exposes it, this route quietly returns 502 and the modal
  * treats that as "no cookies to save, just run the login-status probe."
  */
-const VPS_URL = process.env.VPS_URL || "https://srv1197943.taild42583.ts.net:10000"
-
 export const dynamic = "force-dynamic"
 export const maxDuration = 20
 
 export async function GET(req: Request) {
   const url = new URL(req.url)
   const platform = url.searchParams.get("platform") || ""
+  const VPS_URL = (await getSecret("VPS_URL")) || "https://srv1197943.taild42583.ts.net:10000"
   try {
     const res = await fetch(
       `${VPS_URL}/cookies/dump?platform=${encodeURIComponent(platform)}`,

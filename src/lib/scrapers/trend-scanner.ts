@@ -502,7 +502,11 @@ async function scrapeInstagramAlternative(apifyToken: string): Promise<TrendItem
 
 export async function scanTrends(): Promise<ScanResult> {
   const errors: string[] = []
-  const apifyToken = process.env.APIFY_API_TOKEN || ''
+  const { getSecret } = await import('@/lib/secrets')
+  const apifyToken =
+    (await getSecret('APIFY_TOKEN')) ||
+    (await getSecret('APIFY_API_TOKEN')) ||
+    ''
 
   // Run scrapers in parallel
   const [tiktokItems, instagramItems] = await Promise.allSettled([

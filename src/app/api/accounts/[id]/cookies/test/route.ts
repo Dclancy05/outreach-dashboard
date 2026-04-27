@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
 
@@ -9,10 +10,13 @@ const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const VPS_URL =
-  process.env.VPS_URL ||
-  process.env.RECORDING_SERVER_URL ||
-  "https://srv1197943.taild42583.ts.net:10000"
+async function vpsUrl(): Promise<string> {
+  return (
+    (await getSecret("VPS_URL")) ||
+    (await getSecret("RECORDING_SERVER_URL")) ||
+    "https://srv1197943.taild42583.ts.net:10000"
+  )
+}
 
 const TEST_TIMEOUT_MS = 30_000 // 30s — enough for browser launch + one nav
 
@@ -132,6 +136,7 @@ export async function POST(
   //   to drive navigation from here.)
   await injectLatestCookies(account_id, sessionId).catch(() => null)
 
+  const VPS_URL = await vpsUrl()
   const checkUrl = `${VPS_URL.replace(/\/+$/, "")}/sessions/${encodeURIComponent(
     sessionId
   )}/check-login`
@@ -219,6 +224,7 @@ async function injectLatestCookies(account_id: string, session_id: string) {
     return
   }
 
+  const VPS_URL = await vpsUrl()
   const url = `${VPS_URL.replace(/\/+$/, "")}/sessions/${encodeURIComponent(
     session_id
   )}/inject-cookies`
@@ -248,6 +254,7 @@ async function teardownSession(session_id: string): Promise<void> {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 5000)
   try {
+    const VPS_URL = await vpsUrl()
     await fetch(
       `${VPS_URL.replace(/\/+$/, "")}/sessions/${encodeURIComponent(session_id)}`,
       { method: "DELETE", signal: ctrl.signal, cache: "no-store" }

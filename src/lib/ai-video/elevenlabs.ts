@@ -3,6 +3,8 @@
  * Generates voiceovers using ElevenLabs API
  */
 
+import { getSecret } from '@/lib/secrets'
+
 const API_BASE = 'https://api.elevenlabs.io/v1'
 
 interface Voice {
@@ -20,7 +22,7 @@ interface Voice {
  * @returns Audio buffer (MP3)
  */
 export async function generateSpeech(text: string, voiceId: string): Promise<Buffer> {
-  const apiKey = process.env.ELEVENLABS_API_KEY
+  const apiKey = await getSecret('ELEVENLABS_API_KEY')
   if (!apiKey) {
     throw new Error('ELEVENLABS_API_KEY not configured. Set it in .env.local to enable voiceover generation.')
   }
@@ -63,7 +65,7 @@ export async function generateSpeech(text: string, voiceId: string): Promise<Buf
  * @returns The new voice ID and a preview URL
  */
 export async function designVoice(description: string): Promise<{ voiceId: string; previewUrl: string }> {
-  const apiKey = process.env.ELEVENLABS_API_KEY
+  const apiKey = await getSecret('ELEVENLABS_API_KEY')
   if (!apiKey) {
     throw new Error('ELEVENLABS_API_KEY not configured.')
   }
@@ -102,7 +104,7 @@ export async function designVoice(description: string): Promise<{ voiceId: strin
  * @returns Array of available voices
  */
 export async function listVoices(): Promise<Voice[]> {
-  const apiKey = process.env.ELEVENLABS_API_KEY
+  const apiKey = await getSecret('ELEVENLABS_API_KEY')
   if (!apiKey) {
     throw new Error('ELEVENLABS_API_KEY not configured.')
   }

@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
-const BRAVE_API_KEY = process.env.BRAVE_API_KEY || process.env.BRAVE_SEARCH_API_KEY || ""
 
 async function braveSearch(query: string) {
+  const BRAVE_API_KEY =
+    (await getSecret("BRAVE_SEARCH_API_KEY")) ||
+    (await getSecret("BRAVE_API_KEY")) ||
+    ""
   const res = await fetch(
     `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`,
     { headers: { Accept: "application/json", "X-Subscription-Token": BRAVE_API_KEY } }

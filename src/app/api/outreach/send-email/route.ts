@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ""
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ""
 const supabase = createClient(supabaseUrl, supabaseKey)
 
-const INSTANTLY_API_KEY = process.env.INSTANTLY_API_KEY || ""
 const INSTANTLY_BASE = "https://api.instantly.ai/api/v1"
 
 export async function POST(req: NextRequest) {
@@ -15,6 +15,8 @@ export async function POST(req: NextRequest) {
     if (!to_email || !emailBody) {
       return NextResponse.json({ error: "to_email and body required" }, { status: 400 })
     }
+
+    const INSTANTLY_API_KEY = (await getSecret("INSTANTLY_API_KEY")) || ""
 
     if (!INSTANTLY_API_KEY) {
       if (lead_id) {

@@ -1,22 +1,23 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 const GOLOGIN_API = "https://api.gologin.com/browser"
-const TOKEN = process.env.GOLOGIN_API_TOKEN
 
-function headers() {
+function headers(token: string) {
   return {
-    Authorization: `Bearer ${TOKEN}`,
+    Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
   }
 }
 
 export async function GET() {
+  const TOKEN = await getSecret("GOLOGIN_API_TOKEN")
   if (!TOKEN) {
     return NextResponse.json({ error: "GOLOGIN_API_TOKEN not configured" }, { status: 500 })
   }
 
   try {
-    const res = await fetch(`${GOLOGIN_API}/v2?limit=50`, { headers: headers(), cache: "no-store" })
+    const res = await fetch(`${GOLOGIN_API}/v2?limit=50`, { headers: headers(TOKEN), cache: "no-store" })
     if (!res.ok) {
       const text = await res.text()
       return NextResponse.json({ error: `GoLogin API error: ${res.status}`, details: text }, { status: res.status })
@@ -29,6 +30,7 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
+  const TOKEN = await getSecret("GOLOGIN_API_TOKEN")
   if (!TOKEN) {
     return NextResponse.json({ error: "GOLOGIN_API_TOKEN not configured" }, { status: 500 })
   }
@@ -43,7 +45,7 @@ export async function PUT(req: NextRequest) {
 
     const res = await fetch(`${GOLOGIN_API}/${profileId}`, {
       method: "PATCH",
-      headers: headers(),
+      headers: headers(TOKEN),
       body: JSON.stringify(updateData),
     })
 

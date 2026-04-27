@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -22,8 +23,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "Job not found" }, { status: 404 })
     }
 
-    const bridgeUrl = process.env.CLAUDE_BRIDGE_URL || "http://localhost:3456"
-    const bridgeKey = process.env.CLAUDE_BRIDGE_KEY || "claude-bridge-secret"
+    const bridgeUrl = (await getSecret("CLAUDE_BRIDGE_URL")) || "http://localhost:3456"
+    const bridgeKey = (await getSecret("CLAUDE_BRIDGE_KEY")) || "claude-bridge-secret"
 
     const prompt = `Generate a compelling, concise application pitch/cover message for this job listing. The pitch is from Dylan, a college student at Baruch College in NYC.
 

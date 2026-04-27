@@ -5,6 +5,7 @@
  */
 
 import * as fs from 'fs'
+import { getSecret } from '@/lib/secrets'
 
 /** Word with precise timing */
 export interface WordTimestamp {
@@ -23,7 +24,7 @@ export type CaptionStyle = 'bold_yellow' | 'minimal_white' | 'neon_glow' | 'boun
  * @returns Array of words with start/end timestamps
  */
 export async function transcribeWithTimestamps(audioPath: string): Promise<WordTimestamp[]> {
-  const apiKey = process.env.OPENAI_API_KEY
+  const apiKey = await getSecret('OPENAI_API_KEY')
   if (!apiKey) {
     console.log('[Captions] No OPENAI_API_KEY — falling back to estimated timing')
     return estimateTimingsFromFile(audioPath)

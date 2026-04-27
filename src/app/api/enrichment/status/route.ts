@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -67,7 +68,7 @@ export async function GET() {
       needs_instagram: needsInstagram,
       needs_email: needsEmail,
       has_enrichment_columns: hasEnrichmentColumns,
-      brave_api_configured: !!process.env.BRAVE_API_KEY || !!process.env.BRAVE_SEARCH_API_KEY,
+      brave_api_configured: !!(await getSecret("BRAVE_SEARCH_API_KEY")) || !!(await getSecret("BRAVE_API_KEY")),
     })
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 })

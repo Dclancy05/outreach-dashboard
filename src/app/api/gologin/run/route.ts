@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
 
-const TOKEN = process.env.GOLOGIN_API_TOKEN
 const GOLOGIN_API = "https://api.gologin.com/browser"
 
 export async function POST(req: NextRequest) {
+  const TOKEN = await getSecret("GOLOGIN_API_TOKEN")
   if (!TOKEN) {
     return NextResponse.json({ error: "GOLOGIN_API_TOKEN not configured" }, { status: 500 })
   }

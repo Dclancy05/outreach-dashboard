@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || ""
-const OPENAI_KEY = process.env.OPENAI_API_KEY || ""
-
 export async function POST(req: NextRequest) {
   const body = await req.json()
   const { persona_id, message } = body
   if (!message) return NextResponse.json({ error: "message required" }, { status: 400 })
+
+  const ANTHROPIC_KEY = (await getSecret("ANTHROPIC_API_KEY")) || ""
+  const OPENAI_KEY = (await getSecret("OPENAI_API_KEY")) || ""
 
   // Build the injection block
   const sp = new URLSearchParams()

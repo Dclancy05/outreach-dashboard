@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get("code")
@@ -7,8 +8,8 @@ export async function GET(req: NextRequest) {
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://outreach-dashboard-five.vercel.app"
   const redirectUri = `${baseUrl}/api/email/oauth/google/callback`
-  const clientId = process.env.GOOGLE_CLIENT_ID || ""
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || ""
+  const clientId = (await getSecret("GOOGLE_CLIENT_ID")) || ""
+  const clientSecret = (await getSecret("GOOGLE_CLIENT_SECRET")) || ""
 
   if (error) {
     return NextResponse.redirect(

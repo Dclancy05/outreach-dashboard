@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getSecret } from '@/lib/secrets'
 
 const GOLOGIN_API = 'https://api.gologin.com'
 
@@ -9,7 +10,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'profileId is required' }, { status: 400 })
     }
 
-    const token = process.env.GOLOGIN_API_TOKEN
+    const token = await getSecret('GOLOGIN_API_TOKEN')
     if (!token) {
       return NextResponse.json({ error: 'GOLOGIN_API_TOKEN not configured' }, { status: 500 })
     }

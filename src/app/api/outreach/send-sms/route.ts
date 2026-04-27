@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ""
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ""
 const supabase = createClient(supabaseUrl, supabaseKey)
 
-const GHL_API_KEY = process.env.GHL_API_KEY || ""
-const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID || ""
 const GHL_BASE = "https://services.leadconnectorhq.com"
 
 export async function POST(req: NextRequest) {
@@ -16,6 +15,12 @@ export async function POST(req: NextRequest) {
     if (!phone || !message) {
       return NextResponse.json({ error: "phone and message required" }, { status: 400 })
     }
+
+    const GHL_API_KEY = (await getSecret("GHL_API_KEY")) || ""
+    const GHL_LOCATION_ID =
+      (await getSecret("GHL_SUBACCOUNT_ID")) ||
+      (await getSecret("GHL_LOCATION_ID")) ||
+      ""
 
     if (!GHL_API_KEY || !GHL_LOCATION_ID) {
       return NextResponse.json({ error: "GHL_API_KEY and GHL_LOCATION_ID must be set in env" }, { status: 500 })

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server"
-
-const VPS_URL = process.env.VPS_URL || "https://srv1197943.taild42583.ts.net:10000"
+import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
 
@@ -8,6 +7,7 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}))
   const url = (body as { url?: string }).url
   if (!url) return NextResponse.json({ error: "url required" }, { status: 400 })
+  const VPS_URL = (await getSecret("VPS_URL")) || "https://srv1197943.taild42583.ts.net:10000"
   try {
     const res = await fetch(`${VPS_URL}/goto`, {
       method: "POST",

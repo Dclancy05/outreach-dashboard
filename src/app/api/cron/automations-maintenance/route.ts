@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -10,7 +11,9 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const VPS_URL = process.env.VPS_URL || "https://srv1197943.taild42583.ts.net:10000"
+async function vpsUrl(): Promise<string> {
+  return (await getSecret("VPS_URL")) || "https://srv1197943.taild42583.ts.net:10000"
+}
 
 const TEST_TARGETS: Record<string, string> = {
   instagram: "https://www.instagram.com/mrbeast/",
@@ -84,6 +87,7 @@ async function handle(req: NextRequest) {
     let replayData: { steps?: Array<{ status: string }>; lastError?: string } = {}
 
     try {
+      const VPS_URL = await vpsUrl()
       const res = await fetch(`${VPS_URL}/replay`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

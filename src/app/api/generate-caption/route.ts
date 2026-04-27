@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 /**
  * AI Caption Generator
  * Uses OpenAI if available, otherwise falls back to templates.
  */
-
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || ""
 
 const CAPTION_TEMPLATES: Record<string, string[]> = {
   image: [
@@ -46,6 +45,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json()
     const { content_type, persona, existing_caption } = body
+    const OPENAI_API_KEY = (await getSecret("OPENAI_API_KEY")) || ""
 
     // Try OpenAI first
     if (OPENAI_API_KEY) {

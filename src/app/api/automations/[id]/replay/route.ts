@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
-
-const VPS_URL = process.env.VPS_URL || process.env.RECORDING_SERVER_URL || "https://srv1197943.taild42583.ts.net:10000"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
@@ -68,6 +67,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   let stepResults: Array<{ index: number; description: string; status: string; detail?: string }> = []
   let overall: "passed" | "failed" = "failed"
   let lastError: string | null = null
+
+  const VPS_URL =
+    (await getSecret("VPS_URL")) ||
+    (await getSecret("RECORDING_SERVER_URL")) ||
+    "https://srv1197943.taild42583.ts.net:10000"
 
   try {
     const res = await fetch(`${VPS_URL}/replay`, {

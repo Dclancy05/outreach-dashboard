@@ -10,7 +10,7 @@
  * users can still tweak token budgets, MCP keys, default personas, etc.
  */
 import { useEffect, useState } from "react"
-import { Brain, FolderTree, MessageSquare, Settings as SettingsIcon } from "lucide-react"
+import { Brain, FolderTree, KeyRound, MessageSquare, Settings as SettingsIcon } from "lucide-react"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -22,9 +22,10 @@ import { SettingsPanel } from "@/components/memory/settings-panel"
 import { TreeView } from "@/components/memory-tree/tree-view"
 import { FileEditor } from "@/components/memory-tree/file-editor"
 import { ConversationsView } from "@/components/memory-tree/conversations-view"
+import { ApiKeysView } from "@/components/api-keys/api-keys-view"
 
-type MemoryTab = "tree" | "conversations"
-const VALID_TABS: MemoryTab[] = ["tree", "conversations"]
+type MemoryTab = "tree" | "conversations" | "api-keys"
+const VALID_TABS: MemoryTab[] = ["tree", "conversations", "api-keys"]
 
 function readTabFromHash(): MemoryTab {
   if (typeof window === "undefined") return "tree"
@@ -106,6 +107,10 @@ export default function MemoryPage() {
             <MessageSquare className="w-4 h-4" />
             Conversations
           </TabsTrigger>
+          <TabsTrigger value="api-keys" className="gap-2">
+            <KeyRound className="w-4 h-4" />
+            API Keys
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="tree" className="flex-1 mt-3 min-h-0">
@@ -138,6 +143,14 @@ export default function MemoryPage() {
           <div className="px-4 pb-4 h-full">
             <Card className="h-full overflow-hidden">
               <ConversationsView />
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="api-keys" className="flex-1 mt-3 min-h-0">
+          <div className="px-4 pb-4 h-full">
+            <Card className="h-full overflow-hidden p-0">
+              <ApiKeysView />
             </Card>
           </div>
         </TabsContent>

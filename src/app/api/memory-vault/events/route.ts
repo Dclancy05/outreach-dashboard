@@ -7,14 +7,14 @@
  * fetch streams without quirks. Long-running stream is fine on Fluid Compute.
  */
 import { NextRequest, NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const API_URL = (process.env.MEMORY_VAULT_API_URL || "").replace(/\/+$/, "")
-const TOKEN = process.env.MEMORY_VAULT_TOKEN || ""
-
 export async function GET(req: NextRequest): Promise<Response> {
+  const API_URL = ((await getSecret("MEMORY_VAULT_API_URL")) || "").replace(/\/+$/, "")
+  const TOKEN = (await getSecret("MEMORY_VAULT_TOKEN")) || ""
   if (!API_URL || !TOKEN) {
     return NextResponse.json(
       { error: "memory-vault not configured" },

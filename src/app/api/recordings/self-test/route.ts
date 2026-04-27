@@ -6,7 +6,14 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-const VPS_URL = process.env.VPS_URL || process.env.RECORDING_SERVER_URL || "http://srv1197943.hstgr.cloud:3848"
+async function vpsUrl(): Promise<string> {
+  const { getSecret } = await import("@/lib/secrets")
+  return (
+    (await getSecret("VPS_URL")) ||
+    (await getSecret("RECORDING_SERVER_URL")) ||
+    "http://srv1197943.hstgr.cloud:3848"
+  )
+}
 
 // 5 selector strategies in order of preference
 const STRATEGIES = [
@@ -177,6 +184,7 @@ const TEST_TARGETS: Record<string, Record<string, { url: string; name: string; s
 
 async function runCDPCommand(method: string, params: Record<string, unknown> = {}) {
   try {
+    const VPS_URL = await vpsUrl()
     const res = await fetch(`${VPS_URL}/cdp`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

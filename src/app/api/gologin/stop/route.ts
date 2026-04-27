@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
 import WebSocket from "ws"
+import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 30 // Allow up to 30s for this endpoint
 
-const TOKEN = process.env.GOLOGIN_API_TOKEN
 const GOLOGIN_API = "https://api.gologin.com/browser"
 
 // Platform-specific login cookies
@@ -68,7 +68,7 @@ async function extractCookiesViaCDP(wsUrl: string, timeoutMs = 10000): Promise<a
 /**
  * Convert CDP cookie format to GoLogin cookie format and upload via POST.
  */
-async function uploadCookiesToProfile(profileId: string, cdpCookies: any[]): Promise<boolean> {
+async function uploadCookiesToProfile(profileId: string, cdpCookies: any[], token: string): Promise<boolean> {
   // Convert CDP format to GoLogin/Netscape format
   const glCookies = cdpCookies.map((c) => ({
     url: `https://${c.domain?.replace(/^\./, "")}${c.path || "/"}`,
@@ -90,7 +90,7 @@ async function uploadCookiesToProfile(profileId: string, cdpCookies: any[]): Pro
     const res = await fetch(`${GOLOGIN_API}/${profileId}/cookies`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${TOKEN}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(glCookies),
@@ -102,6 +102,7 @@ async function uploadCookiesToProfile(profileId: string, cdpCookies: any[]): Pro
 }
 
 export async function POST(req: NextRequest) {
+  const TOKEN = await getSecret("GOLOGIN_API_TOKEN")
   if (!TOKEN) {
     return NextResponse.json({ error: "GOLOGIN_API_TOKEN not configured" }, { status: 500 })
   }
@@ -130,7 +131,7 @@ export async function POST(req: NextRequest) {
         console.log(`[stop] Extracted ${cdpCookies.length} cookies via CDP`)
 
         // Upload cookies to GoLogin profile BEFORE stopping
-        cdpUploaded = await uploadCookiesToProfile(profileId, cdpCookies)
+        cdpUploaded = await uploadCookiesToProfile(profileId, cdpCookies, TOKEN)
         console.log(`[stop] Cookie upload: ${cdpUploaded ? "success" : "failed"}`)
       }
     }
@@ -188,7 +189,7 @@ export async function POST(req: NextRequest) {
     // ── STEP 5: If verification failed but we have CDP cookies, retry upload ─
     if (!cookieVerified && cdpCookies && cdpCookies.length > 0) {
       console.log(`[stop] Verification failed, retrying cookie upload...`)
-      const retryUpload = await uploadCookiesToProfile(profileId, cdpCookies)
+      const retryUpload = await uploadCookiesToProfile(profileId, cdpCookies, TOKEN)
 
       if (retryUpload) {
         // Wait and re-verify

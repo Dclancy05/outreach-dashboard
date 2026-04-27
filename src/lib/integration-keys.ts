@@ -1,18 +1,16 @@
 /**
- * Shared helpers for the Settings → Integrations & API Keys panel.
+ * Legacy helpers for the old `system_settings.integration_key_*` shape.
  *
- * Keeps the allowed-key list, the storage prefix, and the read-helper in one
- * place so the GET/POST route and the /test sub-route stay consistent.
+ * The 10 hardcoded ALLOWED_KEYS are kept so the legacy
+ * /api/system-settings/keys + /test routes stay compatible during rollout.
+ * `readKey()` now delegates to the central `getSecret()` so any code still
+ * calling it picks up new values from the api_keys table automatically.
  *
- * Storage shape (in `system_settings`):
- *   key:   "integration_key_<NAME>"
- *   value: { value: "<raw secret>" }   ← jsonb, single-field wrapper
- *
- * The wrapper means we can extend `value` later (e.g. add `last_tested_at`
- * or `tested_ok: bool`) without migrating existing rows.
+ * For new call-sites, import `getSecret` from "@/lib/secrets" directly —
+ * it works for any env-var name, not just the 10 in ALLOWED_KEYS.
  */
 
-import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "./secrets"
 
 export const ALLOWED_KEYS = [
   "INSTANTLY_API_KEY",
@@ -29,7 +27,6 @@ export const ALLOWED_KEYS = [
 
 export type AllowedKey = (typeof ALLOWED_KEYS)[number]
 
-// Keys that can be read but never written from the UI.
 export const READ_ONLY_KEYS: ReadonlySet<string> = new Set(["CRON_SECRET"])
 
 export const KEY_PREFIX = "integration_key_"
@@ -46,33 +43,9 @@ export function maskValue(raw: string | null | undefined): string {
   return `${s.slice(0, 3)}…${s.slice(-4)}`
 }
 
-function getSupabase() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
-
 /**
- * Read a key's raw value: prefer system_settings, fall back to process.env.
- * Returns `null` if neither source has it.
+ * Read a key's raw value via the new central store (api_keys → system_settings → env).
  */
 export async function readKey(key: AllowedKey): Promise<string | null> {
-  const supabase = getSupabase()
-  const { data } = await supabase
-    .from("system_settings")
-    .select("value")
-    .eq("key", `${KEY_PREFIX}${key}`)
-    .maybeSingle()
-
-  const stored = data?.value
-  if (stored && typeof stored === "object" && "value" in stored) {
-    if (typeof stored.value === "string" && stored.value) return stored.value
-  } else if (typeof stored === "string" && stored) {
-    return stored
-  }
-
-  const fromEnv = process.env[key]
-  return typeof fromEnv === "string" && fromEnv ? fromEnv : null
+  return getSecret(key)
 }

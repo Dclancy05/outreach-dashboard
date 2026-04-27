@@ -3,6 +3,8 @@
  * Generates background music tracks for videos
  */
 
+import { getSecret } from '@/lib/secrets'
+
 const API_BASE = 'https://api.suno.ai/v1'
 
 /**
@@ -15,7 +17,7 @@ export async function generateMusic(
   prompt: string,
   durationSeconds?: number
 ): Promise<{ audioUrl: string; id: string }> {
-  const apiKey = process.env.SUNO_API_KEY
+  const apiKey = await getSecret('SUNO_API_KEY')
   if (!apiKey) {
     console.log('[Suno] No SUNO_API_KEY configured — skipping music generation')
     return { audioUrl: '', id: 'skipped' }
@@ -57,7 +59,7 @@ export async function generateMusic(
  * @returns Current status and audio URL when complete
  */
 export async function checkStatus(id: string): Promise<{ status: string; audioUrl?: string }> {
-  const apiKey = process.env.SUNO_API_KEY
+  const apiKey = await getSecret('SUNO_API_KEY')
   if (!apiKey || id === 'skipped' || id === 'error') {
     return { status: 'skipped' }
   }

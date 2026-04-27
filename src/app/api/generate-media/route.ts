@@ -1,19 +1,17 @@
 import { NextResponse } from "next/server"
+import { getSecret } from "@/lib/secrets"
 
 /**
  * Media Generation via Kling AI API
  * Generates videos and images for content posts
- * 
+ *
  * ENV VARS NEEDED:
  * - KLING_API_KEY — your Kling AI API key
  * - KLING_API_URL — Kling API base URL (default: https://api.klingai.com)
- * 
+ *
  * Kling AI docs: https://docs.klingai.com
  * Supports: text-to-video, text-to-image, image-to-video
  */
-
-const KLING_API_KEY = process.env.KLING_API_KEY || ""
-const KLING_API_URL = process.env.KLING_API_URL || "https://api.klingai.com"
 
 export async function POST(req: Request) {
   try {
@@ -23,6 +21,9 @@ export async function POST(req: Request) {
     if (!prompt) {
       return NextResponse.json({ error: "Missing prompt" }, { status: 400 })
     }
+
+    const KLING_API_KEY = (await getSecret("KLING_API_KEY")) || ""
+    const KLING_API_URL = (await getSecret("KLING_API_URL")) || "https://api.klingai.com"
 
     if (!KLING_API_KEY) {
       return NextResponse.json({

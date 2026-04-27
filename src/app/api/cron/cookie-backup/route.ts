@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-
-const VPS_URL = process.env.VPS_URL || "https://srv1197943.taild42583.ts.net:10000"
+import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -11,6 +10,7 @@ async function handle(req: NextRequest) {
   if (!expected) return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 })
   if (auth !== `Bearer ${expected}`) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
   try {
+    const VPS_URL = (await getSecret("VPS_URL")) || "https://srv1197943.taild42583.ts.net:10000"
     const res = await fetch(`${VPS_URL}/cookies/backup`, {
       method: "POST",
       signal: AbortSignal.timeout(10000),

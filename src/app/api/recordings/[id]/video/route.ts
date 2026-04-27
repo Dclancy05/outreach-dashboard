@@ -1,15 +1,18 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const VPS_URL = process.env.VPS_URL || process.env.RECORDING_SERVER_URL || "http://srv1197943.hstgr.cloud:3848"
-
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
+  const VPS_URL =
+    (await getSecret("VPS_URL")) ||
+    (await getSecret("RECORDING_SERVER_URL")) ||
+    "http://srv1197943.hstgr.cloud:3848"
 
   const { data: recording } = await supabase
     .from("recordings")

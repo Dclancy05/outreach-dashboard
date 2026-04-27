@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -68,17 +69,21 @@ function detectSource(url: string): string {
 export async function POST() {
   try {
     const allJobs: JobResult[] = []
+    const BRAVE_API_KEY =
+      (await getSecret("BRAVE_SEARCH_API_KEY")) ||
+      (await getSecret("BRAVE_API_KEY")) ||
+      ""
 
     // Use Brave Search API via web fetch to find job listings
     for (const query of SEARCH_QUERIES) {
       try {
         const searchUrl = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query + " site:indeed.com OR site:linkedin.com OR site:ziprecruiter.com")}&count=10`
-        
+
         const res = await fetch(searchUrl, {
           headers: {
             "Accept": "application/json",
             "Accept-Encoding": "gzip",
-            "X-Subscription-Token": process.env.BRAVE_API_KEY || "",
+            "X-Subscription-Token": BRAVE_API_KEY,
           },
         })
 
