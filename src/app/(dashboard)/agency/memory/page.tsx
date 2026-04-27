@@ -92,7 +92,7 @@ export default function MemoryPage() {
             </Card>
             <Card className="overflow-hidden p-0">
               {selectedPath ? (
-                <FileEditor key={selectedPath} path={selectedPath} />
+                <FileEditor key={selectedPath} path={selectedPath} onPathChange={setSelectedPath} />
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-sm">
                   <Brain className="w-8 h-8 mb-3 text-zinc-700" />
