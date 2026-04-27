@@ -39,6 +39,10 @@ If you're working on outreach service code, you're editing files that get deploy
 - `/api/personas` — full persona CRUD with parent inheritance
 - `/api/observability/vnc` — observability scaffolding
 - `/api/ai-agent/scan` — daily AI scan cron at 10:30 UTC
+- `/agency/memory#agent-workflows` — visual multi-agent system (Agents · Workflows · Schedules · Runs subtabs). Agent .md files in `Jarvis/agent-skills/` auto-sync to `~/.claude/agents/` so they double as Claude Code subagents in terminal sessions. Inngest powers durable execution (loops, approval gates, crash-resume). Spec: `SYSTEM.md §25`. Plan: `/root/.claude/plans/okay-so-just-a-polymorphic-stearns.md`.
+- `/api/agents`, `/api/workflows`, `/api/schedules`, `/api/runs/*` — full CRUD + run control + SSE step logs
+- `/api/cron/workflow-tick` — every-minute scheduler tick (drains schedules into Inngest)
+- `/api/inngest` — Inngest function endpoint hosting `runWorkflow` and `summarizeRun`
 
 **Memory types:** `user` / `feedback` / `project` / `reference` (same as Claude Code's auto-memory).
 

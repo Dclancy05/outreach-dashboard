@@ -10,8 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Settings as SettingsIcon, Save, Check, Calendar, Upload, Shield, Users, Wifi, Instagram, Facebook, Linkedin, AlertCircle, ChevronDown, ChevronUp, Globe, ExternalLink, CheckCircle, Mail, BellRing, RefreshCw, KeyRound, ArrowRight } from "lucide-react"
-import Link from "next/link"
+import { Settings as SettingsIcon, Save, Check, Calendar, Upload, Shield, Users, Wifi, Instagram, Facebook, Linkedin, AlertCircle, ChevronDown, ChevronUp, Globe, ExternalLink, CheckCircle, Mail, BellRing, RefreshCw } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useSearchParams } from "next/navigation"
@@ -846,7 +845,6 @@ export default function SettingsPage() {
   const tabParam = search?.get("tab")
   const initialTab =
     tabParam === "alerts" ||
-    tabParam === "integrations" ||
     tabParam === "accounts" ||
     tabParam === "gologin" ||
     tabParam === "email"
@@ -874,7 +872,6 @@ export default function SettingsPage() {
           <TabsTrigger value="gologin" className="gap-1.5"><Globe className="h-3.5 w-3.5" /> GoLogin</TabsTrigger>
           <TabsTrigger value="email" className="gap-1.5"><Mail className="h-3.5 w-3.5" /> Microsoft Email</TabsTrigger>
           <TabsTrigger value="alerts" className="gap-1.5"><BellRing className="h-3.5 w-3.5" /> Alerts &amp; Monitoring</TabsTrigger>
-          <TabsTrigger value="integrations" className="gap-1.5"><KeyRound className="h-3.5 w-3.5" /> Integrations &amp; API Keys</TabsTrigger>
         </TabsList>
         <TabsContent value="general">
           <GeneralSettingsTab />
@@ -890,28 +887,6 @@ export default function SettingsPage() {
         </TabsContent>
         <TabsContent value="alerts">
           <AlertsMonitoringTab />
-        </TabsContent>
-        <TabsContent value="integrations">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <KeyRound className="h-4 w-4 text-amber-400" />
-                Integrations &amp; API Keys moved
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                API keys live on the Memory page now — one place for everything
-                your AI needs access to. Add, edit, test, or set an expiration
-                date there.
-              </p>
-              <Button asChild className="gap-1.5">
-                <Link href="/agency/memory#api-keys">
-                  Open API Keys <ArrowRight className="h-3.5 w-3.5" />
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
         </TabsContent>
       </Tabs>
     </div>

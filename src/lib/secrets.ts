@@ -1,101 +1,27 @@
 /**
- * Single secret-reader for the whole app.
+ * Server-side secret reader. Reads from process.env only.
  *
- * Resolution order:
- *   1. api_keys table (latest non-expired row for env_var)
- *   2. system_settings.integration_key_<env_var>  (legacy)
- *   3. process.env[env_var]                       (deploy bootstrap)
- *
- * 60s in-process cache so a hot route doesn't hit Supabase on every call.
- * Writers (the /api/api-keys POST handlers) call invalidateSecret() so a saved
- * key takes effect within at most 60s on every serverless instance.
- *
- * Bootstrap secrets (Supabase URL/keys, ADMIN_PIN, SESSION_SIGNING_SECRET,
- * CRON_SECRET, OUTREACH_MEMORY_MCP_KEY) MUST stay on process.env — they're
- * needed before this helper can talk to Supabase. Don't add them to api_keys.
+ * Earlier versions of this file looked up an `api_keys` table in Supabase to
+ * support a UI-driven secrets manager. That UI was removed (it created a
+ * surface that revealed which keys exist, which is itself an attack signal).
+ * This file is kept because ~50 call-sites already read through it; deleting
+ * it would force a 50-file revert with no behavioral benefit.
  */
 
-import { createClient } from "@supabase/supabase-js"
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
-
-const cache = new Map<string, { value: string | null; ts: number }>()
-const TTL_MS = 60_000
-
 export async function getSecret(envVar: string): Promise<string | null> {
-  const cached = cache.get(envVar)
-  if (cached && Date.now() - cached.ts < TTL_MS) return cached.value
-
-  // 1. api_keys table — most recently updated, non-expired row wins.
-  try {
-    const nowIso = new Date().toISOString()
-    const { data } = await supabase
-      .from("api_keys")
-      .select("value, id")
-      .eq("env_var", envVar)
-      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (data?.value) {
-      // Fire-and-forget last_used_at bump.
-      void supabase
-        .from("api_keys")
-        .update({ last_used_at: nowIso })
-        .eq("id", data.id)
-      cache.set(envVar, { value: data.value, ts: Date.now() })
-      return data.value
-    }
-  } catch {
-    // Table missing or DB unreachable — fall through to legacy + env.
-  }
-
-  // 2. Legacy system_settings.integration_key_<env_var>.
-  try {
-    const { data: legacy } = await supabase
-      .from("system_settings")
-      .select("value")
-      .eq("key", `integration_key_${envVar}`)
-      .maybeSingle()
-
-    const stored = legacy?.value
-    let legacyVal: string | null = null
-    if (stored && typeof stored === "object" && "value" in stored) {
-      const v = (stored as { value: unknown }).value
-      if (typeof v === "string" && v) legacyVal = v
-    } else if (typeof stored === "string" && stored) {
-      legacyVal = stored
-    }
-    if (legacyVal) {
-      cache.set(envVar, { value: legacyVal, ts: Date.now() })
-      return legacyVal
-    }
-  } catch {
-    // Fall through.
-  }
-
-  // 3. process.env fallback.
-  const envVal = process.env[envVar]
-  const out = typeof envVal === "string" && envVal ? envVal : null
-  cache.set(envVar, { value: out, ts: Date.now() })
-  return out
+  const v = process.env[envVar]
+  return typeof v === "string" && v ? v : null
 }
 
-/** Synchronous best-effort read — env-only, no DB. Use only where async is impossible. */
 export function getSecretSync(envVar: string): string | null {
   const v = process.env[envVar]
   return typeof v === "string" && v ? v : null
 }
 
-export function invalidateSecret(envVar: string): void {
-  cache.delete(envVar)
+export function invalidateSecret(_envVar: string): void {
+  /* no-op — kept so existing imports compile after the secrets-table removal */
 }
 
 export function invalidateAllSecrets(): void {
-  cache.clear()
+  /* no-op */
 }

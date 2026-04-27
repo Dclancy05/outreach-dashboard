@@ -1,0 +1,19 @@
+{
+  "name": "agent-runner",
+  "version": "0.1.0",
+  "description": "Tiny HTTP service that spawns Claude agents from ~/.claude/agents/*.md files. Called by the dashboard's Inngest workflow function per step.",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "start": "tsx index.ts",
+    "dev": "tsx watch index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^5.3.3",
+    "@types/node": "^20.11.0"
+  }
+}

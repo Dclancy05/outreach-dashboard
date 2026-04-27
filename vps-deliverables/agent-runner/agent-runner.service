@@ -1,0 +1,22 @@
+[Unit]
+Description=Outreach OS Agent Runner — spawns Claude agents from ~/.claude/agents/*.md files
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/agent-runner
+ExecStart=/usr/bin/env tsx /root/agent-runner/index.ts
+Restart=on-failure
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=10001
+EnvironmentFile=/etc/agent-runner.env
+StandardOutput=journal
+StandardError=journal
+
+# Resource caps so a runaway loop can't take down the box
+MemoryMax=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

@@ -10,7 +10,7 @@
  * users can still tweak token budgets, MCP keys, default personas, etc.
  */
 import { useEffect, useState } from "react"
-import { Brain, FolderTree, KeyRound, MessageSquare, Settings as SettingsIcon } from "lucide-react"
+import { Brain, Bot, FolderTree, MessageSquare, Settings as SettingsIcon } from "lucide-react"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -22,14 +22,15 @@ import { SettingsPanel } from "@/components/memory/settings-panel"
 import { TreeView } from "@/components/memory-tree/tree-view"
 import { FileEditor } from "@/components/memory-tree/file-editor"
 import { ConversationsView } from "@/components/memory-tree/conversations-view"
-import { ApiKeysView } from "@/components/api-keys/api-keys-view"
+import { AgentWorkflowsTabs } from "@/components/agent-workflows/agent-workflows-tabs"
 
-type MemoryTab = "tree" | "conversations" | "api-keys"
-const VALID_TABS: MemoryTab[] = ["tree", "conversations", "api-keys"]
+type MemoryTab = "tree" | "conversations" | "agent-workflows"
+const VALID_TABS: MemoryTab[] = ["tree", "conversations", "agent-workflows"]
 
 function readTabFromHash(): MemoryTab {
   if (typeof window === "undefined") return "tree"
-  const h = window.location.hash.replace(/^#/, "") as MemoryTab
+  // Hash may be "tree" or "agent-workflows/runs". Take the first segment.
+  const h = window.location.hash.replace(/^#/, "").split("/")[0] as MemoryTab
   return VALID_TABS.includes(h) ? h : "tree"
 }
 
@@ -107,9 +108,9 @@ export default function MemoryPage() {
             <MessageSquare className="w-4 h-4" />
             Conversations
           </TabsTrigger>
-          <TabsTrigger value="api-keys" className="gap-2">
-            <KeyRound className="w-4 h-4" />
-            API Keys
+          <TabsTrigger value="agent-workflows" className="gap-2">
+            <Bot className="w-4 h-4" />
+            Agent Workflows
           </TabsTrigger>
         </TabsList>
 
@@ -147,12 +148,8 @@ export default function MemoryPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="api-keys" className="flex-1 mt-3 min-h-0">
-          <div className="px-4 pb-4 h-full">
-            <Card className="h-full overflow-hidden p-0">
-              <ApiKeysView />
-            </Card>
-          </div>
+        <TabsContent value="agent-workflows" className="flex-1 mt-3 min-h-0">
+          <AgentWorkflowsTabs />
         </TabsContent>
       </Tabs>
     </div>
