@@ -41,22 +41,11 @@ import {
   RefreshCw, LogIn, XCircle, Save, Clipboard,
 } from "lucide-react"
 import NoVncViewer from "@/components/novnc-viewer"
+import { PLATFORM_LOGIN_URLS } from "@/lib/platform-login-urls"
 
-// Canonical login URL per platform. /api/platforms/goto forwards this to the
-// VPS's single Chrome instance so the user lands on the right login page
-// without having to type a URL inside the noVNC session.
-const PLATFORM_LOGIN_URLS: Record<string, string> = {
-  instagram: "https://www.instagram.com/accounts/login/",
-  facebook: "https://www.facebook.com/login",
-  linkedin: "https://www.linkedin.com/login",
-  tiktok: "https://www.tiktok.com/login",
-  twitter: "https://twitter.com/login",
-  x: "https://x.com/login",
-  youtube: "https://accounts.google.com/signin",
-  google: "https://accounts.google.com/signin",
-  pinterest: "https://www.pinterest.com/login/",
-  snapchat: "https://accounts.snapchat.com/accounts/login",
-}
+// Canonical login URL per platform lives in src/lib/platform-login-urls.ts —
+// /api/platforms/goto forwards this to the VPS's single Chrome instance so the
+// user lands on the right login page without having to type a URL.
 
 // Per-platform step list + quick tips. Same tone as the recording flow guide
 // so users hit a consistent instructional pattern across the app.

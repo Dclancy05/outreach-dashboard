@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { generateFingerprint, deriveGeoFields } from "@/lib/fingerprint"
+import { PLATFORM_LOGIN_URLS } from "@/lib/platform-login-urls"
 
 const VNC_MANAGER_URL = process.env.VNC_MANAGER_URL || "http://127.0.0.1:18790"
 if (!process.env.VNC_API_KEY) {
@@ -13,21 +14,9 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-// Default login URL per platform. Forwarded to the VNC Manager so Chrome
-// opens directly on the right login page instead of relying on a follow-up
-// /navigate call (which races against the first page load and sometimes drops).
-const PLATFORM_LOGIN_URLS: Record<string, string> = {
-  instagram: "https://www.instagram.com/accounts/login/",
-  facebook: "https://www.facebook.com/login",
-  linkedin: "https://www.linkedin.com/login",
-  tiktok: "https://www.tiktok.com/login",
-  twitter: "https://twitter.com/login",
-  x: "https://x.com/login",
-  youtube: "https://accounts.google.com/signin",
-  google: "https://accounts.google.com/signin",
-  pinterest: "https://www.pinterest.com/login/",
-  snapchat: "https://accounts.snapchat.com/accounts/login",
-}
+// Default login URL per platform now lives in src/lib/platform-login-urls.ts
+// so the VNC session bootstrapper, the platform-login modal, and the goto
+// helper all read from one source. Lookup is case-insensitive (see below).
 
 export async function POST(req: NextRequest) {
   try {
@@ -171,7 +160,9 @@ export async function POST(req: NextRequest) {
     const resolvedInitialUrl: string | undefined =
       (typeof initial_url === "string" && initial_url) ||
       (typeof initialUrl === "string" && initialUrl) ||
-      (primaryPlatform ? PLATFORM_LOGIN_URLS[primaryPlatform] : undefined)
+      (primaryPlatform
+        ? PLATFORM_LOGIN_URLS[String(primaryPlatform).toLowerCase()]
+        : undefined)
 
     // Per-account profile dir: we pin it to /vps/profiles/<account_id> so the
     // VPS VNC Manager can mount a persistent --user-data-dir that survives

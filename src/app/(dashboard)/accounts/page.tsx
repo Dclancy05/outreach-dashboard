@@ -350,6 +350,22 @@ export default function AccountsPage() {
     warmup_sequence_id: "",
     proxy_group_id: "",
   })
+  // Email + SMS use separate provider integrations (Instantly / GHL) so we
+  // keep their fields in their own form state — the "social" accountForm
+  // shape doesn't fit and would just be a bag of `any` strings.
+  const [emailForm, setEmailForm] = useState({
+    instantly_api_key: "",
+    from_email: "",
+    from_name: "",
+    daily_limit: "100",
+  })
+  const [smsForm, setSmsForm] = useState({
+    ghl_subaccount_id: "",
+    ghl_api_key: "",
+    from_number: "",
+    daily_limit: "50",
+  })
+  const [testingDirectApi, setTestingDirectApi] = useState(false)
   const [limitMode, setLimitMode] = useState<"daily" | "warmup">("daily")
   const [activeTab, setActiveTab] = useState("groups")
   const [warmupForm, setWarmupForm] = useState({ name: "", platform: "", steps: [{ day_start: 1, day_end: 5, daily_limit: 5 }, { day_start: 6, day_end: 10, daily_limit: 10 }, { day_start: 11, day_end: 20, daily_limit: 20 }, { day_start: 21, day_end: 999, daily_limit: 40 }] })
@@ -392,6 +408,11 @@ export default function AccountsPage() {
   const [verifyingAcct, setVerifyingAcct] = useState<Set<string>>(new Set())
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null)
   const [editingGroupName, setEditingGroupName] = useState("")
+  // Per-row inline rename for the @username on the Accounts tab. Mirrors
+  // the Group rename pattern above — pencil icon flips the cell to an
+  // Input with check/X confirms.
+  const [editingAccountId, setEditingAccountId] = useState<string | null>(null)
+  const [editingAccountName, setEditingAccountName] = useState("")
   const [showEditProxyDialog, setShowEditProxyDialog] = useState(false)
   const [editProxyForm, setEditProxyForm] = useState({ id: "", provider: "", ip: "", port: "", username: "", password: "", location_city: "", location_state: "", location_country: "US", monthly_cost: "" })
   const [detailAccountId, setDetailAccountId] = useState<string | null>(null)
@@ -534,6 +555,31 @@ export default function AccountsPage() {
     })
     if (res.ok) { toast.success("Group renamed"); setEditingGroupId(null); fetchAll() }
     else toast.error("Failed to rename group")
+  }
+
+  // Inline @username rename — hits the per-account PATCH endpoint that
+  // Builder C is shipping. Strips a leading @ before sending so the DB
+  // stays consistent with the Add Account dialog's normalization.
+  async function renameAccount(accountId: string, newName: string) {
+    const username = (newName || "").trim().replace(/^@/, "")
+    if (!username) {
+      toast.error("Username can't be empty")
+      return
+    }
+    const res = await fetch(`/api/accounts/${accountId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username }),
+    })
+    if (res.ok) {
+      toast.success("Username updated")
+      setEditingAccountId(null)
+      setEditingAccountName("")
+      fetchAll()
+    } else {
+      const err = await res.json().catch(() => ({}))
+      toast.error(err?.error || "Failed to rename account")
+    }
   }
 
   async function toggleDummy(id: string, nextVal: boolean) {
@@ -691,6 +737,74 @@ export default function AccountsPage() {
     })
     setLimitMode("daily")
     fetchAll()
+  }
+
+  // Direct-API account creation. Email + SMS don't need a proxy or Chrome
+  // session — they hit Instantly / GHL APIs server-side. Each platform has
+  // its own builder-shipped endpoint that validates creds before persisting.
+  async function createEmailAccount() {
+    if (!emailForm.instantly_api_key || !emailForm.from_email) {
+      toast.error("API key and From email are required")
+      return
+    }
+    const res = await fetch("/api/accounts/email-add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(emailForm),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok || json?.success === false) {
+      toast.error(`Failed to add email account — ${json?.error || "failed"}`)
+      return
+    }
+    toast.success("Email account added")
+    setShowAccountForm(false)
+    setEmailForm({ instantly_api_key: "", from_email: "", from_name: "", daily_limit: "100" })
+    fetchAll()
+  }
+
+  async function createSmsAccount() {
+    if (!smsForm.ghl_subaccount_id || !smsForm.ghl_api_key || !smsForm.from_number) {
+      toast.error("Sub-account ID, API key, and From Number are required")
+      return
+    }
+    const res = await fetch("/api/accounts/sms-add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(smsForm),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok || json?.success === false) {
+      toast.error(`Failed to add SMS account — ${json?.error || "failed"}`)
+      return
+    }
+    toast.success("SMS account added")
+    setShowAccountForm(false)
+    setSmsForm({ ghl_subaccount_id: "", ghl_api_key: "", from_number: "", daily_limit: "50" })
+    fetchAll()
+  }
+
+  async function testDirectApi(kind: "email" | "sms") {
+    setTestingDirectApi(true)
+    try {
+      const url = kind === "email" ? "/api/accounts/email-add?test=true" : "/api/accounts/sms-add?test=true"
+      const body = kind === "email" ? emailForm : smsForm
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (res.ok && json?.success !== false) {
+        toast.success(`${kind === "email" ? "Email" : "SMS"} connection OK${json?.message ? ` — ${json.message}` : ""}`)
+      } else {
+        toast.error(`Connection failed — ${json?.error || "check credentials"}`)
+      }
+    } catch (e: any) {
+      toast.error(`Connection test failed — ${e?.message || "network error"}`)
+    } finally {
+      setTestingDirectApi(false)
+    }
   }
 
   async function assignProxy(accountId: string, proxyGroupId: string) {
@@ -1222,7 +1336,7 @@ export default function AccountsPage() {
                 </div>
                 <h3 className="text-lg font-semibold mb-1 text-foreground">No groups set up yet</h3>
                 <p className="text-sm text-muted-foreground mb-6 max-w-md mx-auto">
-                  Pick a proxy, choose your platforms, and log into each one. Takes about 2 minutes.
+                  Each group = 1 proxy + 1 Chrome profile + accounts across platforms. Set up once, runs forever.
                 </p>
                 <Button
                   onClick={() => router.push("/accounts/setup")}
@@ -1316,19 +1430,65 @@ export default function AccountsPage() {
                                 >
                                   {selectedAccounts.has(a.account_id) && <Check className="h-3 w-3" />}
                                 </button>
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-semibold text-sm text-foreground">@{a.username || a.display_name || a.account_id}</span>
-                                  {/* Only show the green "session saved" checkmark when the
-                                      saved cookie jar actually contains a live auth cookie —
-                                      otherwise a stale blob lies about being signed in. */}
-                                  {a.has_auth_cookie && (
-                                    <span title="Active session (auth cookie live)"><CheckCircle2 className="h-3.5 w-3.5 text-green-400" /></span>
-                                  )}
-                                  {(a as any).twofa_secret && (
-                                    <span title="2FA configured"><Shield className="h-3.5 w-3.5 text-violet-400" /></span>
-                                  )}
-                                  {(a.status === "banned" || a.status === "flagged") && (
-                                    <span title={a.status}><AlertTriangle className="h-3.5 w-3.5 text-red-400" /></span>
+                                <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                                  {editingAccountId === a.account_id ? (
+                                    <>
+                                      <Input
+                                        value={editingAccountName}
+                                        onChange={e => setEditingAccountName(e.target.value)}
+                                        onKeyDown={e => {
+                                          if (e.key === "Enter") renameAccount(a.account_id, editingAccountName)
+                                          if (e.key === "Escape") { setEditingAccountId(null); setEditingAccountName("") }
+                                        }}
+                                        onClick={e => e.stopPropagation()}
+                                        className="h-7 text-sm font-semibold w-40"
+                                        autoFocus
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={e => { e.stopPropagation(); renameAccount(a.account_id, editingAccountName) }}
+                                        className="text-emerald-400 hover:text-emerald-300"
+                                        title="Save"
+                                      >
+                                        <Check className="h-4 w-4" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={e => { e.stopPropagation(); setEditingAccountId(null); setEditingAccountName("") }}
+                                        className="text-muted-foreground hover:text-foreground"
+                                        title="Cancel"
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="font-semibold text-sm text-foreground">@{a.username || a.display_name || a.account_id}</span>
+                                      <button
+                                        type="button"
+                                        onClick={e => {
+                                          e.stopPropagation()
+                                          setEditingAccountId(a.account_id)
+                                          setEditingAccountName(a.username || a.display_name || "")
+                                        }}
+                                        className="text-muted-foreground hover:text-foreground transition-colors"
+                                        title="Rename @username"
+                                      >
+                                        <Pencil className="h-3 w-3" />
+                                      </button>
+                                      {/* Only show the green "session saved" checkmark when the
+                                          saved cookie jar actually contains a live auth cookie —
+                                          otherwise a stale blob lies about being signed in. */}
+                                      {a.has_auth_cookie && (
+                                        <span title="Active session (auth cookie live)"><CheckCircle2 className="h-3.5 w-3.5 text-green-400" /></span>
+                                      )}
+                                      {(a as any).twofa_secret && (
+                                        <span title="2FA configured"><Shield className="h-3.5 w-3.5 text-violet-400" /></span>
+                                      )}
+                                      {(a.status === "banned" || a.status === "flagged") && (
+                                        <span title={a.status}><AlertTriangle className="h-3.5 w-3.5 text-red-400" /></span>
+                                      )}
+                                    </>
                                   )}
                                 </div>
                                 <Badge className={cn("text-[10px] border", statusColors[effectiveStatus(a)] || "bg-muted/30 text-muted-foreground")}>
@@ -1491,8 +1651,14 @@ export default function AccountsPage() {
                   <Select value={accountForm.platform} onValueChange={v => setAccountForm(f => ({ ...f, platform: v }))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {SOCIAL_PLATFORMS.map(p => {
-                        const taken = accountForm.proxy_group_id ? !canAssignProxy(accountForm.proxy_group_id, p.id) : false
+                      {/* ALL_PLATFORMS includes email + sms — those go through
+                          a different add path (Instantly / GHL APIs) and skip
+                          the proxy/Chrome flow entirely. */}
+                      {ALL_PLATFORMS.map(p => {
+                        const isDirectApi = p.id === "email" || p.id === "sms"
+                        const taken = !isDirectApi && accountForm.proxy_group_id
+                          ? !canAssignProxy(accountForm.proxy_group_id, p.id)
+                          : false
                         return (
                           <SelectItem key={p.id} value={p.id} disabled={taken}>
                             {p.label}{taken ? " — already on this proxy" : ""}
@@ -1502,6 +1668,74 @@ export default function AccountsPage() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {accountForm.platform === "email" ? (
+                  // ─── EMAIL branch (Instantly) ───────────────────────────
+                  <>
+                    <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3 text-xs text-amber-300">
+                      Email runs through Instantly. No proxy, no Chrome — just an API key.
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Instantly Connection</p>
+                      <div>
+                        <Label className="text-xs">Instantly API Key</Label>
+                        <Input type="password" placeholder="ist_••••••••" value={emailForm.instantly_api_key} onChange={e => setEmailForm(f => ({ ...f, instantly_api_key: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label className="text-xs">From Email</Label>
+                        <Input type="email" placeholder="dylan@dcmarketing.co" value={emailForm.from_email} onChange={e => setEmailForm(f => ({ ...f, from_email: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label className="text-xs">From Name</Label>
+                        <Input placeholder="Dylan Clancy" value={emailForm.from_name} onChange={e => setEmailForm(f => ({ ...f, from_name: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Daily Limit</Label>
+                        <Input type="number" placeholder="100" value={emailForm.daily_limit} onChange={e => setEmailForm(f => ({ ...f, daily_limit: e.target.value }))} />
+                      </div>
+                      <Button type="button" variant="outline" size="sm" disabled={testingDirectApi} onClick={() => testDirectApi("email")} className="rounded-xl text-xs">
+                        {testingDirectApi
+                          ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Testing...</>
+                          : <><Activity className="h-3 w-3 mr-1" /> Test Connection</>}
+                      </Button>
+                    </div>
+                    <Button onClick={createEmailAccount} className="bg-gradient-to-r from-amber-600 to-orange-600 rounded-xl">Add Email Account</Button>
+                  </>
+                ) : accountForm.platform === "sms" ? (
+                  // ─── SMS branch (GoHighLevel) ───────────────────────────
+                  <>
+                    <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3 text-xs text-emerald-300">
+                      SMS runs through GoHighLevel. No proxy needed — uses your GHL sub-account.
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">GoHighLevel Connection</p>
+                      <div>
+                        <Label className="text-xs">GHL Sub-Account ID</Label>
+                        <Input placeholder="ghl_sub_•••" value={smsForm.ghl_subaccount_id} onChange={e => setSmsForm(f => ({ ...f, ghl_subaccount_id: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label className="text-xs">GHL API Key</Label>
+                        <Input type="password" placeholder="ghl_api_••••••••" value={smsForm.ghl_api_key} onChange={e => setSmsForm(f => ({ ...f, ghl_api_key: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label className="text-xs">From Number</Label>
+                        <Input placeholder="+15551234567" value={smsForm.from_number} onChange={e => setSmsForm(f => ({ ...f, from_number: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Daily Limit</Label>
+                        <Input type="number" placeholder="50" value={smsForm.daily_limit} onChange={e => setSmsForm(f => ({ ...f, daily_limit: e.target.value }))} />
+                      </div>
+                      <Button type="button" variant="outline" size="sm" disabled={testingDirectApi} onClick={() => testDirectApi("sms")} className="rounded-xl text-xs">
+                        {testingDirectApi
+                          ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Testing...</>
+                          : <><Activity className="h-3 w-3 mr-1" /> Test Connection</>}
+                      </Button>
+                    </div>
+                    <Button onClick={createSmsAccount} className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl">Add SMS Account</Button>
+                  </>
+                ) : (
+                  // ─── Social platform branch (existing) ──────────────────
+                  <>
 
                 <div className="space-y-2">
                   <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Account Credentials <span className="text-muted-foreground/60 normal-case tracking-normal">(all optional)</span></p>
@@ -1604,6 +1838,8 @@ export default function AccountsPage() {
                 </div>
 
                 <Button onClick={createAccount} className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl">Add Account</Button>
+                  </>
+                )}
               </div>
             </DialogContent>
           </Dialog>

@@ -12,10 +12,11 @@ import { toast } from "sonner"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Monitor, Loader2, CheckCircle2, XCircle, ArrowRight, ArrowLeft,
-  Globe, Shield, Chrome, Cookie, Save, ChevronRight,
+  Globe, Shield, Chrome, Cookie, Save, ChevronRight, Sparkles,
   Server, Wifi, Plus, Layers, Instagram, Facebook, Linkedin, Zap, MapPin,
 } from "lucide-react"
 import { SOCIAL_PLATFORMS, getPlatform } from "@/lib/platforms"
+import { PLATFORM_LOGIN_URLS } from "@/lib/platform-login-urls"
 
 const VNC_WS_HOST = process.env.NEXT_PUBLIC_VNC_WS_HOST || "srv1197943.taild42583.ts.net"
 const VNC_API_BASE = `https://${VNC_WS_HOST}`
@@ -26,54 +27,57 @@ const platformIcons: Record<string, typeof Instagram> = {
   snapchat: Zap, reddit: Globe, threads: Layers,
 }
 
+// URLs come from the shared dict in @/lib/platform-login-urls so we never
+// have two copies drifting apart. Steps + success indicators stay inline
+// because they're wizard-specific copy, not URL config.
 const PLATFORM_LOGIN_GUIDES: Record<string, { url: string; steps: string[]; successIndicator: string }> = {
   instagram: {
-    url: "https://www.instagram.com/accounts/login/",
+    url: PLATFORM_LOGIN_URLS.instagram,
     steps: ["Enter your username or email", "Enter your password", "Complete 2FA if prompted", "Click 'Log In'", "Dismiss any popups ('Not Now')", "Wait for the home feed to load"],
     successIndicator: "You should see your Instagram feed",
   },
   facebook: {
-    url: "https://www.facebook.com/login/",
+    url: PLATFORM_LOGIN_URLS.facebook,
     steps: ["Enter your email or phone", "Enter your password", "Complete 2FA if prompted", "Click 'Log In'", "Dismiss any popups"],
     successIndicator: "You should see your News Feed",
   },
   linkedin: {
-    url: "https://www.linkedin.com/login",
+    url: PLATFORM_LOGIN_URLS.linkedin,
     steps: ["Enter your email", "Enter your password", "Complete security verification if shown", "Click 'Sign in'"],
     successIndicator: "You should see your LinkedIn feed",
   },
   tiktok: {
-    url: "https://www.tiktok.com/login",
+    url: PLATFORM_LOGIN_URLS.tiktok,
     steps: ["Choose login method (email/phone/social)", "Enter your credentials", "Complete CAPTCHA if shown", "Wait for the For You page"],
     successIndicator: "You should see the For You feed",
   },
   youtube: {
-    url: "https://accounts.google.com/signin",
+    url: PLATFORM_LOGIN_URLS.youtube,
     steps: ["Enter your Google email", "Click Next", "Enter your password", "Complete 2FA if required", "Wait for YouTube to load"],
     successIndicator: "You should see YouTube homepage",
   },
   twitter: {
-    url: "https://x.com/i/flow/login",
+    url: PLATFORM_LOGIN_URLS.twitter,
     steps: ["Enter your username, email, or phone", "Click Next", "Enter your password", "Complete verification if prompted"],
     successIndicator: "You should see your timeline",
   },
   snapchat: {
-    url: "https://accounts.snapchat.com/accounts/v2/login",
+    url: PLATFORM_LOGIN_URLS.snapchat,
     steps: ["Enter your username or email", "Enter your password", "Complete verification if prompted"],
     successIndicator: "You should see the Snapchat web interface",
   },
   pinterest: {
-    url: "https://www.pinterest.com/login/",
+    url: PLATFORM_LOGIN_URLS.pinterest,
     steps: ["Enter your email", "Enter your password", "Click 'Log in'"],
     successIndicator: "You should see your Pinterest home feed",
   },
   reddit: {
-    url: "https://www.reddit.com/login/",
+    url: PLATFORM_LOGIN_URLS.reddit,
     steps: ["Enter your username", "Enter your password", "Click 'Log In'"],
     successIndicator: "You should see your Reddit feed",
   },
   threads: {
-    url: "https://www.threads.net/login",
+    url: PLATFORM_LOGIN_URLS.threads,
     steps: ["Log in with your Instagram account", "Enter credentials", "Wait for Threads feed"],
     successIndicator: "You should see the Threads feed",
   },
@@ -90,6 +94,10 @@ interface ProxyGroup {
 interface AccountRow {
   account_id: string; platform: string; username: string; display_name: string;
   status: string; proxy_group_id: string; session_cookie?: unknown;
+}
+
+interface WarmupSeq {
+  id: string; name: string; platform: string;
 }
 
 type WizardStep = "proxy" | "platforms" | "setup" | "done"
@@ -113,6 +121,8 @@ export default function SetupWizardPage() {
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([])
   const [accountByPlatform, setAccountByPlatform] = useState<Record<string, string>>({})
   const [useChromeProfile, setUseChromeProfile] = useState(true)
+  const [warmupSeqs, setWarmupSeqs] = useState<WarmupSeq[]>([])
+  const [selectedWarmupId, setSelectedWarmupId] = useState<string>("")
 
   // Step 3: VNC login
   const [vncSessionId, setVncSessionId] = useState("")
@@ -152,12 +162,41 @@ export default function SetupWizardPage() {
     async function load() {
       setLoading(true)
       try {
-        const [proxyRes, accountRes] = await Promise.all([
+        const [proxyRes, accountRes, warmupRes] = await Promise.all([
           fetch("/api/proxy-groups").then(r => r.json()),
           fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get_accounts", limit: 1000 }) }).then(r => r.json()),
+          fetch("/api/warmup").then(r => r.json()).catch(() => ({ data: [] })),
         ])
         setProxies(proxyRes.data || [])
         setAccounts(accountRes.data || [])
+        setWarmupSeqs(warmupRes.data || [])
+
+        // P3.A — restore wizard-resume-state if we just bounced over to
+        // /accounts to make a new warmup sequence and came back. Pulls the
+        // saved selections out of sessionStorage (set by the "Make new
+        // sequence" shortcut below) and rehydrates so the user lands back
+        // exactly where they were.
+        try {
+          const raw = typeof window !== "undefined" ? window.sessionStorage.getItem("wizard-resume-state") : null
+          if (raw) {
+            const saved = JSON.parse(raw) as {
+              selectedProxy?: string; selectedPlatforms?: string[];
+              accountByPlatform?: Record<string, string>; useChromeProfile?: boolean;
+              selectedWarmupId?: string; wizardStep?: WizardStep;
+            }
+            if (saved.selectedProxy) setSelectedProxy(saved.selectedProxy)
+            if (Array.isArray(saved.selectedPlatforms)) setSelectedPlatforms(saved.selectedPlatforms)
+            if (saved.accountByPlatform) setAccountByPlatform(saved.accountByPlatform)
+            if (typeof saved.useChromeProfile === "boolean") setUseChromeProfile(saved.useChromeProfile)
+            if (saved.selectedWarmupId) setSelectedWarmupId(saved.selectedWarmupId)
+            if (saved.wizardStep) setWizardStep(saved.wizardStep)
+            window.sessionStorage.removeItem("wizard-resume-state")
+            return
+          }
+        } catch {
+          // Non-fatal — just continue with fresh state if the saved blob is bad.
+        }
+
         if (existingProxyId) {
           setSelectedProxy(existingProxyId)
           setWizardStep("platforms")
@@ -322,6 +361,12 @@ export default function SetupWizardPage() {
           status: "active",
           connection_type: "chrome_direct",
           business_id: "default",
+          // If the user picked a warmup sequence in step 2, attach it now
+          // so day-1 ramping starts immediately — same shape the Add Account
+          // dialog uses on the main accounts page.
+          ...(selectedWarmupId
+            ? { warmup_sequence_id: selectedWarmupId, warmup_day: 1 }
+            : {}),
         }),
       })
 
@@ -348,6 +393,20 @@ export default function SetupWizardPage() {
   async function finishSetup() {
     setFinishing(true)
     try {
+      // Mark the proxy group "active" now that at least one platform has
+      // signed in successfully. Best-effort — if the PATCH fails the wizard
+      // still completes; the groups list will catch up on next page load.
+      if (selectedProxy) {
+        try {
+          await fetch("/api/proxy-groups", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: selectedProxy, status: "active" }),
+          })
+        } catch (err) {
+          console.warn("[setup] proxy-groups PATCH active failed (non-fatal)", err)
+        }
+      }
       await vncFetch(`/api/sessions/${vncSessionId}`, { method: "DELETE" }).catch(() => {})
       setWizardStep("done")
       toast.success("All accounts set up and ready!")
@@ -683,6 +742,62 @@ export default function SetupWizardPage() {
                       )
                     })}
                   </div>
+                </div>
+
+                {/* Warmup sequence — applied to every account in this group */}
+                <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-xl bg-orange-500/20 flex items-center justify-center">
+                        <Sparkles className="h-4 w-4 text-orange-400" />
+                      </div>
+                      <div>
+                        <h3 className="font-semibold text-sm">Warmup Sequence</h3>
+                        <p className="text-[11px] text-muted-foreground">Optional. Ramps the daily send cap over time so fresh accounts don't get banned.</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Persist current wizard state, then bounce to the
+                        // Warmup tab where the "new sequence" form will be
+                        // auto-opened (?new=1). When the user comes back,
+                        // the load() effect rehydrates from sessionStorage.
+                        try {
+                          window.sessionStorage.setItem("wizard-resume-state", JSON.stringify({
+                            selectedProxy,
+                            selectedPlatforms,
+                            accountByPlatform,
+                            useChromeProfile,
+                            selectedWarmupId,
+                            wizardStep: "platforms",
+                          }))
+                        } catch { /* sessionStorage may be unavailable — proceed anyway */ }
+                        router.push("/accounts?tab=warmup&new=1")
+                      }}
+                      className="flex items-center gap-1 text-[11px] text-orange-400 hover:text-orange-300 transition-colors"
+                    >
+                      <Plus className="h-3 w-3" /> Make new sequence
+                    </button>
+                  </div>
+                  <Select
+                    value={selectedWarmupId || "none"}
+                    onValueChange={(v) => setSelectedWarmupId(v === "none" ? "" : v)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={warmupSeqs.length === 0 ? "No sequences yet — click + above" : "Select a sequence (optional)"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None — use fixed daily limit</SelectItem>
+                      {warmupSeqs
+                        .filter(w => !w.platform || selectedPlatforms.includes(w.platform))
+                        .map(w => (
+                          <SelectItem key={w.id} value={w.id}>
+                            {w.name}{w.platform ? ` — ${w.platform}` : ""}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 {/* Stealth toggle — sign into Chrome profile first */}

@@ -59,6 +59,20 @@ interface SafetySettings {
 
 interface Account {
   account_id: string; platform: string; username: string; daily_limit: string; sends_today: string; status: string; proxy_group_id?: string;
+  // Server-derived rollups + safety flags. We use these to filter out
+  // accounts that *can't* send right now (no proxy on a social platform,
+  // expired session, paused warmup) so Dylan never picks one and gets a
+  // queue full of guaranteed failures at launch.
+  session_status?: string;
+  warmup_paused?: boolean;
+}
+
+interface ProxyGroupRow {
+  id: string;
+  name?: string;
+  ip?: string;
+  location_city?: string;
+  location_state?: string;
 }
 
 interface Lead {
@@ -721,7 +735,12 @@ export default function OutreachPage() {
   const [feedPolling, setFeedPolling] = useState(false)
   const [showVnc, setShowVnc] = useState(false)
   const [activeVncTab, setActiveVncTab] = useState("default")
-  const [proxyGroups, setProxyGroups] = useState<Array<{ id: string; ip: string; location_city: string; name?: string }>>([])
+  const [proxyGroups, setProxyGroups] = useState<Array<{ id: string; ip: string; location_city: string; location_state?: string; name?: string }>>([])
+  // Per-Group expand/collapse state for the Sending Accounts picker. Default
+  // expanded when there are <= 3 groups (small enough to not overwhelm),
+  // collapsed otherwise (so the picker stays scannable on big accounts).
+  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set())
+  const [pickerGroupsHydrated, setPickerGroupsHydrated] = useState(false)
   // P5.3 — "all tiles at once" view is on when there are >6 proxy groups.
   const [vncGridView, setVncGridView] = useState(false)
   const [vncHoverTile, setVncHoverTile] = useState<string | null>(null)
@@ -760,6 +779,20 @@ export default function OutreachPage() {
   }, [])
 
   useEffect(() => { fetchAll() }, [fetchAll])
+
+  // Hydrate the picker's per-Group expand/collapse default once after the
+  // first proxyGroups load: <= 3 groups → all expanded, more → all collapsed.
+  // Only runs once so user's manual toggles aren't clobbered on refetch.
+  useEffect(() => {
+    if (pickerGroupsHydrated) return
+    if (proxyGroups.length === 0) return
+    if (proxyGroups.length <= 3) {
+      setExpandedGroupIds(new Set([...proxyGroups.map(g => g.id), "__no_group__"]))
+    } else {
+      setExpandedGroupIds(new Set())
+    }
+    setPickerGroupsHydrated(true)
+  }, [proxyGroups, pickerGroupsHydrated])
 
   // Fetch matching leads when filter changes (via server API)
   useEffect(() => {
@@ -1244,30 +1277,140 @@ export default function OutreachPage() {
               </div>
 
               <Label className="mb-2 block">Sending Accounts</Label>
-              <motion.div variants={container} initial="hidden" animate="show" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {/* Google accounts are quality/age boosters tied to social accounts — never shown as a "send from" option. */}
-                {accounts.filter(a => a.status === "active" && a.platform !== "google").map(a => {
-                  const Icon = platformIcons[a.platform] || Users
-                  const selected = selectedAccounts.includes(a.account_id)
-                  const limit = parseInt(a.daily_limit || "40")
-                  const sent = parseInt(a.sends_today || "0")
-                  const available = Math.max(0, limit - sent)
+              {(() => {
+                // P3.B — folder-grouped picker. Filter accounts that *can*
+                // send right now, then bucket by Group (proxy_group_id).
+                // Email/SMS accounts don't need a proxy, so they always pass
+                // the proxy gate and live in the "No Group (direct API)" bucket.
+                const sendable = accounts.filter(a => {
+                  if (a.status !== "active") return false
+                  if (a.platform === "google") return false
+                  if (a.session_status === "expired" || a.session_status === "needs_signin") return false
+                  if (a.warmup_paused === true) return false
+                  const isDirectApi = a.platform === "email" || a.platform === "sms"
+                  if (!isDirectApi && !a.proxy_group_id) return false
+                  return true
+                })
+
+                // Bucket: real Group ids → that Group; email/sms or unset
+                // proxy → the synthetic "__no_group__" bucket.
+                const buckets = new Map<string, typeof sendable>()
+                for (const a of sendable) {
+                  const isDirectApi = a.platform === "email" || a.platform === "sms"
+                  const key = (isDirectApi || !a.proxy_group_id) ? "__no_group__" : a.proxy_group_id
+                  if (!buckets.has(key)) buckets.set(key, [])
+                  buckets.get(key)!.push(a)
+                }
+
+                // Stable order: real Groups in proxyGroups order, then No Group.
+                const orderedKeys: string[] = []
+                for (const pg of proxyGroups) if (buckets.has(pg.id)) orderedKeys.push(pg.id)
+                if (buckets.has("__no_group__")) orderedKeys.push("__no_group__")
+
+                if (orderedKeys.length === 0) {
                   return (
-                    <motion.button key={a.account_id} variants={item} whileHover={{ scale: 1.02, y: -2 }}
-                      onClick={() => setSelectedAccounts(prev => selected ? prev.filter(x => x !== a.account_id) : [...prev, a.account_id])}
-                      className={cn("flex items-center gap-3 p-3 rounded-xl border text-left transition-all", selected ? "border-violet-500 bg-violet-500/10" : "border-border/50 hover:border-muted-foreground/30")}>
-                      <Icon className={cn("h-5 w-5", platformIcons[a.platform] ? "" : "text-muted-foreground")} />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">@{a.username || a.account_id}</p>
-                        <p className="text-xs text-muted-foreground">{available} available / {limit} limit</p>
-                      </div>
-                      <div className={cn("h-5 w-5 rounded-full border-2 flex items-center justify-center", selected ? "border-violet-500 bg-violet-500" : "border-muted")}>
-                        {selected && <CheckCircle className="h-3 w-3 text-primary-foreground" />}
-                      </div>
-                    </motion.button>
+                    <p className="text-sm text-muted-foreground py-4 text-center">No accounts ready to send. <button onClick={() => router.push("/accounts")} className="text-violet-400 underline hover:text-violet-300">Set up accounts in Accounts &amp; Proxies</button></p>
                   )
-                })}
-              </motion.div>
+                }
+
+                return (
+                  <div className="space-y-3">
+                    {orderedKeys.map(key => {
+                      const groupAccounts = buckets.get(key)!
+                      const isNoGroup = key === "__no_group__"
+                      const pg = isNoGroup ? null : proxyGroups.find(g => g.id === key)
+                      const groupName = isNoGroup
+                        ? "No Group (direct API)"
+                        : (pg?.name || pg?.location_city || pg?.ip || key.slice(0, 8))
+                      const locationLabel = isNoGroup
+                        ? "Email / SMS"
+                        : [pg?.location_city, pg?.location_state].filter(Boolean).join(", ") || pg?.ip || ""
+                      const platforms = Array.from(new Set(groupAccounts.map(a => a.platform)))
+                      const expanded = expandedGroupIds.has(key)
+                      const selectedCount = groupAccounts.filter(a => selectedAccounts.includes(a.account_id)).length
+
+                      const toggleExpanded = () => {
+                        setExpandedGroupIds(prev => {
+                          const next = new Set(prev)
+                          if (next.has(key)) next.delete(key)
+                          else next.add(key)
+                          return next
+                        })
+                      }
+
+                      return (
+                        <div key={key} className="rounded-2xl bg-card/40 border border-border/40 overflow-hidden">
+                          {/* Header — same visual treatment as the Overview tab in accounts/page.tsx */}
+                          <button
+                            type="button"
+                            onClick={toggleExpanded}
+                            className="w-full p-3 flex items-center gap-3 bg-gradient-to-r from-violet-500/5 to-blue-500/5 border-b border-border/30 hover:bg-card/60 transition-colors text-left"
+                          >
+                            <div className="h-9 w-9 rounded-xl bg-violet-500/15 flex items-center justify-center shrink-0">
+                              {isNoGroup
+                                ? <Mail className="h-4 w-4 text-violet-400" />
+                                : <Activity className="h-4 w-4 text-violet-400" />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-semibold text-sm text-foreground truncate">{groupName}</span>
+                                {locationLabel && (
+                                  <Badge variant="outline" className="text-[10px]">{locationLabel}</Badge>
+                                )}
+                                <span className="text-[11px] text-muted-foreground font-mono">
+                                  [{platforms.map(p => platformShortLabel(p)).join("][")}]
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-muted-foreground mt-0.5">
+                                {groupAccounts.length} account{groupAccounts.length === 1 ? "" : "s"}
+                                {selectedCount > 0 ? ` · ${selectedCount} selected` : ""}
+                              </p>
+                            </div>
+                            {selectedCount > 0 && (
+                              <Badge className="bg-violet-500/20 text-violet-400 border-violet-500/30 text-[10px] shrink-0">
+                                {selectedCount}
+                              </Badge>
+                            )}
+                            {expanded
+                              ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                              : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
+                          </button>
+
+                          {/* Body — original motion-button cards, just nested */}
+                          {expanded && (
+                            <motion.div
+                              variants={container} initial="hidden" animate="show"
+                              className="p-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3"
+                            >
+                              {groupAccounts.map(a => {
+                                const Icon = platformIcons[a.platform] || PLATFORM_ICONS_MAP[a.platform] || Users
+                                const selected = selectedAccounts.includes(a.account_id)
+                                const limit = parseInt(a.daily_limit || "40")
+                                const sent = parseInt(a.sends_today || "0")
+                                const available = Math.max(0, limit - sent)
+                                return (
+                                  <motion.button key={a.account_id} variants={item} whileHover={{ scale: 1.02, y: -2 }}
+                                    onClick={() => setSelectedAccounts(prev => selected ? prev.filter(x => x !== a.account_id) : [...prev, a.account_id])}
+                                    className={cn("flex items-center gap-3 p-3 rounded-xl border text-left transition-all", selected ? "border-violet-500 bg-violet-500/10" : "border-border/50 hover:border-muted-foreground/30")}>
+                                    <Icon className={cn("h-5 w-5", (platformIcons[a.platform] || PLATFORM_ICONS_MAP[a.platform]) ? "" : "text-muted-foreground")} />
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-medium truncate">@{a.username || a.account_id}</p>
+                                      <p className="text-xs text-muted-foreground">{available} available / {limit} limit</p>
+                                    </div>
+                                    <div className={cn("h-5 w-5 rounded-full border-2 flex items-center justify-center", selected ? "border-violet-500 bg-violet-500" : "border-muted")}>
+                                      {selected && <CheckCircle className="h-3 w-3 text-primary-foreground" />}
+                                    </div>
+                                  </motion.button>
+                                )
+                              })}
+                            </motion.div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
               <div className="mt-3 flex justify-center">
                 <button onClick={() => router.push("/accounts")} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-dashed border-violet-500/30 text-sm text-violet-400 hover:bg-violet-500/10 transition-all">
                   <Plus className="h-4 w-4" /> Add More Accounts

@@ -21,7 +21,12 @@ async function sendTelegram(chatId: string, text: string) {
   }
 }
 
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
+  const auth = req.headers.get("authorization") || ""
+  const expected = process.env.CRON_SECRET || ""
+  if (!expected) return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 })
+  if (auth !== `Bearer ${expected}`) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+
   // Read deadman config
   const { data: settingRow } = await supabase
     .from("system_settings")

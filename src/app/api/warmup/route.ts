@@ -6,6 +6,10 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
+// GET /api/warmup — list warmup sequences. Each row is enriched with
+// `accounts_count`, the number of accounts currently using that sequence.
+// The Accounts page renders this as a "Used by N" pill so Dylan can see at
+// a glance which sequences are live before deleting one.
 export async function GET(req: NextRequest) {
   const businessId = req.nextUrl.searchParams.get("business_id") || ""
 
@@ -14,7 +18,39 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ data })
+
+  const sequences = data || []
+  const ids = sequences.map((s: any) => s.id).filter(Boolean)
+
+  // Single round-trip: pull every account row whose warmup_sequence_id is
+  // in the result set, then bucket-count them in memory. Cheap because the
+  // `accounts` table is at most a few hundred rows per business.
+  const counts: Record<string, number> = {}
+  if (ids.length > 0) {
+    const { data: usage, error: usageErr } = await supabase
+      .from("accounts")
+      .select("warmup_sequence_id")
+      .in("warmup_sequence_id", ids)
+
+    if (usageErr) {
+      // Soft-fail: we'd rather return sequences with `accounts_count: 0`
+      // than blow up the whole list because the count query glitched.
+      console.warn("[warmup GET] usage count failed:", usageErr.message)
+    } else {
+      for (const row of usage || []) {
+        const id = (row as any).warmup_sequence_id
+        if (!id) continue
+        counts[id] = (counts[id] || 0) + 1
+      }
+    }
+  }
+
+  const enriched = sequences.map((s: any) => ({
+    ...s,
+    accounts_count: counts[s.id] || 0,
+  }))
+
+  return NextResponse.json({ data: enriched })
 }
 
 export async function POST(req: NextRequest) {
@@ -47,6 +83,35 @@ export async function POST(req: NextRequest) {
     const { error } = await supabase.from("warmup_sequences").delete().eq("id", body.id)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json({ success: true })
+  }
+
+  if (action === "duplicate") {
+    // Clone an existing sequence so Dylan can tweak a copy without losing
+    // the original's tuned step values. Appends " (Copy)" to the name and
+    // keeps the same business_id + platform + steps.
+    const { id } = body
+    if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 })
+
+    const { data: source, error: srcErr } = await supabase
+      .from("warmup_sequences")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle()
+
+    if (srcErr) return NextResponse.json({ error: srcErr.message }, { status: 500 })
+    if (!source) return NextResponse.json({ error: "Source sequence not found" }, { status: 404 })
+
+    const newId = `ws_${Date.now()}`
+    const row = {
+      id: newId,
+      name: `${source.name || "Sequence"} (Copy)`,
+      platform: source.platform || "",
+      business_id: source.business_id || "default",
+      steps: source.steps || [],
+    }
+    const { error } = await supabase.from("warmup_sequences").insert(row)
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ data: row })
   }
 
   if (action === "assign") {
