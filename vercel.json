@@ -3,13 +3,6 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "installCommand": "npm install",
-  "_comments": {
-    "cookies-health-check": "TODO when off Hobby: change to \"0 * * * *\" (hourly)",
-    "campaign-worker": "TODO when off Hobby: change to per-minute",
-    "rate-limit-reset": "Must run at 00:00 UTC — zeroes daily caps. If this fails caps stay tripped and outreach freezes.",
-    "proxy-health-check": "Every 6h — pings each proxy via api.ipify.org and flags failed ones.",
-    "account-health-monitor": "Every 6h offset 30m from proxy check — probes 20 oldest accounts via VPS."
-  },
   "crons": [
     {
       "path": "/api/cron/warmup-tick",
