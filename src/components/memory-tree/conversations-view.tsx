@@ -9,10 +9,13 @@
  * - Manual Refresh button + live SSE updates
  * - Pretty transcript rendering: user/assistant bubbles, dimmed tool blocks
  */
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
-import { Loader2, MessageSquare, Calendar, RefreshCw, User, Bot } from "lucide-react"
+import { Loader2, MessageSquare, Calendar, RefreshCw, User, Bot, Trash2, Pencil } from "lucide-react"
+import * as ContextMenu from "@radix-ui/react-context-menu"
+import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 
 interface TreeNode {
@@ -73,6 +76,10 @@ function estimateMessages(bytes: number): number {
 
 // ─── Component ───────────────────────────────────────────────────
 
+// Auto-generated transcript filenames look like 2026-04-26-2244c7fa-transcript.md;
+// anything that doesn't match is a custom-named file the user (or AI) created.
+const AUTO_NAME_PATTERN = /^\d{4}-\d{2}-\d{2}-[a-f0-9]{6,12}(-transcript)?\.md$/i
+
 export function ConversationsView() {
   const [sessions, setSessions] = useState<SessionFile[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -81,6 +88,8 @@ export function ConversationsView() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [content, setContent] = useState<string>("")
   const [contentLoading, setContentLoading] = useState(false)
+  const [renaming, setRenaming] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<SessionFile | null>(null)
 
   const fetchList = useCallback(async () => {
     try {
@@ -152,6 +161,50 @@ export function ConversationsView() {
     return () => { cancelled = true }
   }, [selectedPath])
 
+  // ─── Mutations: rename + soft-delete ──────────────────────────
+  async function renameSession(s: SessionFile, newName: string) {
+    setRenaming(null)
+    let cleanName = newName.trim()
+    if (!cleanName || cleanName === s.name) return
+    if (!cleanName.toLowerCase().endsWith(".md")) cleanName += ".md"
+    const to = `/Conversations/${cleanName}`
+    if (to === s.path) return
+    try {
+      const res = await fetch("/api/memory-vault/move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: s.path, to }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      toast.success(`Renamed to ${cleanName}`)
+      if (selectedPath === s.path) setSelectedPath(to)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Rename failed")
+    }
+  }
+
+  async function deleteSession(s: SessionFile) {
+    try {
+      const res = await fetch(`/api/memory-vault/file?path=${encodeURIComponent(s.path)}`, { method: "DELETE" })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      toast.success(`Deleted (in /.trash/ for 30s)`)
+      if (selectedPath === s.path) {
+        setSelectedPath(null)
+        setContent("")
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Delete failed")
+    } finally {
+      setDeleteTarget(null)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-sm text-zinc-500">
@@ -220,28 +273,19 @@ export function ConversationsView() {
             <div className="sticky top-[33px] z-10 bg-zinc-900/95 backdrop-blur px-3 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800/60 flex items-center gap-1.5">
               <Calendar className="w-3 h-3" /> {dayLabel(date)}
             </div>
-            {groups[date].map((s) => {
-              const time = timeLabel(s.mtime)
-              const size = fileSizeLabel(s.size)
-              const msgs = estimateMessages(s.size)
-              return (
-                <button
-                  key={s.path}
-                  onClick={() => setSelectedPath(s.path)}
-                  className={cn(
-                    "block w-full text-left px-3 py-2 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/30",
-                    selectedPath === s.path && "bg-amber-500/10"
-                  )}
-                >
-                  <div className={cn("font-medium tabular-nums", selectedPath === s.path ? "text-amber-100" : "text-zinc-200")}>
-                    {time}
-                  </div>
-                  <div className="text-[11px] text-zinc-500 mt-0.5">
-                    {size} · ~{msgs.toLocaleString()} message{msgs !== 1 ? "s" : ""}
-                  </div>
-                </button>
-              )
-            })}
+            {groups[date].map((s) => (
+              <SessionRow
+                key={s.path}
+                s={s}
+                isSelected={selectedPath === s.path}
+                isRenaming={renaming === s.path}
+                onSelect={() => setSelectedPath(s.path)}
+                onStartRename={() => setRenaming(s.path)}
+                onCommitRename={(newName) => renameSession(s, newName)}
+                onCancelRename={() => setRenaming(null)}
+                onRequestDelete={() => setDeleteTarget(s)}
+              />
+            ))}
           </div>
         ))}
       </div>
@@ -258,7 +302,159 @@ export function ConversationsView() {
           <TranscriptReader content={content} />
         )}
       </div>
+
+      {/* Delete confirm dialog */}
+      <Dialog open={!!deleteTarget} onOpenChange={(v) => !v && setDeleteTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete this conversation?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-zinc-400">
+            <span className="text-zinc-200 font-medium">{deleteTarget?.name}</span> will be moved to <code className="text-zinc-300">/.trash/</code> on the AI VPS. Restorable for ~30 seconds.
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => deleteTarget && deleteSession(deleteTarget)}>Delete</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  )
+}
+
+// ─── SessionRow ──────────────────────────────────────────────────
+
+function SessionRow({
+  s, isSelected, isRenaming,
+  onSelect, onStartRename, onCommitRename, onCancelRename, onRequestDelete,
+}: {
+  s: SessionFile
+  isSelected: boolean
+  isRenaming: boolean
+  onSelect: () => void
+  onStartRename: () => void
+  onCommitRename: (newName: string) => void
+  onCancelRename: () => void
+  onRequestDelete: () => void
+}) {
+  const time = timeLabel(s.mtime)
+  const size = fileSizeLabel(s.size)
+  const msgs = estimateMessages(s.size)
+  const isAuto = AUTO_NAME_PATTERN.test(s.name)
+  const customTitle = isAuto ? null : s.name.replace(/\.md$/i, "")
+
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [renameValue, setRenameValue] = useState(s.name)
+  useEffect(() => {
+    if (isRenaming) {
+      setRenameValue(s.name)
+      // Focus + select after the input mounts
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus()
+          // Select the name without the .md extension
+          const dot = s.name.lastIndexOf(".")
+          inputRef.current.setSelectionRange(0, dot > 0 ? dot : s.name.length)
+        }
+      }, 0)
+    }
+  }, [isRenaming, s.name])
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "F2" && !isRenaming) {
+      e.preventDefault()
+      onStartRename()
+    }
+  }
+
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild>
+        <div
+          className={cn(
+            "group relative border-b border-zinc-800/30 transition-colors",
+            isSelected ? "bg-amber-500/10" : "hover:bg-zinc-800/50"
+          )}
+        >
+          <button
+            onClick={onSelect}
+            onKeyDown={onKey}
+            onDoubleClick={(e) => { e.stopPropagation(); onStartRename() }}
+            className="block w-full text-left px-3 py-2 pr-9"
+          >
+            {isRenaming ? (
+              <input
+                ref={inputRef}
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onBlur={() => onCommitRename(renameValue)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); onCommitRename(renameValue) }
+                  if (e.key === "Escape") { e.preventDefault(); onCancelRename() }
+                }}
+                className="w-full bg-zinc-800 text-zinc-100 text-sm px-1 py-0.5 rounded outline-none ring-1 ring-amber-500/50 font-medium"
+              />
+            ) : customTitle ? (
+              <>
+                <div className={cn("font-medium truncate", isSelected ? "text-amber-100" : "text-zinc-200")}>
+                  {customTitle}
+                </div>
+                <div className="text-[11px] text-zinc-500 mt-0.5 tabular-nums">
+                  {time} · {size} · ~{msgs.toLocaleString()} msg{msgs !== 1 ? "s" : ""}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className={cn("font-medium tabular-nums", isSelected ? "text-amber-100" : "text-zinc-200")}>
+                  {time}
+                </div>
+                <div className="text-[11px] text-zinc-500 mt-0.5">
+                  {size} · ~{msgs.toLocaleString()} message{msgs !== 1 ? "s" : ""}
+                </div>
+              </>
+            )}
+          </button>
+
+          {/* Hover trash icon (suppressed while renaming) */}
+          {!isRenaming && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onRequestDelete() }}
+              className={cn(
+                "absolute top-2 right-2 p-1 rounded text-zinc-500 hover:text-red-400 hover:bg-zinc-900/60",
+                "opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity",
+                isSelected && "opacity-60"
+              )}
+              title="Delete"
+              aria-label={`Delete ${s.name}`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </ContextMenu.Trigger>
+
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="min-w-[160px] bg-zinc-900 border border-zinc-800 rounded-md shadow-xl py-1 text-sm">
+          <ContextMenu.Item
+            onSelect={onStartRename}
+            className="flex items-center gap-2 px-3 py-1.5 cursor-pointer outline-none data-[highlighted]:bg-zinc-800 text-zinc-200"
+          >
+            <Pencil className="w-3.5 h-3.5" />
+            <span className="flex-1">Rename</span>
+            <span className="text-[10px] text-zinc-500">F2</span>
+          </ContextMenu.Item>
+          <ContextMenu.Separator className="h-px bg-zinc-800 my-1" />
+          <ContextMenu.Item
+            onSelect={onRequestDelete}
+            className="flex items-center gap-2 px-3 py-1.5 cursor-pointer outline-none data-[highlighted]:bg-zinc-800 text-red-400"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Delete</span>
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   )
 }
 
