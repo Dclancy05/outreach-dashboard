@@ -166,7 +166,14 @@ async function main() {
   if (!sessionId) sessionId = path.basename(jsonlPath, ".jsonl")
   const sid = shortId(sessionId)
 
-  const dateForFile = firstTs ? firstTs.slice(0, 10) : new Date().toISOString().slice(0, 10)
+  // Date prefix in the filename uses the user's timezone (America/New_York
+  // per CLAUDE.md), so a session that started at 9pm ET on April 26 doesn't
+  // get filed under April 27 just because UTC has rolled over.
+  const tsForFile = firstTs ? new Date(firstTs) : new Date()
+  const dateForFile = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(tsForFile)
   const outPath = explicitOut || path.join(CONV_DIR, `${dateForFile}-${sid}-transcript.md`)
 
   await fs.mkdir(path.dirname(outPath), { recursive: true })

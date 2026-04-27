@@ -23,11 +23,39 @@ import { TreeView } from "@/components/memory-tree/tree-view"
 import { FileEditor } from "@/components/memory-tree/file-editor"
 import { ConversationsView } from "@/components/memory-tree/conversations-view"
 
+type MemoryTab = "tree" | "conversations"
+const VALID_TABS: MemoryTab[] = ["tree", "conversations"]
+
+function readTabFromHash(): MemoryTab {
+  if (typeof window === "undefined") return "tree"
+  const h = window.location.hash.replace(/^#/, "") as MemoryTab
+  return VALID_TABS.includes(h) ? h : "tree"
+}
+
 export default function MemoryPage() {
-  const [tab, setTab] = useState<"tree" | "conversations">("tree")
+  const [tab, setTabRaw] = useState<MemoryTab>("tree")
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [businessId, setBusinessId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // Load the active tab from URL hash on mount + listen for back/forward nav.
+  // This makes a browser refresh keep you on the tab you were on instead of
+  // jumping back to "tree".
+  useEffect(() => {
+    setTabRaw(readTabFromHash())
+    const onHash = () => setTabRaw(readTabFromHash())
+    window.addEventListener("hashchange", onHash)
+    return () => window.removeEventListener("hashchange", onHash)
+  }, [])
+
+  const setTab = (next: MemoryTab) => {
+    setTabRaw(next)
+    if (typeof window !== "undefined") {
+      // Use replaceState so the back button doesn't get spammed with tab switches.
+      const newUrl = `${window.location.pathname}${window.location.search}#${next}`
+      window.history.replaceState(null, "", newUrl)
+    }
+  }
 
   useEffect(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("memory_business_scope") : null
@@ -68,7 +96,7 @@ export default function MemoryPage() {
       </div>
 
       {/* Tabs */}
-      <Tabs value={tab} onValueChange={(v) => setTab(v as "tree" | "conversations")} className="flex-1 flex flex-col min-h-0">
+      <Tabs value={tab} onValueChange={(v) => setTab(v as MemoryTab)} className="flex-1 flex flex-col min-h-0">
         <TabsList className="mx-4 mt-3 self-start">
           <TabsTrigger value="tree" className="gap-2">
             <FolderTree className="w-4 h-4" />
