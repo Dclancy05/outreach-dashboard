@@ -96,7 +96,7 @@ const STEPS: Array<{ title: string; body: string }> = [
   },
   {
     title: "Open the browser",
-    body: "Click the big Open Secure Browser button. A window appears where you log in like a normal person.",
+    body: "Click the big Sign In Now button. A window appears where you log in like a normal person.",
   },
   {
     title: "Log in",
