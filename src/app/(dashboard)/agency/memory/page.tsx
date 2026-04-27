@@ -22,6 +22,7 @@ import { SettingsPanel } from "@/components/memory/settings-panel"
 import { TreeView } from "@/components/memory-tree/tree-view"
 import { FileEditor } from "@/components/memory-tree/file-editor"
 import { ConversationsView } from "@/components/memory-tree/conversations-view"
+import { VpsStatusBadge } from "@/components/memory-tree/vps-status-badge"
 import { AgentWorkflowsTabs } from "@/components/agent-workflows/agent-workflows-tabs"
 
 type MemoryTab = "tree" | "conversations" | "agent-workflows"
@@ -82,19 +83,22 @@ export default function MemoryPage() {
           <h1 className="text-lg font-semibold text-zinc-100">Memory</h1>
           <span className="text-xs text-zinc-500 hidden sm:inline">— what your AI knows</span>
         </div>
-        <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-          <DialogTrigger asChild>
-            <Button variant="ghost" size="sm" className="text-zinc-400 hover:text-zinc-100" title="Memory settings (token budget, MCP keys, default persona)">
-              <SettingsIcon className="w-4 h-4" />
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-3xl">
-            <DialogHeader>
-              <DialogTitle>Memory settings</DialogTitle>
-            </DialogHeader>
-            <SettingsPanel personas={personas} memories={memories} businessId={businessId} />
-          </DialogContent>
-        </Dialog>
+        <div className="flex items-center gap-2">
+          <VpsStatusBadge />
+          <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+            <DialogTrigger asChild>
+              <Button variant="ghost" size="sm" className="text-zinc-400 hover:text-zinc-100" title="Memory settings (token budget, MCP keys, default persona)">
+                <SettingsIcon className="w-4 h-4" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-3xl">
+              <DialogHeader>
+                <DialogTitle>Memory settings</DialogTitle>
+              </DialogHeader>
+              <SettingsPanel personas={personas} memories={memories} businessId={businessId} />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {/* Tabs */}
