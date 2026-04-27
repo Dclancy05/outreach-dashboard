@@ -20,6 +20,11 @@ import {
   Pencil, Trash2, FolderInput, Cog,
 } from "lucide-react"
 import { toast } from "sonner"
+import {
+  DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable,
+  useSensor, useSensors, closestCenter,
+  type DragStartEvent, type DragEndEvent,
+} from "@dnd-kit/core"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -58,6 +63,9 @@ export function TreeView({ selectedPath, onSelect }: TreeViewProps) {
   const [moveDialog, setMoveDialog] = useState<TreeNode | null>(null)
   const [deleteDialog, setDeleteDialog] = useState<TreeNode | null>(null)
   const [newDialog, setNewDialog] = useState<{ kind: "file" | "folder"; parent: string } | null>(null)
+  const [activeDrag, setActiveDrag] = useState<TreeNode | null>(null)
+  // Require 6px of movement before drag activates so plain clicks still work
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const fetchTree = useCallback(async () => {
     try {
@@ -176,13 +184,49 @@ export function TreeView({ selectedPath, onSelect }: TreeViewProps) {
     const to = `${newParent.replace(/\/$/, "")}/${node.name}`.replace(/^\//, "/")
     try {
       await vaultPost("/move", { from: node.path, to })
-      toast.success(`Moved to ${newParent}`)
+      toast.success(`Moved to ${newParent === "/" ? "root" : newParent}`)
       if (selectedPath === node.path) onSelect(to)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Move failed")
     } finally {
       setMoveDialog(null)
     }
+  }
+
+  // ─── Drag-and-drop handlers ───────────────────────────────────
+  function findNode(nodes: TreeNode[], targetPath: string): TreeNode | null {
+    for (const n of nodes) {
+      if (n.path === targetPath) return n
+      if (n.children) {
+        const found = findNode(n.children, targetPath)
+        if (found) return found
+      }
+    }
+    return null
+  }
+
+  function handleDragStart(e: DragStartEvent) {
+    const node = findNode(tree || [], String(e.active.id))
+    if (node) setActiveDrag(node)
+  }
+
+  async function handleDragEnd(e: DragEndEvent) {
+    setActiveDrag(null)
+    const fromPath = String(e.active.id)
+    const targetFolder = e.over ? String(e.over.id) : null
+    if (!targetFolder) return
+    if (fromPath === targetFolder) return
+    // Don't allow dropping a folder into itself or a descendant — server enforces
+    // this too with a 400, but bail early so we don't even try.
+    if (targetFolder.startsWith(fromPath + "/")) {
+      toast.error("Can't move a folder into itself")
+      return
+    }
+    const node = findNode(tree || [], fromPath)
+    if (!node) return
+    const currentParent = fromPath.split("/").slice(0, -1).join("/") || "/"
+    if (currentParent === targetFolder) return // dropped where it already is
+    await move(node, targetFolder)
   }
 
   async function softDelete(node: TreeNode) {
@@ -257,26 +301,45 @@ export function TreeView({ selectedPath, onSelect }: TreeViewProps) {
         </Button>
       </div>
 
-      {/* Tree */}
-      <div className="overflow-y-auto flex-1 text-sm py-1">
-        {(tree || [])
-          .filter((node) => !HIDDEN_TOP_PATHS.has(node.path))
-          .map((node) => (
-            <TreeRow
-              key={node.path}
-              node={node}
-              depth={0}
-              selectedPath={selectedPath}
-              renaming={renaming}
-              onSelect={onSelect}
-              onStartRename={(path) => setRenaming(path)}
-              onCommitRename={rename}
-              onContextNew={(kind, parent) => setNewDialog({ kind, parent })}
-              onContextMove={(n) => setMoveDialog(n)}
-              onContextDelete={(n) => setDeleteDialog(n)}
-            />
-          ))}
-      </div>
+      {/* Tree (with drag-and-drop) */}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setActiveDrag(null)}
+      >
+        <div className="overflow-y-auto flex-1 text-sm py-1">
+          {(tree || [])
+            .filter((node) => !HIDDEN_TOP_PATHS.has(node.path))
+            .map((node) => (
+              <TreeRow
+                key={node.path}
+                node={node}
+                depth={0}
+                selectedPath={selectedPath}
+                renaming={renaming}
+                activeDragPath={activeDrag?.path ?? null}
+                onSelect={onSelect}
+                onStartRename={(path) => setRenaming(path)}
+                onCommitRename={rename}
+                onContextNew={(kind, parent) => setNewDialog({ kind, parent })}
+                onContextMove={(n) => setMoveDialog(n)}
+                onContextDelete={(n) => setDeleteDialog(n)}
+              />
+            ))}
+        </div>
+        <DragOverlay dropAnimation={null}>
+          {activeDrag ? (
+            <div className="bg-zinc-900/95 border border-amber-500/50 rounded shadow-xl px-2 py-1 text-sm text-zinc-100 inline-flex items-center gap-1.5 max-w-xs">
+              {activeDrag.kind === "folder"
+                ? <Folder className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                : <File className="w-3.5 h-3.5 text-zinc-500 shrink-0" />}
+              <span className="truncate">{activeDrag.name}</span>
+            </div>
+          ) : null}
+        </DragOverlay>
+      </DndContext>
 
       {/* Dialogs */}
       <NewItemDialog
@@ -308,13 +371,14 @@ export function TreeView({ selectedPath, onSelect }: TreeViewProps) {
 // ─── TreeRow ──────────────────────────────────────────────────────
 
 function TreeRow({
-  node, depth, selectedPath, renaming,
+  node, depth, selectedPath, renaming, activeDragPath,
   onSelect, onStartRename, onCommitRename, onContextNew, onContextMove, onContextDelete,
 }: {
   node: TreeNode
   depth: number
   selectedPath: string | null
   renaming: string | null
+  activeDragPath: string | null
   onSelect: (p: string) => void
   onStartRename: (path: string) => void
   onCommitRename: (node: TreeNode, newName: string) => void
@@ -330,6 +394,37 @@ function TreeRow({
   )
   const [open, setOpen] = useState(depth === 0 || inSelectedChain)
   const isRenaming = renaming === node.path
+
+  // Draggable: every row can be picked up. Disabled while renaming so the input works.
+  const drag = useDraggable({ id: node.path, disabled: isRenaming })
+  // Droppable: only folders accept drops. Disable for self while dragging this node
+  // (don't let user "drop on yourself"). Server also blocks self/descendant drops.
+  const drop = useDroppable({
+    id: node.path,
+    disabled: node.kind !== "folder" || activeDragPath === node.path,
+  })
+
+  // Auto-expand a closed folder if the user hovers over it for 600ms while dragging.
+  useEffect(() => {
+    if (node.kind !== "folder") return
+    if (!drop.isOver) return
+    if (open) return
+    const t = setTimeout(() => setOpen(true), 600)
+    return () => clearTimeout(t)
+  }, [drop.isOver, open, node.kind])
+
+  const isBeingDragged = activeDragPath === node.path
+  const dragRowStyle: React.CSSProperties = isBeingDragged ? { opacity: 0.4 } : {}
+  // Highlight ring when this folder is the current drop target
+  const dropTargetClass = drop.isOver && node.kind === "folder" && !isBeingDragged
+    ? "ring-1 ring-amber-500/60 bg-amber-500/5 rounded"
+    : ""
+
+  // Combine drag + drop refs onto the wrapper div
+  const setRefs = (el: HTMLDivElement | null) => {
+    drag.setNodeRef(el)
+    if (node.kind === "folder") drop.setNodeRef(el)
+  }
 
   const handleKey = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "F2" && !isRenaming) {
@@ -347,6 +442,7 @@ function TreeRow({
   }, [isRenaming])
 
   const rowContent = (
+    <div ref={setRefs} {...drag.attributes} {...drag.listeners} style={dragRowStyle} className={dropTargetClass}>
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
         {node.kind === "folder" ? (
@@ -388,6 +484,7 @@ function TreeRow({
                   depth={depth + 1}
                   selectedPath={selectedPath}
                   renaming={renaming}
+                  activeDragPath={activeDragPath}
                   onSelect={onSelect}
                   onStartRename={onStartRename}
                   onCommitRename={onCommitRename}
@@ -449,6 +546,7 @@ function TreeRow({
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+    </div>
   )
 
   return rowContent
