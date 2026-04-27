@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
-
-const VNC_MANAGER_URL = process.env.VNC_MANAGER_URL || "http://127.0.0.1:18790"
-// Lazy: don't throw at module load (would break `next build` when env isn't set).
-// Verified at request time inside the handler instead.
-const VNC_API_KEY = process.env.VNC_API_KEY || ""
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,6 +9,8 @@ const supabase = createClient(
 
 export async function POST(req: NextRequest) {
   try {
+    const VNC_MANAGER_URL = (await getSecret("VNC_MANAGER_URL")) || "http://127.0.0.1:18790"
+    const VNC_API_KEY = (await getSecret("VNC_API_KEY")) || ""
     if (!VNC_API_KEY) {
       return NextResponse.json(
         { ok: false, error: "VNC_API_KEY env var is required" },
@@ -39,7 +37,7 @@ export async function POST(req: NextRequest) {
     }
 
     const started = Date.now()
-    const res = await fetch(`${VNC_MANAGER_URL}/api/proxy/test`, {
+    const res = await fetch(`${VNC_MANAGER_URL}/proxy/test`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-API-Key": VNC_API_KEY },
       body: JSON.stringify({ proxy_config }),

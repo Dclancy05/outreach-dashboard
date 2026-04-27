@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
-
-const VNC_MANAGER_URL = process.env.VNC_MANAGER_URL || "http://127.0.0.1:18790"
-// Lazy: env var verified at request time so build doesn't fail when unset.
-const VNC_API_KEY = process.env.VNC_API_KEY || ""
+import { getSecret } from "@/lib/secrets"
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const res = await fetch(`${VNC_MANAGER_URL}/api/sessions`, {
+    const VNC_MANAGER_URL = (await getSecret("VNC_MANAGER_URL")) || "http://127.0.0.1:18790"
+    const VNC_API_KEY = (await getSecret("VNC_API_KEY")) || ""
+    const res = await fetch(`${VNC_MANAGER_URL}/sessions`, {
       headers: { "X-API-Key": VNC_API_KEY },
     })
     const data = await res.json()
@@ -20,7 +19,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const res = await fetch(`${VNC_MANAGER_URL}/api/sessions/${params.id}`, {
+    const VNC_MANAGER_URL = (await getSecret("VNC_MANAGER_URL")) || "http://127.0.0.1:18790"
+    const VNC_API_KEY = (await getSecret("VNC_API_KEY")) || ""
+    const res = await fetch(`${VNC_MANAGER_URL}/sessions/${params.id}`, {
       method: "DELETE",
       headers: { "X-API-Key": VNC_API_KEY },
     })

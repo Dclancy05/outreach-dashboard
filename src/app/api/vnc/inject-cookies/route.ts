@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
 
@@ -9,10 +10,13 @@ const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const VPS_URL =
-  process.env.VPS_URL ||
-  process.env.RECORDING_SERVER_URL ||
-  "https://srv1197943.taild42583.ts.net:10000"
+async function vpsUrl(): Promise<string> {
+  return (
+    (await getSecret("VPS_URL")) ||
+    (await getSecret("RECORDING_SERVER_URL")) ||
+    "https://srv1197943.taild42583.ts.net:10000"
+  )
+}
 
 const INJECT_TIMEOUT_MS = 10_000
 
@@ -21,7 +25,7 @@ const INJECT_TIMEOUT_MS = 10_000
 //
 // Pulls the latest cookie snapshot for `account_id` from
 // `account_cookie_snapshots`, then forwards it to the VPS endpoint
-// `POST ${VPS_URL}/api/sessions/{session_id}/inject-cookies` so the running
+// `POST ${VPS_URL}/sessions/{session_id}/inject-cookies` so the running
 // Chrome session can preload the user's logged-in state via CDP. This is
 // what lets the Sign-In modal skip the actual login UI when we already have
 // fresh cookies on file.
@@ -69,7 +73,8 @@ export async function POST(req: NextRequest) {
   }
 
   // ── 2. POST to the VPS ────────────────────────────────────────────
-  const url = `${VPS_URL.replace(/\/+$/, "")}/api/sessions/${encodeURIComponent(
+  const VPS_URL = await vpsUrl()
+  const url = `${VPS_URL.replace(/\/+$/, "")}/sessions/${encodeURIComponent(
     session_id
   )}/inject-cookies`
 

@@ -2,10 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { generateFingerprint, deriveGeoFields } from "@/lib/fingerprint"
 import { PLATFORM_LOGIN_URLS } from "@/lib/platform-login-urls"
-
-const VNC_MANAGER_URL = process.env.VNC_MANAGER_URL || "http://127.0.0.1:18790"
-// Lazy: env var verified at request time so build doesn't fail when unset.
-const VNC_API_KEY = process.env.VNC_API_KEY || ""
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -24,6 +21,9 @@ export async function POST(req: NextRequest) {
     if (!proxy_group_id) {
       return NextResponse.json({ error: "proxy_group_id required" }, { status: 400 })
     }
+
+    const VNC_MANAGER_URL = (await getSecret("VNC_MANAGER_URL")) || "http://127.0.0.1:18790"
+    const VNC_API_KEY = (await getSecret("VNC_API_KEY")) || ""
 
     // P5.1: multi-platform single-session support. If the caller sends
     // `platforms: string[]` (e.g. ["instagram","twitter","linkedin"]) we forward
@@ -168,7 +168,7 @@ export async function POST(req: NextRequest) {
     // forward it explicitly here so the manager doesn't have to re-derive it.
     const chromeProfileDir: string | undefined = account_id ? `/vps/profiles/${account_id}` : undefined
 
-    const res = await fetch(`${VNC_MANAGER_URL}/api/sessions`, {
+    const res = await fetch(`${VNC_MANAGER_URL}/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-API-Key": VNC_API_KEY },
       body: JSON.stringify({
@@ -195,7 +195,9 @@ export async function POST(req: NextRequest) {
 
 export async function GET() {
   try {
-    const res = await fetch(`${VNC_MANAGER_URL}/api/sessions`, {
+    const VNC_MANAGER_URL = (await getSecret("VNC_MANAGER_URL")) || "http://127.0.0.1:18790"
+    const VNC_API_KEY = (await getSecret("VNC_API_KEY")) || ""
+    const res = await fetch(`${VNC_MANAGER_URL}/sessions`, {
       headers: { "X-API-Key": VNC_API_KEY },
     })
     const data = await res.json()

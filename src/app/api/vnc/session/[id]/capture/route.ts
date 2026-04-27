@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
-
-const VNC_MANAGER_URL = process.env.VNC_MANAGER_URL || "http://127.0.0.1:18790"
-// Lazy: env var verified at request time so build doesn't fail when unset.
-const VNC_API_KEY = process.env.VNC_API_KEY || ""
+import { getSecret } from "@/lib/secrets"
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const VNC_MANAGER_URL = (await getSecret("VNC_MANAGER_URL")) || "http://127.0.0.1:18790"
+    const VNC_API_KEY = (await getSecret("VNC_API_KEY")) || ""
     const body = await req.json()
-    const res = await fetch(`${VNC_MANAGER_URL}/api/sessions/${params.id}/capture`, {
+    const res = await fetch(`${VNC_MANAGER_URL}/sessions/${params.id}/capture`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-API-Key": VNC_API_KEY },
       body: JSON.stringify(body),

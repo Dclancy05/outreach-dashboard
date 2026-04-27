@@ -132,7 +132,7 @@ export async function POST(
   //   to drive navigation from here.)
   await injectLatestCookies(account_id, sessionId).catch(() => null)
 
-  const checkUrl = `${VPS_URL.replace(/\/+$/, "")}/api/sessions/${encodeURIComponent(
+  const checkUrl = `${VPS_URL.replace(/\/+$/, "")}/sessions/${encodeURIComponent(
     sessionId
   )}/check-login`
 
@@ -219,7 +219,7 @@ async function injectLatestCookies(account_id: string, session_id: string) {
     return
   }
 
-  const url = `${VPS_URL.replace(/\/+$/, "")}/api/sessions/${encodeURIComponent(
+  const url = `${VPS_URL.replace(/\/+$/, "")}/sessions/${encodeURIComponent(
     session_id
   )}/inject-cookies`
 
@@ -249,7 +249,7 @@ async function teardownSession(session_id: string): Promise<void> {
   const timer = setTimeout(() => ctrl.abort(), 5000)
   try {
     await fetch(
-      `${VPS_URL.replace(/\/+$/, "")}/api/sessions/${encodeURIComponent(session_id)}`,
+      `${VPS_URL.replace(/\/+$/, "")}/sessions/${encodeURIComponent(session_id)}`,
       { method: "DELETE", signal: ctrl.signal, cache: "no-store" }
     )
   } catch {
