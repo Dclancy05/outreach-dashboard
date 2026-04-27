@@ -6,7 +6,7 @@ import { createClient } from "@supabase/supabase-js"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
-export const maxDuration = 600
+export const maxDuration = 300
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
