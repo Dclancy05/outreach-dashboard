@@ -28,6 +28,8 @@ import AccountDetailDialog from "@/components/account-detail-dialog"
 import BulkImportDialog from "@/components/bulk-import-dialog"
 import { CookieHealthBadge } from "@/components/cookie-health-badge"
 import { HelpButton } from "@/components/help-button"
+import { VpsOfflineDialog } from "@/components/vps-offline-dialog"
+import { useVpsHealth } from "@/lib/use-vps-health"
 
 // ── Animation variants ──────────────────────────────────────────────
 
@@ -420,6 +422,10 @@ export default function AccountsPage() {
   const [testingProxyId, setTestingProxyId] = useState<string | null>(null)
   const [proxyTestResults, setProxyTestResults] = useState<Record<string, { ok: boolean; ip?: string; country?: string; city?: string; latency_ms?: number; error?: string }>>({})
   const router = useRouter()
+  // F1+F2: when the VPS is offline, "Sign In Now" and "Test proxy" need to
+  // intercept the click and explain why instead of firing failing requests.
+  const { vpsOffline } = useVpsHealth()
+  const [vpsOfflineDialog, setVpsOfflineDialog] = useState<null | "signin" | "test-proxy">(null)
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -599,6 +605,10 @@ export default function AccountsPage() {
   }
 
   async function testProxy(id: string) {
+    if (vpsOffline) {
+      setVpsOfflineDialog("test-proxy")
+      return
+    }
     setTestingProxyId(id)
     setProxyTestResults(prev => { const next = { ...prev }; delete next[id]; return next })
     try {
@@ -1152,6 +1162,10 @@ export default function AccountsPage() {
                               const openVnc = (e?: React.MouseEvent) => {
                                 if (e) e.stopPropagation()
                                 if (isGoogleBooster) return
+                                if (vpsOffline) {
+                                  setVpsOfflineDialog("signin")
+                                  return
+                                }
                                 setLoginModalPlatform(a.platform)
                                 setLoginModalAccountId(a.account_id)
                                 setLoginModalOpen(true)
@@ -1182,7 +1196,7 @@ export default function AccountsPage() {
                                     justFlipped && "ring-2 ring-emerald-400/70 shadow-[0_0_20px_-4px_rgba(16,185,129,0.55)] animate-pulse",
                                   )}
                                   onClick={() => (needsAttn && !isGoogleBooster) ? openVnc() : setDetailAccountId(a.account_id)}
-                                  title={(needsAttn && !isGoogleBooster) ? "Click to sign in — opens your saved Chrome profile" : "Click for full details"}
+                                  title={(needsAttn && !isGoogleBooster) ? (vpsOffline ? "VPS is offline — start it from Maintenance first" : "Click to sign in — opens your saved Chrome profile") : "Click for full details"}
                                 >
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2 min-w-0">
@@ -2263,6 +2277,11 @@ export default function AccountsPage() {
             toast.error("Assign a proxy group to this account first — login needs a proxy to route through.")
             return
           }
+          if (vpsOffline) {
+            setDetailAccountId(null)
+            setVpsOfflineDialog("signin")
+            return
+          }
           setLoginModalPlatform(account.platform)
           setLoginModalAccountId(account.account_id)
           setDetailAccountId(null)
@@ -2275,6 +2294,12 @@ export default function AccountsPage() {
         onClose={() => setShowBulkImport(false)}
         onImported={fetchAll}
         proxies={proxies.map(p => ({ id: p.id, ip: p.ip, location_city: p.location_city || "" }))}
+      />
+
+      <VpsOfflineDialog
+        open={vpsOfflineDialog !== null}
+        onOpenChange={(o) => { if (!o) setVpsOfflineDialog(null) }}
+        action={vpsOfflineDialog || "signin"}
       />
 
       {/* Floating bulk-action bar */}
