@@ -1406,13 +1406,24 @@ export default function AccountsPage() {
                     {accounts.filter(a => !a.proxy_group_id).map(a => {
                       const Icon = platformIcons[a.platform] || Shield
                       return (
-                        <div key={a.account_id} className={cn("rounded-xl border border-border/40 p-3 bg-card/40", platformBorders[a.platform] || "border-l-muted", "border-l-4")}>
+                        <button
+                          type="button"
+                          key={a.account_id}
+                          onClick={() => setDetailAccountId(a.account_id)}
+                          className={cn(
+                            "text-left rounded-xl border border-border/40 p-3 bg-card/40 cursor-pointer transition-all",
+                            "hover:bg-card/70 hover:border-border focus:outline-none focus:ring-2 focus:ring-emerald-500/40",
+                            platformBorders[a.platform] || "border-l-muted",
+                            "border-l-4"
+                          )}
+                          title="Open account details"
+                        >
                           <div className="flex items-center gap-2">
                             <Icon className={cn("h-4 w-4", platformColors[a.platform])} />
                             <span className="text-sm font-medium">@{a.username || a.display_name}</span>
                           </div>
                           <p className="text-[10px] text-muted-foreground mt-1 pl-6 capitalize">{a.platform}</p>
-                        </div>
+                        </button>
                       )
                     })}
                   </div>
