@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -426,6 +426,17 @@ export default function AccountsPage() {
   // intercept the click and explain why instead of firing failing requests.
   const { vpsOffline } = useVpsHealth()
   const [vpsOfflineDialog, setVpsOfflineDialog] = useState<null | "signin" | "test-proxy">(null)
+  // F4: filter inputs for the Accounts tab. Pure client-side over the
+  // already-loaded accounts list — Dylan has ~94 accounts and no filters.
+  const [accountsSearch, setAccountsSearch] = useState("")
+  const [accountsSearchDebounced, setAccountsSearchDebounced] = useState("")
+  const [accountsPlatformFilter, setAccountsPlatformFilter] = useState("all")
+  const [accountsStatusFilter, setAccountsStatusFilter] = useState("all")
+  const [accountsGroupFilter, setAccountsGroupFilter] = useState("all")
+  useEffect(() => {
+    const t = setTimeout(() => setAccountsSearchDebounced(accountsSearch.trim().toLowerCase()), 250)
+    return () => clearTimeout(t)
+  }, [accountsSearch])
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
@@ -935,6 +946,56 @@ export default function AccountsPage() {
     const p = a.platform || "other"; if (!acc[p]) acc[p] = []; acc[p].push(a); return acc
   }, {})
 
+  // F4: client-side filter for the Accounts tab. Re-derived on every
+  // change to inputs but cheap (one pass over ~100 accounts).
+  const filteredAccountsByPlatform = useMemo(() => {
+    const q = accountsSearchDebounced
+    const filtered = accounts.filter(a => {
+      if (accountsPlatformFilter !== "all" && a.platform !== accountsPlatformFilter) return false
+      if (accountsStatusFilter !== "all") {
+        const eff = effectiveStatus(a)
+        const isUntested = !a.has_auth_cookie && eff !== "active" && eff !== "warming"
+        const matches =
+          accountsStatusFilter === "untested"
+            ? isUntested
+            : accountsStatusFilter === "active"
+              ? eff === "active"
+              : accountsStatusFilter === "paused"
+                ? eff === "paused"
+                : accountsStatusFilter === "cooldown"
+                  ? eff === "cooldown" || eff === "cooled_down"
+                  : accountsStatusFilter === "banned"
+                    ? eff === "banned"
+                    : false
+        if (!matches) return false
+      }
+      if (accountsGroupFilter !== "all") {
+        if (accountsGroupFilter === "__unassigned") {
+          if (a.proxy_group_id) return false
+        } else if (a.proxy_group_id !== accountsGroupFilter) {
+          return false
+        }
+      }
+      if (q) {
+        const u = (a.username || "").toLowerCase()
+        const d = (a.display_name || "").toLowerCase()
+        if (!u.includes(q) && !d.includes(q)) return false
+      }
+      return true
+    })
+    return filtered.reduce<Record<string, Account[]>>((acc, a) => {
+      const p = a.platform || "other"
+      if (!acc[p]) acc[p] = []
+      acc[p].push(a)
+      return acc
+    }, {})
+  }, [accounts, accountsSearchDebounced, accountsPlatformFilter, accountsStatusFilter, accountsGroupFilter])
+
+  const filteredAccountCount = useMemo(
+    () => Object.values(filteredAccountsByPlatform).reduce((n, arr) => n + arr.length, 0),
+    [filteredAccountsByPlatform]
+  )
+
   const totalMonthlyCost = proxies.reduce((s, p) => s + (p.monthly_cost || 0), 0)
 
   if (loading) {
@@ -1383,14 +1444,19 @@ export default function AccountsPage() {
         {/* ═══ ACCOUNTS TAB ═══ */}
         <TabsContent value="accounts" className="space-y-6 mt-6">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <p className="text-sm text-muted-foreground">{accounts.length} accounts across {Object.keys(grouped).length} platforms · click the checkbox to multi-select, click the card for details</p>
+            <p className="text-sm text-muted-foreground">
+              Showing {filteredAccountCount} of {accounts.length} accounts across {Object.keys(grouped).length} platforms · click the checkbox to multi-select, click the card for details
+            </p>
             <div className="flex items-center gap-2">
-              {selectedAccounts.size === 0 && accounts.length > 0 && (
+              {selectedAccounts.size === 0 && filteredAccountCount > 0 && (
                 <Button
                   size="sm"
                   variant="outline"
                   className="rounded-xl text-xs"
-                  onClick={() => setSelectedAccounts(new Set(accounts.map(a => a.account_id)))}
+                  onClick={() => {
+                    const ids = Object.values(filteredAccountsByPlatform).flat().map(a => a.account_id)
+                    setSelectedAccounts(new Set(ids))
+                  }}
                 >
                   <Check className="h-3 w-3 mr-1" /> Select All
                 </Button>
@@ -1406,7 +1472,68 @@ export default function AccountsPage() {
             </div>
           </div>
 
-          {Object.entries(grouped).map(([platform, accts]) => {
+          {/* F4: filter row — pure client-side filter so Dylan can find a row in ~94. */}
+          <div className="flex flex-wrap items-center gap-2 rounded-xl bg-card/40 backdrop-blur-sm border border-border/40 p-3">
+            <Input
+              placeholder="Search @username or display name…"
+              value={accountsSearch}
+              onChange={(e) => setAccountsSearch(e.target.value)}
+              className="h-9 w-full sm:w-64 rounded-lg"
+            />
+            <Select value={accountsPlatformFilter} onValueChange={setAccountsPlatformFilter}>
+              <SelectTrigger className="h-9 w-full sm:w-40 rounded-lg"><SelectValue placeholder="Platform" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All platforms</SelectItem>
+                {ALL_PLATFORMS.map(p => (
+                  <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={accountsStatusFilter} onValueChange={setAccountsStatusFilter}>
+              <SelectTrigger className="h-9 w-full sm:w-36 rounded-lg"><SelectValue placeholder="Status" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="paused">Paused</SelectItem>
+                <SelectItem value="cooldown">Cooldown</SelectItem>
+                <SelectItem value="banned">Banned</SelectItem>
+                <SelectItem value="untested">Untested</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={accountsGroupFilter} onValueChange={setAccountsGroupFilter}>
+              <SelectTrigger className="h-9 w-full sm:w-44 rounded-lg"><SelectValue placeholder="Group" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All groups</SelectItem>
+                <SelectItem value="__unassigned">Unassigned</SelectItem>
+                {proxies.map(p => (
+                  <SelectItem key={p.id} value={p.id}>{p.name || p.location_city || p.ip || p.id}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {(accountsSearch || accountsPlatformFilter !== "all" || accountsStatusFilter !== "all" || accountsGroupFilter !== "all") && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9 rounded-lg text-xs"
+                onClick={() => {
+                  setAccountsSearch("")
+                  setAccountsPlatformFilter("all")
+                  setAccountsStatusFilter("all")
+                  setAccountsGroupFilter("all")
+                }}
+              >
+                <X className="h-3 w-3 mr-1" /> Clear
+              </Button>
+            )}
+          </div>
+
+          {filteredAccountCount === 0 && accounts.length > 0 && (
+            <div className="rounded-2xl border border-dashed border-border/50 bg-card/30 backdrop-blur-xl py-10 text-center">
+              <p className="text-sm text-muted-foreground">No accounts match these filters.</p>
+            </div>
+          )}
+
+          {Object.entries(filteredAccountsByPlatform).map(([platform, accts]) => {
             const Icon = platformIcons[platform] || Shield
             return (
               <motion.div key={platform} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
