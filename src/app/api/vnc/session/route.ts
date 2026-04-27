@@ -4,10 +4,8 @@ import { generateFingerprint, deriveGeoFields } from "@/lib/fingerprint"
 import { PLATFORM_LOGIN_URLS } from "@/lib/platform-login-urls"
 
 const VNC_MANAGER_URL = process.env.VNC_MANAGER_URL || "http://127.0.0.1:18790"
-if (!process.env.VNC_API_KEY) {
-  throw new Error("VNC_API_KEY env var is required")
-}
-const VNC_API_KEY = process.env.VNC_API_KEY
+// Lazy: env var verified at request time so build doesn't fail when unset.
+const VNC_API_KEY = process.env.VNC_API_KEY || ""
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
