@@ -1,0 +1,11 @@
+[Unit]
+Description=Run session checkpoint every 5 minutes
+Requires=session-checkpoint.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=session-checkpoint.service
+
+[Install]
+WantedBy=timers.target
