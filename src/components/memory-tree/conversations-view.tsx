@@ -16,6 +16,7 @@ import * as ContextMenu from "@radix-ui/react-context-menu"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { SessionExpiredCard } from "@/components/projects/session-expired"
 import { cn } from "@/lib/utils"
 
 interface TreeNode {
@@ -219,6 +220,10 @@ export function ConversationsView() {
         Memory Vault isn&apos;t connected — see the Memory Tree tab for setup steps.
       </div>
     )
+  }
+
+  if (errorStatus === 401) {
+    return <SessionExpiredCard what="conversations" />
   }
 
   if (error) {
