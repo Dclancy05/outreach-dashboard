@@ -71,9 +71,9 @@
   },
   "env": {
     "DASHBOARD_URL": "https://outreach-github.vercel.app",
-    "PROJECT_VPS_HOST": "srv1197943.hstgr.cloud",
-    "PROJECT_VPS_TAILSCALE": "100.70.3.3",
-    "AI_VPS_HOST": "srv1378286"
+    "VPS_HOST": "srv1197943.hstgr.cloud",
+    "VPS_TAILSCALE": "100.70.3.3",
+    "VPS_PUBLIC_IP": "93.127.215.29"
   },
   "hooks": {
     "SessionStart": [

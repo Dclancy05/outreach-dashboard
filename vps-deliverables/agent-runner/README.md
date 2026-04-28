@@ -1,6 +1,6 @@
 # agent-runner
 
-Tiny HTTP service that runs Claude agents on the AI VPS. Called per step by the dashboard's Inngest workflow function (`src/lib/inngest/functions/run-workflow.ts`). Reads agent definitions from `~/.claude/agents/{slug}.md` — the same files Claude Code uses as subagents in terminal sessions, kept in sync via `sync-vault.sh`.
+Tiny HTTP service that runs Claude agents on the VPS. Called per step by the dashboard's Inngest workflow function (`src/lib/inngest/functions/run-workflow.ts`). Reads agent definitions from `~/.claude/agents/{slug}.md` — the same files Claude Code uses as subagents in terminal sessions, kept in sync via `sync-vault.sh`.
 
 ## Endpoints
 
@@ -12,11 +12,11 @@ Tiny HTTP service that runs Claude agents on the AI VPS. Called per step by the 
 
 Auth: `Bearer ${AGENT_RUNNER_TOKEN}`. If unset, the service runs open (dev mode only).
 
-## Deploy (production VPS pattern)
+## Deploy (VPS pattern)
 
 ```bash
 # From the repo root, on your laptop:
-scp -r vps-deliverables/agent-runner root@srv1378286:/root/agent-runner
+scp -r vps-deliverables/agent-runner root@srv1197943:/root/agent-runner
 
 # On the VPS:
 cd /root/agent-runner

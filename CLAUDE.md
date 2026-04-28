@@ -20,14 +20,23 @@
 - **Cron:** Vercel cron (8 jobs in `vercel.json`)
 - Notable libs: googleapis, imapflow (IMAP), apify-client, otplib (2FA), @xyflow/react (flow editor), grapesjs (page builder), @novnc/novnc (embedded VNC)
 
-## Two-VPS architecture (don't confuse them)
+## Single-VPS architecture (consolidated 2026-04-27)
 
-| VPS | Hostname | Purpose |
-|---|---|---|
-| **Production** | `srv1197943.hstgr.cloud` (Tailscale `100.70.3.3`) | OpenClaw, george-gateway, rtrvr-sender, Cookie service, Chrome+CDP, noVNC, n8n, Caddy, Chroma — all the outreach machinery |
-| **AI command center** | `srv1378286` | Claude Code (me), MCP servers, Helicone, Langfuse, FalkorDB+Graphiti, persistent memory. Cloned repo lives at `/root/projects/outreach-dashboard` |
+Everything runs on **`srv1197943.hstgr.cloud`** — public IP `93.127.215.29`, Tailscale `100.70.3.3`, hostname `srv1197943` (4 CPU / 16 GB / 193 GB).
 
-If you're working on outreach service code, you're editing files that get deployed to the production VPS via `scp` + `systemctl restart` (see `DEPLOY_VPS_PART_B.md` for the pattern). If you're working on the dashboard, you push to `main` and Vercel auto-deploys.
+What's on it:
+- **Outreach machinery:** OpenClaw, george-gateway, rtrvr-sender (recording-service), Cookie service, Chrome+CDP, noVNC, x11vnc, n8n + Traefik, Caddy.
+- **AI / memory:** Claude Code, MCP servers, Memory Vault file-server (`memory-vault-api` + syncer at `/root/services/memory-vault-{api,syncer}`), `/root/memory-vault` markdown tree, Graphiti MCP + FalkorDB-KG + Ollama, agent-runner source.
+- **Cloned dashboard repo:** `/root/projects/outreach-dashboard`.
+
+The previous AI sidecar `srv1378286` (Tailscale `outreach-vps-2`) was decommissioned 2026-04-27 — services stopped, data preserved as a snapshot tarball at `/root/services/backups/langfuse-snapshot-YYYYMMDD.tar.gz` on the keeper.
+
+**Tailscale Funnel layout** (`srv1197943.taild42583.ts.net`, all three slots used):
+- `:8443/` → openclaw-gateway (`localhost:18789`)
+- `:8443/vault` → memory-vault-api (`localhost:8788`) — the file-server `/agency/memory` reads
+- `:10000/` → recording-service (`localhost:3848`)
+
+If you're working on outreach service code, you're editing files that get deployed to this VPS via `scp` + `systemctl restart` (see `DEPLOY_VPS_PART_B.md`). If you're working on the dashboard, you push to `main` and Vercel auto-deploys.
 
 ## Existing AI surface (don't rebuild)
 
