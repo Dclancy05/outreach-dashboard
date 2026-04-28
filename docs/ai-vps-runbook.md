@@ -1,6 +1,6 @@
-# AI VPS Runbook (srv1378286)
+# VPS Runbook (srv1197943)
 
-> Plain-English reference for Dylan. The AI command center lives on this VPS, separate from production (srv1197943). Read top to bottom on first use, then bookmark for emergencies.
+> Plain-English reference for Dylan. As of 2026-04-27 we consolidated to a single VPS — the AI side (Claude Code, MCP servers, Memory Vault) and the outreach side (OpenClaw, n8n, noVNC, recording-service) both live on `srv1197943` (public IP `93.127.215.29`, Tailscale `100.70.3.3`). The old `srv1378286` AI sidecar was decommissioned. Read top to bottom on first use, then bookmark for emergencies.
 
 ## What's running on this VPS
 
@@ -14,7 +14,7 @@
 | **UFW firewall** | — | Only SSH + Tailscale allowed; everything else blocked | system |
 | **fail2ban** | — | Auto-bans SSH brute-force attempts | system |
 | **unattended-upgrades** | — | Daily security patches | system |
-| **Tailscale** | `outreach-vps-2` (100.127.163.51) | Private network to production VPS + your Mac | system |
+| **Tailscale** | `srv1197943` (100.70.3.3) | Private network to your Mac and any future nodes | system |
 
 ## Daily flow (the normal day)
 

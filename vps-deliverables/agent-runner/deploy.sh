@@ -102,7 +102,7 @@ fi
 
 # Default external URL via Tailscale (matches how MEMORY_VAULT_API_URL is exposed)
 TS_HOST=$(tailscale status --json 2>/dev/null | grep -oE '"DNSName":"[^"]+"' | head -1 | cut -d'"' -f4 | sed 's/\.$//')
-EXT_URL="http://${TS_HOST:-srv1378286}.taild42583.ts.net:10001"
+EXT_URL="http://${TS_HOST:-srv1197943}.taild42583.ts.net:10001"
 
 echo
 echo "─────────────────────────────────────────────────────────────────"

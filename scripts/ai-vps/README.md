@@ -1,8 +1,8 @@
-# AI VPS scripts
+# VPS scripts
 
-These scripts live on the AI command-center VPS (`srv1378286`) and aren't deployed to Vercel. They're version-controlled here so the VPS can be rebuilt from scratch if it ever dies.
+These scripts live on the VPS (`srv1197943`) and aren't deployed to Vercel. They're version-controlled here so the VPS can be rebuilt from scratch if it ever dies.
 
-| File | Lives at on AI VPS | Purpose |
+| File | Lives at on VPS | Purpose |
 |---|---|---|
 | `parse-session.ts` | `/root/services/parse-session.ts` | Convert a Claude Code session JSONL into a clean markdown transcript with credential redaction. Writes to `/root/memory-vault/Conversations/<date>-<short_id>-transcript.md`. |
 | `checkpoint-active-session.sh` | `/root/services/checkpoint-active-session.sh` | Wrapper called by the systemd timer. Picks the most recently active JSONL (modified in last hour) and runs the parser on it. |
@@ -16,7 +16,7 @@ These scripts live on the AI command-center VPS (`srv1378286`) and aren't deploy
 
 The output filename is deterministic (`<date>-<short_id>-transcript.md`) so re-runs overwrite the same file in place — no duplicates.
 
-## Install on a fresh AI VPS
+## Install on a fresh VPS
 
 ```bash
 sudo cp scripts/ai-vps/parse-session.ts /root/services/parse-session.ts
