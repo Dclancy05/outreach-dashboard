@@ -39,10 +39,10 @@ export async function listProjects(): Promise<Project[]> {
     .order("sort_order", { ascending: true })
     .order("slug", { ascending: true })
   if (error) {
-    // Most likely cause: migration hasn't been applied yet. Fall back to a
-    // hard-coded "agency-hq" so the UI still functions; the API tells the
-    // client to recommend running the migration.
-    if (error.code === "42P01" /* relation does not exist */) {
+    // PostgREST returns PGRST205 for missing tables; raw Postgres uses 42P01.
+    // Either way: migration hasn't been applied — fall back to hard-coded
+    // "agency-hq" so the UI still functions on day-one without DB writes.
+    if (error.code === "42P01" || error.code === "PGRST205") {
       return [hardcodedAgencyHQ()]
     }
     throw error
