@@ -124,6 +124,16 @@ export function CodeFileViewer({ path, onSegmentClick, onOpenInPages, onDeleted 
   const canDelete = !!data && !!data.path
   const isDirty = editing && data?.content !== undefined && draft !== data.content
 
+  useEffect(() => {
+    if (!isDirty) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ""
+    }
+    window.addEventListener("beforeunload", handler)
+    return () => window.removeEventListener("beforeunload", handler)
+  }, [isDirty])
+
   async function handleSave() {
     if (!data) return
     if (draft.length > 1_000_000) {

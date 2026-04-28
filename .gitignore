@@ -4,6 +4,9 @@
 # next.js build output
 /.next/
 
+# typescript incremental build cache
+*.tsbuildinfo
+
 # production build
 /out/
 

@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { SessionExpiredCard } from "./session-expired"
 
 interface CascadeCandidate {
   path: string
@@ -42,12 +43,13 @@ export function DeleteSourceDialog({ sourcePath, displayName, routeContext, onCl
   const [submitting, setSubmitting] = useState(false)
   const [prUrl, setPrUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [errorStatus, setErrorStatus] = useState<number | null>(null)
 
   useEffect(() => {
     if (!sourcePath) return
     fetch(`/api/projects/cascade?path=${encodeURIComponent(sourcePath)}`, { cache: "no-store" })
       .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        if (!r.ok) { setErrorStatus(r.status); throw new Error(`HTTP ${r.status}`) }
         return r.json()
       })
       .then((j: { candidates: CascadeCandidate[] }) => {
@@ -103,98 +105,105 @@ export function DeleteSourceDialog({ sourcePath, displayName, routeContext, onCl
           </DialogTitle>
         </DialogHeader>
 
-        {prUrl ? (
-          <div className="space-y-3 py-2">
-            <div className="text-sm text-zinc-200">
-              ✅ Pull request opened. Click below to review the diff and merge.
+        {errorStatus === 401 ? (
+          <>
+            <div className="py-4"><SessionExpiredCard what="the delete dialog" /></div>
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>Close</Button>
+            </DialogFooter>
+          </>
+        ) : prUrl ? (
+          <>
+            <div className="space-y-3 py-2">
+              <div className="text-sm text-zinc-200">
+                ✅ Pull request opened. Click below to review the diff and merge.
+              </div>
+              <a
+                href={prUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 text-amber-300 hover:text-amber-200 text-sm break-all"
+              >
+                {prUrl} <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <p className="text-xs text-zinc-500">
+                Once you merge the PR on GitHub, Vercel will auto-deploy and the file disappears.
+                Until then, nothing has actually been removed.
+              </p>
             </div>
-            <a
-              href={prUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-amber-300 hover:text-amber-200 text-sm break-all"
-            >
-              {prUrl} <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-            <p className="text-xs text-zinc-500">
-              Once you merge the PR on GitHub, Vercel will auto-deploy and the file disappears.
-              Until then, nothing has actually been removed.
-            </p>
-          </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { onDeleted() }}>
+                Done
+              </Button>
+            </DialogFooter>
+          </>
         ) : (
-          <div className="space-y-3 py-2 max-h-[60vh] overflow-auto">
-            <div className="text-sm text-zinc-300">
-              This will <strong>open a pull request</strong> deleting the file
-              {totalSelected > 1 ? `s (${totalSelected} total)` : ""}. Nothing happens until you merge it on GitHub.
-            </div>
-            <div className="rounded border border-zinc-800/60 bg-zinc-900/40 p-2">
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-zinc-500">📄 file:</span>
-                <span className="font-mono text-zinc-200 truncate">{sourcePath}</span>
+          <>
+            <div className="space-y-3 py-2 max-h-[60vh] overflow-auto">
+              <div className="text-sm text-zinc-300">
+                This will <strong>open a pull request</strong> deleting the file
+                {totalSelected > 1 ? `s (${totalSelected} total)` : ""}. Nothing happens until you merge it on GitHub.
               </div>
-            </div>
-
-            <div>
-              <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
-                Also delete these? (related backend files)
-              </div>
-              {candidates === null && (
-                <div className="text-xs text-zinc-500 flex items-center gap-2">
-                  <Loader2 className="h-3 w-3 animate-spin" /> Looking for related files…
+              <div className="rounded border border-zinc-800/60 bg-zinc-900/40 p-2">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-zinc-500">📄 file:</span>
+                  <span className="font-mono text-zinc-200 truncate">{sourcePath}</span>
                 </div>
-              )}
-              {candidates && candidates.length === 0 && (
-                <div className="text-xs text-zinc-500 italic">None found — just this file.</div>
-              )}
-              {candidates && candidates.length > 0 && (
-                <div className="space-y-1">
-                  {candidates.map((c) => (
-                    <label
-                      key={c.path}
-                      className="flex items-start gap-2 text-xs p-2 rounded hover:bg-zinc-900/60 cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked.has(c.path)}
-                        onChange={() => toggle(c.path)}
-                        className="mt-0.5"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-mono text-zinc-200 truncate">{c.path}</div>
-                        <div className="text-[10px] text-zinc-500">
-                          {c.confidence === "high" ? "🟥 high" : c.confidence === "medium" ? "🟧 medium" : "⬜ low"}
-                          {" "} confidence — {c.reason}
+              </div>
+
+              <div>
+                <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
+                  Also delete these? (related backend files)
+                </div>
+                {candidates === null && (
+                  <div className="text-xs text-zinc-500 flex items-center gap-2">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Looking for related files…
+                  </div>
+                )}
+                {candidates && candidates.length === 0 && (
+                  <div className="text-xs text-zinc-500 italic">None found — just this file.</div>
+                )}
+                {candidates && candidates.length > 0 && (
+                  <div className="space-y-1">
+                    {candidates.map((c) => (
+                      <label
+                        key={c.path}
+                        className="flex items-start gap-2 text-xs p-2 rounded hover:bg-zinc-900/60 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked.has(c.path)}
+                          onChange={() => toggle(c.path)}
+                          className="mt-0.5"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono text-zinc-200 truncate">{c.path}</div>
+                          <div className="text-[10px] text-zinc-500">
+                            {c.confidence === "high" ? "🟥 high" : c.confidence === "medium" ? "🟧 medium" : "⬜ low"}
+                            {" "} confidence — {c.reason}
+                          </div>
                         </div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
-                Reason (optional, goes in the PR description)
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
-              <Textarea
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="e.g. old experiment, replaced by something else"
-                className="min-h-[60px] text-xs"
-              />
+
+              <div>
+                <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
+                  Reason (optional, goes in the PR description)
+                </div>
+                <Textarea
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. old experiment, replaced by something else"
+                  className="min-h-[60px] text-xs"
+                />
+              </div>
+
+              {error && <div className="text-rose-300 text-xs">{error}</div>}
             </div>
-
-            {error && <div className="text-rose-300 text-xs">{error}</div>}
-          </div>
-        )}
-
-        <DialogFooter>
-          {prUrl ? (
-            <Button variant="outline" onClick={() => { onDeleted() }}>
-              Done
-            </Button>
-          ) : (
-            <>
+            <DialogFooter>
               <Button variant="outline" onClick={onClose} disabled={submitting}>
                 Cancel
               </Button>
@@ -202,9 +211,9 @@ export function DeleteSourceDialog({ sourcePath, displayName, routeContext, onCl
                 {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                 Open delete PR ({totalSelected} file{totalSelected === 1 ? "" : "s"})
               </Button>
-            </>
-          )}
-        </DialogFooter>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   )

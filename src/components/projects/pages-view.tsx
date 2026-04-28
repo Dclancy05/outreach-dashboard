@@ -61,6 +61,7 @@ export function PagesView({ onOpenInTree, initialSelectRoute, onAutoSelected }: 
   const [deleteOpen, setDeleteOpen] = useState<{ page: AllPage } | null>(null)
   const [allPages, setAllPages] = useState<AllPage[] | null>(null)
   const [pageRefresh, setPageRefresh] = useState(0)
+  const [pageListErrorStatus, setPageListErrorStatus] = useState<number | null>(null)
 
   // When the host asks us to auto-select a page (Files → Pages cross-nav),
   // wait for the all-pages list to load, then find + select the matching page.
@@ -76,9 +77,13 @@ export function PagesView({ onOpenInTree, initialSelectRoute, onAutoSelected }: 
   // Pull the comprehensive page list from GitHub on mount + after a delete PR.
   useEffect(() => {
     let cancelled = false
+    setPageListErrorStatus(null)
     fetch("/api/projects/all-pages", { cache: "no-store" })
       .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        if (!r.ok) {
+          if (!cancelled) setPageListErrorStatus(r.status)
+          throw new Error(`HTTP ${r.status}`)
+        }
         const j = await r.json()
         if (!cancelled) setAllPages((j.pages as AllPage[]) || [])
       })
@@ -96,6 +101,14 @@ export function PagesView({ onOpenInTree, initialSelectRoute, onAutoSelected }: 
         )
     return list.sort((a, b) => a.title.localeCompare(b.title))
   }, [filter, allPages])
+
+  if (pageListErrorStatus === 401) {
+    return (
+      <div className="flex items-center justify-center h-full bg-zinc-900/30 border border-zinc-800/60 rounded-lg">
+        <SessionExpiredCard what="the page list" />
+      </div>
+    )
+  }
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] gap-3 h-full">
