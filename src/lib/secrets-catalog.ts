@@ -1,0 +1,402 @@
+/**
+ * Provider catalog — single source of truth for the API Keys tab dropdown
+ * and the env-var → provider mapping that powers seed-import + masking.
+ *
+ * Bootstrap secrets (Supabase, ADMIN_PIN, SESSION_SIGNING_SECRET, CRON_SECRET,
+ * OUTREACH_MEMORY_MCP_KEY) are intentionally absent — they must stay in
+ * process.env or the secret-reader can't bootstrap itself.
+ */
+
+export type Category = "AI / LLM" | "Search & Scraping" | "Communication" | "Social" | "Infrastructure" | "Workflow & Storage" | "Other"
+
+export type ProviderEntry = {
+  slug: string
+  label: string
+  emoji?: string
+  category?: Category
+  envVars: string[] // canonical first
+  help: string
+  href?: string
+  placeholder?: string
+  testable?: boolean
+}
+
+export const CATEGORY_ORDER: Category[] = [
+  "AI / LLM",
+  "Search & Scraping",
+  "Communication",
+  "Social",
+  "Infrastructure",
+  "Workflow & Storage",
+  "Other",
+]
+
+export const PROVIDERS: ProviderEntry[] = [
+  {
+    slug: "openai",
+    category: "AI / LLM",
+    label: "OpenAI",
+    emoji: "🤖",
+    envVars: ["OPENAI_API_KEY"],
+    help: "Powers AI message generation and captions.",
+    href: "https://platform.openai.com/api-keys",
+    placeholder: "sk-...",
+    testable: true,
+  },
+  {
+    slug: "anthropic",
+    category: "AI / LLM",
+    label: "Anthropic Claude",
+    emoji: "🧠",
+    envVars: ["ANTHROPIC_API_KEY"],
+    help: "Claude-powered writers and the in-app agent.",
+    href: "https://console.anthropic.com/settings/keys",
+    placeholder: "sk-ant-...",
+    testable: true,
+  },
+  {
+    slug: "apify",
+    category: "Search & Scraping",
+    label: "Apify",
+    emoji: "🕸️",
+    envVars: ["APIFY_TOKEN", "APIFY_API_TOKEN"],
+    help: "Powers Social Scout scraping.",
+    href: "https://console.apify.com/account/integrations",
+    placeholder: "apify_api_...",
+    testable: true,
+  },
+  {
+    slug: "instantly",
+    category: "Communication",
+    label: "Instantly",
+    emoji: "📧",
+    envVars: ["INSTANTLY_API_KEY"],
+    help: "Email outreach sender.",
+    href: "https://app.instantly.ai/app/settings/integrations",
+    placeholder: "Paste your Instantly API key",
+    testable: true,
+  },
+  {
+    slug: "ghl_key",
+    category: "Communication",
+    label: "GoHighLevel API Key",
+    emoji: "📱",
+    envVars: ["GHL_API_KEY"],
+    help: "Send SMS via your GHL subaccount.",
+    href: "https://help.gohighlevel.com/support/solutions/articles/48000982605",
+    placeholder: "Bearer token from GHL → Settings → API Key",
+    testable: true,
+  },
+  {
+    slug: "ghl_sub",
+    category: "Communication",
+    label: "GHL Subaccount (Location) ID",
+    emoji: "📍",
+    envVars: ["GHL_SUBACCOUNT_ID", "GHL_LOCATION_ID"],
+    help: "Location id under your agency that owns the SMS number.",
+    placeholder: "abc123XYZsubaccountId",
+  },
+  {
+    slug: "telegram_bot",
+    category: "Communication",
+    label: "Telegram Bot Token",
+    emoji: "🤖",
+    envVars: ["TELEGRAM_BOT_TOKEN"],
+    help: "Bot token for Dead Man's Switch alerts. Create one with @BotFather.",
+    placeholder: "123456:ABC-DEF...",
+    testable: true,
+  },
+  {
+    slug: "telegram_chat",
+    category: "Communication",
+    label: "Telegram Chat ID",
+    emoji: "💬",
+    envVars: ["TELEGRAM_CHAT_ID"],
+    help: "Numeric chat id where alerts get sent. Get it from @userinfobot.",
+    placeholder: "123456789",
+    testable: true,
+  },
+  {
+    slug: "brave",
+    category: "Search & Scraping",
+    label: "Brave Search",
+    emoji: "🔍",
+    envVars: ["BRAVE_SEARCH_API_KEY", "BRAVE_API_KEY"],
+    help: "Used by event scraping.",
+    href: "https://brave.com/search/api/",
+  },
+  {
+    slug: "elevenlabs",
+    category: "AI / LLM",
+    label: "ElevenLabs",
+    emoji: "🎙️",
+    envVars: ["ELEVENLABS_API_KEY"],
+    help: "Text-to-speech / voice generation.",
+    href: "https://elevenlabs.io/app/settings/api-keys",
+  },
+  {
+    slug: "suno",
+    category: "AI / LLM",
+    label: "Suno",
+    emoji: "🎵",
+    envVars: ["SUNO_API_KEY"],
+    help: "Music generation for video.",
+  },
+  {
+    slug: "kling_access",
+    category: "AI / LLM",
+    label: "Kling Access Key",
+    emoji: "🎬",
+    envVars: ["KLING_ACCESS_KEY"],
+    help: "Kling AI video generation (access key half).",
+  },
+  {
+    slug: "kling_secret",
+    category: "AI / LLM",
+    label: "Kling Secret Key",
+    emoji: "🎬",
+    envVars: ["KLING_SECRET_KEY"],
+    help: "Kling AI video generation (secret half).",
+  },
+  {
+    slug: "kling_api",
+    category: "AI / LLM",
+    label: "Kling API Key",
+    emoji: "🎬",
+    envVars: ["KLING_API_KEY"],
+    help: "Kling endpoint key (alternate flow).",
+  },
+  {
+    slug: "google_oauth_id",
+    category: "Communication",
+    label: "Google OAuth Client ID",
+    emoji: "🔑",
+    envVars: ["GOOGLE_CLIENT_ID"],
+    help: "OAuth client id for Gmail / Docs.",
+    href: "https://console.cloud.google.com/apis/credentials",
+  },
+  {
+    slug: "google_oauth_secret",
+    category: "Communication",
+    label: "Google OAuth Client Secret",
+    emoji: "🔐",
+    envVars: ["GOOGLE_CLIENT_SECRET"],
+    help: "OAuth client secret for Gmail / Docs.",
+  },
+  {
+    slug: "google_service_account",
+    category: "Communication",
+    label: "Google Service Account JSON",
+    emoji: "📄",
+    envVars: ["GOOGLE_SERVICE_ACCOUNT_JSON"],
+    help: "Base64-encoded service-account JSON for Google Docs.",
+  },
+  {
+    slug: "ms_oauth_id",
+    category: "Communication",
+    label: "Microsoft OAuth Client ID",
+    emoji: "🔑",
+    envVars: ["MICROSOFT_CLIENT_ID"],
+    help: "Azure app client id for Outlook OAuth.",
+  },
+  {
+    slug: "ms_oauth_secret",
+    category: "Communication",
+    label: "Microsoft OAuth Client Secret",
+    emoji: "🔐",
+    envVars: ["MICROSOFT_CLIENT_SECRET"],
+    help: "Azure app client secret for Outlook OAuth.",
+  },
+  {
+    slug: "meta_app_id",
+    category: "Social",
+    label: "Meta App ID",
+    emoji: "📘",
+    envVars: ["META_APP_ID"],
+    help: "Meta developer app id for Instagram Graph API.",
+  },
+  {
+    slug: "meta_app_secret",
+    category: "Social",
+    label: "Meta App Secret",
+    emoji: "📘",
+    envVars: ["META_APP_SECRET"],
+    help: "Meta developer app secret for Instagram Graph API.",
+  },
+  {
+    slug: "gologin",
+    category: "Social",
+    label: "GoLogin API Token",
+    emoji: "🌐",
+    envVars: ["GOLOGIN_API_TOKEN"],
+    help: "Browser profile manager for stealth browsing.",
+    href: "https://app.gologin.com/personalArea/Settings/api",
+  },
+  {
+    slug: "late",
+    category: "Social",
+    label: "LATE Cross-Post API",
+    emoji: "📤",
+    envVars: ["LATE_API_KEY"],
+    help: "Cross-posting service.",
+  },
+  {
+    slug: "vps_url",
+    category: "Infrastructure",
+    label: "Production VPS URL",
+    emoji: "🖥️",
+    envVars: ["VPS_URL", "RECORDING_SERVER_URL"],
+    help: "Where the dashboard talks to VNC + Chrome service.",
+    placeholder: "https://srv1197943.taild42583.ts.net:10000",
+  },
+  {
+    slug: "vnc_key",
+    category: "Infrastructure",
+    label: "VNC Manager API Key",
+    emoji: "🔒",
+    envVars: ["VNC_API_KEY"],
+    help: "Auth secret for the VNC manager service.",
+  },
+  {
+    slug: "vnc_url",
+    category: "Infrastructure",
+    label: "VNC Manager URL",
+    emoji: "🌐",
+    envVars: ["VNC_MANAGER_URL"],
+    help: "VNC manager endpoint.",
+  },
+  {
+    slug: "memory_vault_url",
+    category: "Infrastructure",
+    label: "Memory Vault URL",
+    emoji: "🗂️",
+    envVars: ["MEMORY_VAULT_API_URL"],
+    help: "File-tree memory API endpoint.",
+  },
+  {
+    slug: "memory_vault_token",
+    category: "Infrastructure",
+    label: "Memory Vault Token",
+    emoji: "🔐",
+    envVars: ["MEMORY_VAULT_TOKEN"],
+    help: "Auth token for the file-tree memory API.",
+  },
+  {
+    slug: "claude_bridge_url",
+    category: "Infrastructure",
+    label: "Claude Bridge URL",
+    emoji: "🌉",
+    envVars: ["CLAUDE_BRIDGE_URL"],
+    help: "Local Claude Bridge endpoint.",
+  },
+  {
+    slug: "claude_bridge_key",
+    category: "Infrastructure",
+    label: "Claude Bridge Key",
+    emoji: "🔑",
+    envVars: ["CLAUDE_BRIDGE_KEY"],
+    help: "Auth key for the local Claude Bridge.",
+  },
+  {
+    slug: "project_doc_id",
+    category: "Workflow & Storage",
+    label: "Project Google Doc ID",
+    emoji: "📝",
+    envVars: ["PROJECT_DOC_ID"],
+    help: "Doc id where project decisions get appended.",
+  },
+  {
+    slug: "github_pat",
+    category: "Workflow & Storage",
+    label: "GitHub PAT",
+    emoji: "🐙",
+    envVars: ["GITHUB_PAT"],
+    help: "Read-only GitHub token for the Project Tree tab. Fine-grained, scoped to your dashboard repo.",
+    href: "https://github.com/settings/tokens?type=beta",
+    placeholder: "github_pat_…",
+    testable: true,
+  },
+  {
+    slug: "vercel_token",
+    category: "Infrastructure",
+    label: "Vercel Token",
+    emoji: "▲",
+    envVars: ["VERCEL_TOKEN"],
+    help: "Vercel API token for deployment automation.",
+    href: "https://vercel.com/account/tokens",
+    placeholder: "Paste your Vercel token",
+    testable: true,
+  },
+  {
+    slug: "inngest_event",
+    category: "Infrastructure",
+    label: "Inngest Event Key",
+    emoji: "📨",
+    envVars: ["INNGEST_EVENT_KEY"],
+    help: "Used by the Agent Workflows runtime to publish events.",
+    href: "https://app.inngest.com/env/production/manage/keys",
+  },
+  {
+    slug: "inngest_signing",
+    category: "Infrastructure",
+    label: "Inngest Signing Key",
+    emoji: "✍️",
+    envVars: ["INNGEST_SIGNING_KEY"],
+    help: "Validates incoming Inngest webhook signatures.",
+    href: "https://app.inngest.com/env/production/manage/signing-key",
+  },
+  {
+    slug: "agent_runner_url",
+    category: "Infrastructure",
+    label: "Agent Runner URL",
+    emoji: "🤖",
+    envVars: ["AGENT_RUNNER_URL"],
+    help: "Endpoint for the VPS agent-runner service that spawns Claude subagents.",
+    placeholder: "https://srv1197943.taild42583.ts.net:.../agent-runner",
+  },
+  {
+    slug: "agent_runner_token",
+    category: "Infrastructure",
+    label: "Agent Runner Token",
+    emoji: "🔐",
+    envVars: ["AGENT_RUNNER_TOKEN"],
+    help: "Auth token for the agent-runner service.",
+  },
+  {
+    slug: "custom",
+    category: "Other",
+    label: "Custom (type your own env var name)",
+    emoji: "🛠️",
+    envVars: [],
+    help: "Free-form. Type the env-var name and paste the value.",
+  },
+]
+
+/** Bootstrap-only secrets — never UI-managed; getSecret returns env-only. */
+export const BOOTSTRAP_ENV_VARS = new Set<string>([
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "ADMIN_PIN",
+  "SESSION_SIGNING_SECRET",
+  "CRON_SECRET",
+  "OUTREACH_MEMORY_MCP_KEY",
+])
+
+export function findProviderBySlug(slug: string): ProviderEntry | null {
+  return PROVIDERS.find((p) => p.slug === slug) ?? null
+}
+
+export function findProviderByEnvVar(envVar: string): ProviderEntry | null {
+  return (
+    PROVIDERS.find((p) => p.envVars.includes(envVar)) ?? null
+  )
+}
+
+/** Mask all but the last 4 chars. Empty / very short values get a flat dot. */
+export function maskSecret(raw: string | null | undefined): string {
+  if (!raw) return ""
+  const s = String(raw)
+  if (s.length <= 4) return "•••••"
+  return `${s.slice(0, 3)}…${s.slice(-4)}`
+}
