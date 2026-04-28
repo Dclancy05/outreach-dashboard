@@ -5,8 +5,8 @@ import useSWR from "swr"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
-  AlertCircle, CheckCircle, Copy, ExternalLink, KeyRound, Pencil, Plus, PlugZap,
-  RefreshCw, Search, Sparkles, Trash2, XCircle, Zap,
+  AlertCircle, CheckCircle, Copy, ExternalLink, KeyRound, Lock, Pencil, Plus, PlugZap,
+  RefreshCw, Search, ShieldCheck, Sparkles, Trash2, XCircle, Zap,
 } from "lucide-react"
 import { toast } from "sonner"
 import { findProviderBySlug, CATEGORY_ORDER, type Category } from "@/lib/secrets-catalog"
@@ -175,7 +175,7 @@ export function ApiKeysView() {
       <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           <KeyRound className="h-4 w-4 text-amber-400" />
-          <h2 className="text-sm font-semibold text-zinc-100">API Keys</h2>
+          <h2 className="text-sm font-semibold text-zinc-100">Keys</h2>
           <Badge variant="outline" className="text-[10px]">{rows.length}</Badge>
           {totals.connected > 0 && (
             <Badge variant="outline" className="text-[10px] gap-1 border-emerald-500/30 text-emerald-300">
@@ -214,6 +214,8 @@ export function ApiKeysView() {
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-5">
+        <SystemKeysSection />
+
         {error && <div className="text-rose-400 text-sm">Couldn&apos;t load API keys: {String(error)}</div>}
         {isLoading && <div className="text-zinc-500 text-sm">Loading…</div>}
 
@@ -419,6 +421,74 @@ function expirationLabel(row: ApiKeyShape): { label: string; tone: string } | nu
     : days <= 30 ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
     : "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
   return { label: `Expires in ${days}d`, tone }
+}
+
+interface SystemRow {
+  env: string
+  label: string
+  emoji: string
+  category: "System" | "AI / MCP" | "Storage"
+  help: string
+  href?: string
+  set: boolean
+  preview: string | null
+}
+
+function SystemKeysSection() {
+  const { data, isLoading } = useSWR<{ rows: SystemRow[] }>("/api/api-keys/system-status", fetcher)
+  const rows = data?.rows ?? []
+  if (isLoading || rows.length === 0) return null
+
+  const grouped = new Map<SystemRow["category"], SystemRow[]>()
+  for (const r of rows) {
+    const bucket = grouped.get(r.category) ?? grouped.set(r.category, []).get(r.category)!
+    bucket.push(r)
+  }
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-zinc-500">
+        <ShieldCheck className="h-3.5 w-3.5 text-amber-400/70" />
+        <span>System & Bootstrap</span>
+        <span className="text-zinc-700">·</span>
+        <span>{rows.length}</span>
+        <Badge variant="outline" className="text-[10px] gap-1 border-zinc-700 text-zinc-400 ml-1">
+          <Lock className="h-2.5 w-2.5" /> managed in Vercel env
+        </Badge>
+        <div className="flex-1 h-px bg-zinc-800/60" />
+      </div>
+      <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/30 divide-y divide-zinc-800/60">
+        {rows.map((r) => (
+          <div key={r.env} className="flex items-start gap-3 p-3">
+            <div className="text-xl leading-none mt-0.5 shrink-0">{r.emoji}</div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium text-zinc-100 truncate">{r.label}</span>
+                <Badge variant="outline" className="text-[10px]">{r.category}</Badge>
+                {r.set ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-emerald-500/30 text-emerald-300 bg-emerald-500/10">
+                    <CheckCircle className="h-3 w-3" /> Set in env
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-rose-500/30 text-rose-300 bg-rose-500/10">
+                    <XCircle className="h-3 w-3" /> Missing
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 flex items-center gap-3 flex-wrap text-[11px] text-zinc-500">
+                <span className="font-mono">{r.env}</span>
+                {r.preview && <span className="font-mono">{r.preview}</span>}
+              </div>
+              <p className="mt-1 text-[11px] text-zinc-400">{r.help}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-zinc-500 px-1">
+        These are loaded directly from Vercel environment variables and can&apos;t be changed from this UI — open Vercel → Project → Settings → Environment Variables to rotate one.
+      </p>
+    </section>
+  )
 }
 
 function relativeTime(iso: string | null): string {

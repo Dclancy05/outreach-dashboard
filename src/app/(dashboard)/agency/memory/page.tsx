@@ -119,7 +119,7 @@ export default function MemoryPage() {
           </TabsTrigger>
           <TabsTrigger value="api-keys" className="gap-2">
             <KeyRound className="w-4 h-4" />
-            API Keys
+            Keys
           </TabsTrigger>
           <TabsTrigger value="conversations" className="gap-2">
             <MessageSquare className="w-4 h-4" />
