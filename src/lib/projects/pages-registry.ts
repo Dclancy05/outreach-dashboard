@@ -15,14 +15,10 @@ export interface FriendlyPage {
   section: PageSection
 }
 
-export type PageSection =
-  | "Daily"
-  | "Agency"
-  | "Outreach"
-  | "Content"
-  | "Setup"
-  | "Other"
-
+/** Kept for backward compatibility — no longer drives the UI grouping
+ *  per Dylan's feedback ("I don't get why you structured it like that").
+ *  The Pages view now renders alphabetically inside a single agency-hq folder. */
+export type PageSection = "Daily" | "Agency" | "Outreach" | "Content" | "Setup" | "Other"
 export const SECTION_ORDER: PageSection[] = ["Daily", "Agency", "Outreach", "Content", "Setup", "Other"]
 
 export const FRIENDLY_PAGES: FriendlyPage[] = [
@@ -275,6 +271,75 @@ export const FRIENDLY_CRONS: FriendlyCron[] = [
     title: "Campaign worker",
     description: "Drains the send queue — actually sends today's queued messages.",
     emoji: "🚚",
+  },
+]
+
+// ─────────────────────────────────────────────────────────────
+// Cleanup candidates — files that look like leftover experiments,
+// duplicates, or old work. Surfaced for review, not auto-deleted.
+// ─────────────────────────────────────────────────────────────
+
+export interface CleanupCandidate {
+  path: string                     // file path in repo
+  reason: string                   // why I think it's dead
+  certainty: "high" | "medium" | "low"
+  recommendation: string
+}
+
+export const CLEANUP_CANDIDATES: CleanupCandidate[] = [
+  {
+    path: "src/app/(dashboard)/agency/memory/page.legacy.tsx",
+    reason: "Backed-up copy of the old Memory page (saved when v2 shipped). The new page.tsx replaces it.",
+    certainty: "high",
+    recommendation: "Safe to delete — it's a static snapshot, no imports, no routes use it.",
+  },
+  {
+    path: "migration-content-tables.sql",
+    reason: "Root-level migration file. The same content lives in migrations/content_brands_and_ideas.sql — proper place for it.",
+    certainty: "high",
+    recommendation: "Delete the root-level copy. Apply migrations/content_brands_and_ideas.sql instead.",
+  },
+  {
+    path: "migration-video-generations.sql",
+    reason: "Root-level migration file (should be inside migrations/). Probably an old draft from before the migrations/ folder convention.",
+    certainty: "medium",
+    recommendation: "Verify the SQL has been applied to Supabase, then move into migrations/ with a proper date prefix or delete.",
+  },
+  {
+    path: "src/app/(dashboard)/content-creator/page.tsx",
+    reason: "There's now content-hq/factory/page.tsx which seems to do the same thing (AI-generates content). content-creator looks like the older flat version.",
+    certainty: "low",
+    recommendation: "Open both pages. If content-hq/factory is what you actually use, delete content-creator.",
+  },
+  {
+    path: "src/app/(dashboard)/content-publisher/page.tsx",
+    reason: "Likely the old version of what's now spread across content-hq/* subpages (calendar, hooks, trends, etc.).",
+    certainty: "low",
+    recommendation: "Same — open it. If unused, delete.",
+  },
+  {
+    path: "src/app/(dashboard)/content-calendar/page.tsx",
+    reason: "Duplicates content-hq/calendar/page.tsx. Probably the older flat version before content-hq/ was introduced.",
+    certainty: "medium",
+    recommendation: "Compare both — the content-hq one is the newer convention. Delete the flat version if it's unused.",
+  },
+  {
+    path: "src/app/(dashboard)/content-personas/page.tsx",
+    reason: "Same pattern — flat content-personas vs content-hq/personas. The hq version is newer.",
+    certainty: "medium",
+    recommendation: "Verify, then delete the flat one.",
+  },
+  {
+    path: "src/app/(dashboard)/account-setup/page.tsx",
+    reason: "Duplicates accounts/setup/page.tsx. Looks like /account-setup was an old flat URL before accounts/setup nested under accounts/.",
+    certainty: "medium",
+    recommendation: "Pick one canonical URL. /accounts/setup is the more conventional Next.js pattern.",
+  },
+  {
+    path: "migrations/008_memory_system.sql + migrations/008_reliability_layer.sql",
+    reason: "Two migrations share the same 008_ prefix. Migration runners depend on order — having two files with the same number means non-deterministic application order.",
+    certainty: "high",
+    recommendation: "Renumber one of them (e.g. one becomes 009_) so the order is explicit. Check git log to see which was added first and renumber the later one.",
   },
 ]
 

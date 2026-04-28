@@ -139,7 +139,7 @@ function buildCsp(_nonce: string, _pathname: string): string {
     `default-src 'self'`,
     `base-uri 'self'`,
     `object-src 'none'`,
-    `frame-ancestors 'none'`,
+    `frame-ancestors 'self'`,
     `form-action 'self'`,
     `img-src 'self' data: blob: https: ${supabase}`,
     `font-src 'self' data: https://fonts.gstatic.com`,
@@ -163,7 +163,7 @@ function buildCsp(_nonce: string, _pathname: string): string {
 function withSecurityHeaders(res: NextResponse, nonce: string, pathname: string): NextResponse {
   res.headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
   res.headers.set("X-Content-Type-Options", "nosniff")
-  res.headers.set("X-Frame-Options", "DENY")
+  res.headers.set("X-Frame-Options", "SAMEORIGIN")
   res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
   res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
   res.headers.set("Cross-Origin-Opener-Policy", "same-origin")
