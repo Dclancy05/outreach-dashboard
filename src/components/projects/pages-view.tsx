@@ -13,17 +13,13 @@
 import { useEffect, useMemo, useState } from "react"
 import {
   ChevronRight, ChevronDown, ExternalLink, Loader2, Sparkles, Search,
-  AlertCircle, Bot, Calendar, Globe, Clock, FolderOpen, Folder, Trash, Trash2,
+  AlertCircle, Bot, Calendar, Globe, Clock, FolderOpen, Folder, Trash, Trash2, FileCode2,
 } from "lucide-react"
 import {
   FRIENDLY_CRONS, NOT_BUILT, CLEANUP_CANDIDATES,
   type FriendlyCron, type NotBuiltItem, type CleanupCandidate,
 } from "@/lib/projects/pages-registry"
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from "@/components/ui/dialog"
-import { Textarea } from "@/components/ui/textarea"
-import { toast } from "sonner"
+import { DeleteSourceDialog } from "./delete-source-dialog"
 
 interface AllPage {
   route: string
@@ -48,20 +44,46 @@ type Selection =
   | { kind: "not-built"; item: NotBuiltItem }
   | { kind: "cleanup"; item: CleanupCandidate }
 
-export function PagesView() {
+interface PagesViewProps {
+  /** Switch to the Files view and select the given source file. */
+  onOpenInTree?: (sourcePath: string) => void
+  /** When set, auto-select the page with this route once the page list loads.
+   *  Used by Files-mode "Open in Pages" cross-nav. */
+  initialSelectRoute?: string | null
+  /** Called once after auto-select fires, so the host can clear its pending state. */
+  onAutoSelected?: () => void
+}
+
+export function PagesView({ onOpenInTree, initialSelectRoute, onAutoSelected }: PagesViewProps = {}) {
   const [selected, setSelected] = useState<Selection | null>(null)
   const [filter, setFilter] = useState("")
   const [agentRefresh, setAgentRefresh] = useState(0)
   const [deleteOpen, setDeleteOpen] = useState<{ page: AllPage } | null>(null)
   const [allPages, setAllPages] = useState<AllPage[] | null>(null)
   const [pageRefresh, setPageRefresh] = useState(0)
+  const [pageListErrorStatus, setPageListErrorStatus] = useState<number | null>(null)
+
+  // When the host asks us to auto-select a page (Files → Pages cross-nav),
+  // wait for the all-pages list to load, then find + select the matching page.
+  useEffect(() => {
+    if (!initialSelectRoute || !allPages) return
+    const match = allPages.find((p) => p.route === initialSelectRoute)
+    if (match) {
+      setSelected({ kind: "page", page: match })
+      onAutoSelected?.()
+    }
+  }, [initialSelectRoute, allPages, onAutoSelected])
 
   // Pull the comprehensive page list from GitHub on mount + after a delete PR.
   useEffect(() => {
     let cancelled = false
+    setPageListErrorStatus(null)
     fetch("/api/projects/all-pages", { cache: "no-store" })
       .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        if (!r.ok) {
+          if (!cancelled) setPageListErrorStatus(r.status)
+          throw new Error(`HTTP ${r.status}`)
+        }
         const j = await r.json()
         if (!cancelled) setAllPages((j.pages as AllPage[]) || [])
       })
@@ -79,6 +101,14 @@ export function PagesView() {
         )
     return list.sort((a, b) => a.title.localeCompare(b.title))
   }, [filter, allPages])
+
+  if (pageListErrorStatus === 401) {
+    return (
+      <div className="flex items-center justify-center h-full bg-zinc-900/30 border border-zinc-800/60 rounded-lg">
+        <SessionExpiredCard what="the page list" />
+      </div>
+    )
+  }
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] gap-3 h-full">
@@ -175,13 +205,16 @@ export function PagesView() {
               selection={selected}
               onAgentDeleted={() => { setSelected(null); setAgentRefresh((n) => n + 1) }}
               onAskDeletePage={(page) => setDeleteOpen({ page })}
+              onOpenInTree={onOpenInTree}
             />
           : <EmptyState />}
       </div>
 
       {deleteOpen && (
-        <DeletePageDialog
-          page={deleteOpen.page}
+        <DeleteSourceDialog
+          sourcePath={deleteOpen.page.source_path}
+          displayName={deleteOpen.page.title}
+          routeContext={deleteOpen.page.route}
           onClose={() => setDeleteOpen(null)}
           onDeleted={() => {
             setDeleteOpen(null)
@@ -317,15 +350,15 @@ function prettyAgentName(slug: string): string {
   return slug.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-function DetailPane({ selection, onAgentDeleted, onAskDeletePage }: { selection: Selection; onAgentDeleted: () => void; onAskDeletePage: (page: AllPage) => void }) {
-  if (selection.kind === "page") return <PageDetail page={selection.page} onAskDelete={() => onAskDeletePage(selection.page)} />
+function DetailPane({ selection, onAgentDeleted, onAskDeletePage, onOpenInTree }: { selection: Selection; onAgentDeleted: () => void; onAskDeletePage: (page: AllPage) => void; onOpenInTree?: (sourcePath: string) => void }) {
+  if (selection.kind === "page") return <PageDetail page={selection.page} onAskDelete={() => onAskDeletePage(selection.page)} onOpenInTree={onOpenInTree} />
   if (selection.kind === "cron") return <CronDetail cron={selection.cron} />
   if (selection.kind === "agent") return <AgentDetail name={selection.name} path={selection.path} onDeleted={onAgentDeleted} />
-  if (selection.kind === "cleanup") return <CleanupDetail item={selection.item} />
+  if (selection.kind === "cleanup") return <CleanupDetail item={selection.item} onOpenInTree={onOpenInTree} />
   return <NotBuiltDetail item={selection.item} />
 }
 
-function CleanupDetail({ item }: { item: CleanupCandidate }) {
+function CleanupDetail({ item, onOpenInTree }: { item: CleanupCandidate; onOpenInTree?: (sourcePath: string) => void }) {
   const tone =
     item.certainty === "high" ? "border-rose-500/30 bg-rose-500/10 text-rose-300"
     : item.certainty === "medium" ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
@@ -345,15 +378,22 @@ function CleanupDetail({ item }: { item: CleanupCandidate }) {
       <div className="p-6 space-y-4 text-sm">
         <Field label="Why I think it's old" value={item.reason} />
         <Field label="What to do" value={item.recommendation} />
+        {onOpenInTree && (
+          <div className="pt-2">
+            <Button size="sm" variant="outline" onClick={() => onOpenInTree(item.path)} className="gap-1.5">
+              <FileCode2 className="h-3.5 w-3.5" /> Open in Files view
+            </Button>
+          </div>
+        )}
         <div className="pt-4 border-t border-zinc-800/60 text-xs text-zinc-500">
-          To actually delete: open this file in the 📁 Files view, click the GitHub link, and delete it from GitHub. Or tell me to do it for you.
+          You can also delete it from the Files view — same cascade dialog appears there.
         </div>
       </div>
     </div>
   )
 }
 
-function PageDetail({ page, onAskDelete }: { page: AllPage; onAskDelete: () => void }) {
+function PageDetail({ page, onAskDelete, onOpenInTree }: { page: AllPage; onAskDelete: () => void; onOpenInTree?: (sourcePath: string) => void }) {
   const isCurrentPage = typeof window !== "undefined" && window.location.pathname === page.route
   return (
     <div className="flex flex-col h-full">
@@ -374,6 +414,17 @@ function PageDetail({ page, onAskDelete }: { page: AllPage; onAskDelete: () => v
               Open in new tab <ExternalLink className="h-3.5 w-3.5" />
             </a>
           </Button>
+          {page.source_path && onOpenInTree && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => onOpenInTree(page.source_path)}
+              className="gap-1.5 text-zinc-400 hover:text-amber-300"
+              title="See the real source file behind this page"
+            >
+              <FileCode2 className="h-3.5 w-3.5" /> View source
+            </Button>
+          )}
           {page.source_path && (
             <Button size="sm" variant="ghost" onClick={onAskDelete} className="gap-1.5 text-zinc-500 hover:text-rose-400" title="Delete this page (opens a PR)">
               <Trash2 className="h-3.5 w-3.5" /> Delete
@@ -559,189 +610,6 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
       <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">{label}</div>
       <div className={cn("text-zinc-200", mono && "font-mono text-xs")}>{value}</div>
     </div>
-  )
-}
-
-interface CascadeCandidate {
-  path: string
-  reason: string
-  confidence: "high" | "medium" | "low"
-}
-
-function DeletePageDialog({ page, onClose, onDeleted }: { page: AllPage; onClose: () => void; onDeleted: () => void }) {
-  const [candidates, setCandidates] = useState<CascadeCandidate[] | null>(null)
-  const [checked, setChecked] = useState<Set<string>>(new Set())
-  const [reason, setReason] = useState("")
-  const [submitting, setSubmitting] = useState(false)
-  const [prUrl, setPrUrl] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  // Fetch cascade candidates on open
-  useEffect(() => {
-    if (!page.source_path) return
-    fetch(`/api/projects/cascade?path=${encodeURIComponent(page.source_path)}`, { cache: "no-store" })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.json()
-      })
-      .then((j: { candidates: CascadeCandidate[] }) => {
-        setCandidates(j.candidates || [])
-        // Default-check all HIGH-confidence candidates (they live under the page's own folder)
-        const toCheck = new Set<string>()
-        for (const c of j.candidates || []) {
-          if (c.confidence === "high") toCheck.add(c.path)
-        }
-        setChecked(toCheck)
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-  }, [page.source_path])
-
-  const totalSelected = 1 + checked.size   // page itself + cascade
-
-  function toggle(path: string) {
-    setChecked((prev) => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }
-
-  async function submit() {
-    setSubmitting(true)
-    setError(null)
-    try {
-      const files = [page.source_path, ...Array.from(checked)]
-      const res = await fetch("/api/projects/delete-files", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files, reason: reason.trim(), page_route: page.route }),
-      })
-      const j = await res.json()
-      if (!res.ok || j.error) throw new Error(j.error || `HTTP ${res.status}`)
-      setPrUrl(j.pr_url as string)
-      toast.success(`Opened PR #${j.pr_number} — ${j.deleted.length} file(s)`)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <Dialog open={true} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Trash2 className="h-4 w-4 text-rose-400" />
-            Delete &ldquo;{page.title}&rdquo;?
-          </DialogTitle>
-        </DialogHeader>
-
-        {prUrl ? (
-          <div className="space-y-3 py-2">
-            <div className="text-sm text-zinc-200">
-              ✅ Pull request opened. Click below to review the diff and merge.
-            </div>
-            <a
-              href={prUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-amber-300 hover:text-amber-200 text-sm break-all"
-            >
-              {prUrl} <ExternalLink className="h-3.5 w-3.5" />
-            </a>
-            <p className="text-xs text-zinc-500">
-              Once you merge the PR on GitHub, Vercel will auto-deploy and the page disappears.
-              Until then, the page is still live.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3 py-2 max-h-[60vh] overflow-auto">
-            <div className="text-sm text-zinc-300">
-              This will <strong>open a pull request</strong> deleting the file
-              {totalSelected > 1 ? `s (${totalSelected} total)` : ""}. Nothing happens until you merge it on GitHub.
-            </div>
-            <div className="rounded border border-zinc-800/60 bg-zinc-900/40 p-2">
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-zinc-500">📄 page file:</span>
-                <span className="font-mono text-zinc-200 truncate">{page.source_path}</span>
-              </div>
-            </div>
-
-            <div>
-              <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
-                Also delete these? (related backend files)
-              </div>
-              {candidates === null && (
-                <div className="text-xs text-zinc-500 flex items-center gap-2">
-                  <Loader2 className="h-3 w-3 animate-spin" /> Looking for related files…
-                </div>
-              )}
-              {candidates && candidates.length === 0 && (
-                <div className="text-xs text-zinc-500 italic">None found — just the page file.</div>
-              )}
-              {candidates && candidates.length > 0 && (
-                <div className="space-y-1">
-                  {candidates.map((c) => (
-                    <label
-                      key={c.path}
-                      className="flex items-start gap-2 text-xs p-2 rounded hover:bg-zinc-900/60 cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked.has(c.path)}
-                        onChange={() => toggle(c.path)}
-                        className="mt-0.5"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-mono text-zinc-200 truncate">{c.path}</div>
-                        <div className="text-[10px] text-zinc-500">
-                          {c.confidence === "high" ? "🟥 high" : c.confidence === "medium" ? "🟧 medium" : "⬜ low"}
-                          {" "} confidence — {c.reason}
-                        </div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">
-                Reason (optional, goes in the PR description)
-              </div>
-              <Textarea
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="e.g. old experiment from when content-creator was a thing — replaced by content-hq/factory"
-                className="min-h-[60px] text-xs"
-              />
-            </div>
-
-            {error && <div className="text-rose-300 text-xs">{error}</div>}
-          </div>
-        )}
-
-        <DialogFooter>
-          {prUrl ? (
-            <Button variant="outline" onClick={() => { onDeleted() }}>
-              Done
-            </Button>
-          ) : (
-            <>
-              <Button variant="outline" onClick={onClose} disabled={submitting}>
-                Cancel
-              </Button>
-              <Button variant="destructive" onClick={submit} disabled={submitting} className="gap-1.5">
-                {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                Open delete PR ({totalSelected} file{totalSelected === 1 ? "" : "s"})
-              </Button>
-            </>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }
 

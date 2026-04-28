@@ -44,19 +44,68 @@ export default function MemoryPage() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [projectPath, setProjectPath] = useState<string | null>(null)
   const [projectViewMode, setProjectViewMode] = useState<"files" | "pages">("pages")
+  // When set, PagesView auto-selects this page route once its list is loaded.
+  // Used by the "Open in Pages" cross-nav button in the Files view.
+  const [pendingPageRoute, setPendingPageRoute] = useState<string | null>(null)
   const [businessId, setBusinessId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Persist view-mode choice across reloads — non-technical users land on
   // "pages" by default, technical users keep "files" once they've toggled.
+  // URL search params (?file= / ?page=) take precedence over localStorage so
+  // shared cross-nav links land on the right view immediately.
   useEffect(() => {
-    const stored = typeof window !== "undefined" ? localStorage.getItem("project_tree_mode") : null
+    if (typeof window === "undefined") return
+    const params = new URLSearchParams(window.location.search)
+    const fileParam = params.get("file")
+    const pageParam = params.get("page")
+    if (fileParam) {
+      setProjectViewMode("files")
+      setProjectPath(fileParam)
+      return
+    }
+    if (pageParam) {
+      setProjectViewMode("pages")
+      setPendingPageRoute(pageParam)
+      return
+    }
+    const stored = localStorage.getItem("project_tree_mode")
     if (stored === "files" || stored === "pages") setProjectViewMode(stored)
   }, [])
 
   function setProjectMode(mode: "files" | "pages") {
     setProjectViewMode(mode)
     if (typeof window !== "undefined") localStorage.setItem("project_tree_mode", mode)
+    syncProjectUrl(mode, mode === "files" ? projectPath : null, null)
+  }
+
+  function syncProjectUrl(mode: "files" | "pages", filePath: string | null, pageRoute: string | null) {
+    if (typeof window === "undefined") return
+    const params = new URLSearchParams(window.location.search)
+    params.delete("file")
+    params.delete("page")
+    if (mode === "files" && filePath) params.set("file", filePath)
+    if (mode === "pages" && pageRoute) params.set("page", pageRoute)
+    const search = params.toString() ? `?${params.toString()}` : ""
+    const newUrl = `${window.location.pathname}${search}${window.location.hash}`
+    window.history.replaceState(null, "", newUrl)
+  }
+
+  // Cross-nav: jump from a Pages card to the raw source file.
+  // sourcePath is repo-relative ("src/app/foo/page.tsx"); the Files view expects
+  // the slug-prefixed form ("agency-hq/src/app/foo/page.tsx").
+  function openInTree(sourcePath: string) {
+    const slugged = sourcePath.startsWith("agency-hq/") ? sourcePath : `agency-hq/${sourcePath}`
+    setProjectMode("files")
+    setProjectPath(slugged)
+    syncProjectUrl("files", slugged, null)
+  }
+
+  // Cross-nav: jump from a Files-view file back to the matching Page card.
+  function openInPages(route: string) {
+    setProjectMode("pages")
+    setPendingPageRoute(route)
+    syncProjectUrl("pages", null, route)
   }
 
   // Load the active tab from URL hash on mount + listen for back/forward nav.
@@ -192,13 +241,17 @@ export default function MemoryPage() {
               <span className="text-[11px] text-zinc-600">
                 {projectViewMode === "pages"
                   ? "Friendly view — pages, jobs, agents, and what's not built yet"
-                  : "Raw source code from GitHub, read-only"}
+                  : "Raw source code from GitHub — edit and delete open PRs for your review"}
               </span>
             </div>
 
             {projectViewMode === "pages" ? (
               <div className="flex-1 min-h-0">
-                <PagesView />
+                <PagesView
+                  onOpenInTree={openInTree}
+                  initialSelectRoute={pendingPageRoute}
+                  onAutoSelected={() => setPendingPageRoute(null)}
+                />
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-3 flex-1 min-h-0">
@@ -212,8 +265,11 @@ export default function MemoryPage() {
                       onSelect={(path, kind) => {
                         if (kind === "file") {
                           setProjectPath(path)
+                          syncProjectUrl("files", path, null)
                         } else {
-                          setProjectPath(`${path}/README.md`)
+                          const next = `${path}/README.md`
+                          setProjectPath(next)
+                          syncProjectUrl("files", next, null)
                         }
                       }}
                     />
@@ -224,7 +280,16 @@ export default function MemoryPage() {
                     <CodeFileViewer
                       key={projectPath}
                       path={projectPath}
-                      onSegmentClick={(segPath) => setProjectPath(`${segPath}/README.md`)}
+                      onSegmentClick={(segPath) => {
+                        const next = `${segPath}/README.md`
+                        setProjectPath(next)
+                        syncProjectUrl("files", next, null)
+                      }}
+                      onOpenInPages={openInPages}
+                      onDeleted={() => {
+                        setProjectPath(null)
+                        syncProjectUrl("files", null, null)
+                      }}
                     />
                   ) : (
                     <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-sm">
