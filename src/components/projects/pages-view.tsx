@@ -12,47 +12,42 @@
  */
 import { useEffect, useMemo, useState } from "react"
 import {
-  ChevronRight, ExternalLink, Loader2, Sparkles, Search,
-  AlertCircle, Bot, Calendar, Globe, Clock,
+  ChevronRight, ChevronDown, ExternalLink, Loader2, Sparkles, Search,
+  AlertCircle, Bot, Calendar, Globe, Clock, FolderOpen, Folder, Trash,
 } from "lucide-react"
 import {
-  FRIENDLY_PAGES, FRIENDLY_CRONS, NOT_BUILT, SECTION_ORDER,
-  type FriendlyPage, type FriendlyCron, type NotBuiltItem,
+  FRIENDLY_PAGES, FRIENDLY_CRONS, NOT_BUILT, CLEANUP_CANDIDATES,
+  type FriendlyPage, type FriendlyCron, type NotBuiltItem, type CleanupCandidate,
 } from "@/lib/projects/pages-registry"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import ReactMarkdown from "react-markdown"
+import { SessionExpiredCard } from "./session-expired"
 
 type Selection =
   | { kind: "page"; page: FriendlyPage }
   | { kind: "cron"; cron: FriendlyCron }
   | { kind: "agent"; name: string; path: string }
   | { kind: "not-built"; item: NotBuiltItem }
+  | { kind: "cleanup"; item: CleanupCandidate }
 
 export function PagesView() {
   const [selected, setSelected] = useState<Selection | null>(null)
   const [filter, setFilter] = useState("")
+  const [agentRefresh, setAgentRefresh] = useState(0)
 
   const filteredPages = useMemo(() => {
     const q = filter.trim().toLowerCase()
-    if (!q) return FRIENDLY_PAGES
-    return FRIENDLY_PAGES.filter(p =>
-      p.title.toLowerCase().includes(q) || p.description.toLowerCase().includes(q) || p.route.includes(q),
-    )
+    const list = !q
+      ? [...FRIENDLY_PAGES]
+      : FRIENDLY_PAGES.filter(p =>
+          p.title.toLowerCase().includes(q) || p.description.toLowerCase().includes(q) || p.route.includes(q),
+        )
+    // Alphabetical by friendly title — no invented taxonomy. Dylan asked for this.
+    return list.sort((a, b) => a.title.localeCompare(b.title))
   }, [filter])
-
-  const pagesBySection = useMemo(() => {
-    const m = new Map<string, FriendlyPage[]>()
-    for (const p of filteredPages) {
-      const arr = m.get(p.section) ?? m.set(p.section, []).get(p.section)!
-      arr.push(p)
-    }
-    return Array.from(m.entries()).sort(([a], [b]) =>
-      SECTION_ORDER.indexOf(a as never) - SECTION_ORDER.indexOf(b as never),
-    )
-  }, [filteredPages])
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] gap-3 h-full">
@@ -70,65 +65,83 @@ export function PagesView() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto p-2 space-y-4">
-          {/* ── Pages ─────────────────────────────── */}
-          <Section icon={<Globe className="h-3.5 w-3.5" />} title="Pages you can visit" count={filteredPages.length}>
-            {pagesBySection.map(([section, pages]) => (
-              <div key={section} className="space-y-1">
-                <div className="text-[10px] uppercase tracking-wider text-zinc-600 px-2 py-1">{section}</div>
-                {pages.map((p) => (
-                  <SidebarRow
-                    key={p.route}
-                    selected={selected?.kind === "page" && selected.page.route === p.route}
-                    onClick={() => setSelected({ kind: "page", page: p })}
-                    emoji={p.emoji}
-                    title={p.title}
-                    subtitle={p.route}
-                  />
-                ))}
-              </div>
-            ))}
-          </Section>
+        <div className="flex-1 overflow-auto p-2">
+          <ProjectFolder name="agency-hq" emoji="🏢" defaultOpen>
+            {/* ── Pages — flat alphabetical, no invented taxonomy ─── */}
+            <Section icon={<Globe className="h-3.5 w-3.5" />} title="Pages" count={filteredPages.length}>
+              {filteredPages.map((p) => (
+                <SidebarRow
+                  key={p.route}
+                  selected={selected?.kind === "page" && selected.page.route === p.route}
+                  onClick={() => setSelected({ kind: "page", page: p })}
+                  emoji={p.emoji}
+                  title={p.title}
+                  subtitle={p.route}
+                  indent={2}
+                />
+              ))}
+            </Section>
 
-          {/* ── Background jobs ─────────────────────── */}
-          <Section icon={<Clock className="h-3.5 w-3.5" />} title="Background jobs" count={FRIENDLY_CRONS.length}>
-            {FRIENDLY_CRONS.map((c) => (
-              <SidebarRow
-                key={c.path}
-                selected={selected?.kind === "cron" && selected.cron.path === c.path}
-                onClick={() => setSelected({ kind: "cron", cron: c })}
-                emoji={c.emoji}
-                title={c.title}
-                subtitle={c.scheduleHuman}
-              />
-            ))}
-          </Section>
+            {/* ── Background jobs ─────────────────────── */}
+            <Section icon={<Clock className="h-3.5 w-3.5" />} title="Background jobs" count={FRIENDLY_CRONS.length}>
+              {FRIENDLY_CRONS.map((c) => (
+                <SidebarRow
+                  key={c.path}
+                  selected={selected?.kind === "cron" && selected.cron.path === c.path}
+                  onClick={() => setSelected({ kind: "cron", cron: c })}
+                  emoji={c.emoji}
+                  title={c.title}
+                  subtitle={c.scheduleHuman}
+                  indent={2}
+                />
+              ))}
+            </Section>
 
-          {/* ── AI Agents ───────────────────────────── */}
-          <AgentsSection
-            selected={selected?.kind === "agent" ? selected.path : null}
-            onSelect={(name, path) => setSelected({ kind: "agent", name, path })}
-          />
+            {/* ── AI Agents ───────────────────────────── */}
+            <AgentsSection
+              key={agentRefresh}
+              selected={selected?.kind === "agent" ? selected.path : null}
+              onSelect={(name, path) => setSelected({ kind: "agent", name, path })}
+            />
 
-          {/* ── Not built yet ───────────────────────── */}
-          <Section icon={<AlertCircle className="h-3.5 w-3.5" />} title="Not built yet" count={NOT_BUILT.length}>
-            {NOT_BUILT.map((item, i) => (
-              <SidebarRow
-                key={i}
-                selected={selected?.kind === "not-built" && selected.item.title === item.title}
-                onClick={() => setSelected({ kind: "not-built", item })}
-                emoji={item.priority === "P1" ? "🔴" : item.priority === "P2" ? "🟡" : "🟢"}
-                title={item.title}
-                subtitle={`Priority ${item.priority}`}
-              />
-            ))}
-          </Section>
+            {/* ── Not built yet ───────────────────────── */}
+            <Section icon={<AlertCircle className="h-3.5 w-3.5" />} title="Not built yet" count={NOT_BUILT.length}>
+              {NOT_BUILT.map((item, i) => (
+                <SidebarRow
+                  key={i}
+                  selected={selected?.kind === "not-built" && selected.item.title === item.title}
+                  onClick={() => setSelected({ kind: "not-built", item })}
+                  emoji={item.priority === "P1" ? "🔴" : item.priority === "P2" ? "🟡" : "🟢"}
+                  title={item.title}
+                  subtitle={`Priority ${item.priority}`}
+                  indent={2}
+                />
+              ))}
+            </Section>
+
+            {/* ── Cleanup candidates — files that look old/unused ─── */}
+            <Section icon={<Trash className="h-3.5 w-3.5" />} title="Review for cleanup" count={CLEANUP_CANDIDATES.length}>
+              {CLEANUP_CANDIDATES.map((c, i) => (
+                <SidebarRow
+                  key={i}
+                  selected={selected?.kind === "cleanup" && selected.item.path === c.path}
+                  onClick={() => setSelected({ kind: "cleanup", item: c })}
+                  emoji={c.certainty === "high" ? "🗑️" : c.certainty === "medium" ? "❓" : "🤔"}
+                  title={c.path.split("/").pop() || c.path}
+                  subtitle={c.certainty === "high" ? "likely safe to delete" : c.certainty === "medium" ? "needs a quick check" : "worth reviewing"}
+                  indent={2}
+                />
+              ))}
+            </Section>
+          </ProjectFolder>
         </div>
       </div>
 
       {/* Right: detail */}
       <div className="overflow-hidden bg-zinc-900/30 border border-zinc-800/60 rounded-lg">
-        {selected ? <DetailPane selection={selected} /> : <EmptyState />}
+        {selected
+          ? <DetailPane selection={selected} onAgentDeleted={() => { setSelected(null); setAgentRefresh((n) => n + 1) }} />
+          : <EmptyState />}
       </div>
     </div>
   )
@@ -137,16 +150,46 @@ export function PagesView() {
 function Section({
   icon, title, count, children,
 }: { icon: React.ReactNode; title: string; count: number; children: React.ReactNode }) {
+  const [open, setOpen] = useState(true)
   return (
     <section className="space-y-1">
-      <div className="flex items-center gap-2 px-2 py-1 text-[11px] uppercase tracking-wider text-zinc-500">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 pl-3 pr-2 py-1 text-[11px] uppercase tracking-wider text-zinc-500 hover:text-zinc-300 transition-colors"
+      >
+        <ChevronRight className={`h-3 w-3 text-zinc-600 transition-transform ${open ? "rotate-90" : ""}`} />
         <span className="text-amber-400/70">{icon}</span>
         <span>{title}</span>
         <span className="text-zinc-700">·</span>
         <span>{count}</span>
-      </div>
-      <div className="space-y-0.5">{children}</div>
+      </button>
+      {open && <div className="space-y-0.5">{children}</div>}
     </section>
+  )
+}
+
+/**
+ * The top-level project folder. Designed to look like a Memory Tree row —
+ * collapsible, with an emoji + name. Future projects will sit beside this
+ * (each with their own ProjectFolder), inside the same scrollable list.
+ */
+function ProjectFolder({
+  name, emoji, defaultOpen, children,
+}: { name: string; emoji: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen ?? true)
+  return (
+    <div className="space-y-1">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-2 py-1.5 rounded hover:bg-zinc-800/60 transition-colors"
+      >
+        {open ? <ChevronDown className="h-3.5 w-3.5 text-zinc-500" /> : <ChevronRight className="h-3.5 w-3.5 text-zinc-500" />}
+        <span className="text-base leading-none">{emoji}</span>
+        {open ? <FolderOpen className="h-3.5 w-3.5 text-amber-400/70" /> : <Folder className="h-3.5 w-3.5 text-amber-400/70" />}
+        <span className="text-sm font-medium text-zinc-100 font-mono">{name}</span>
+      </button>
+      {open && <div className="ml-4 space-y-3">{children}</div>}
+    </div>
   )
 }
 
@@ -156,12 +199,14 @@ function SidebarRow(props: {
   emoji: string
   title: string
   subtitle: string
+  indent?: number
 }) {
   return (
     <button
       onClick={props.onClick}
+      style={{ paddingLeft: 8 + (props.indent ?? 0) * 12 }}
       className={cn(
-        "w-full flex items-start gap-2 px-2 py-1.5 rounded text-left transition-colors",
+        "w-full flex items-start gap-2 pr-2 py-1.5 rounded text-left transition-colors",
         props.selected ? "bg-amber-500/15 text-amber-100" : "hover:bg-zinc-800/60 text-zinc-200",
       )}
     >
@@ -202,6 +247,7 @@ function AgentsSection({ selected, onSelect }: { selected: string | null; onSele
           emoji="🤖"
           title={prettyAgentName(a.name)}
           subtitle="Claude subagent"
+          indent={2}
         />
       ))}
     </Section>
@@ -224,11 +270,40 @@ function prettyAgentName(slug: string): string {
   return slug.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
-function DetailPane({ selection }: { selection: Selection }) {
+function DetailPane({ selection, onAgentDeleted }: { selection: Selection; onAgentDeleted: () => void }) {
   if (selection.kind === "page") return <PageDetail page={selection.page} />
   if (selection.kind === "cron") return <CronDetail cron={selection.cron} />
-  if (selection.kind === "agent") return <AgentDetail name={selection.name} path={selection.path} />
+  if (selection.kind === "agent") return <AgentDetail name={selection.name} path={selection.path} onDeleted={onAgentDeleted} />
+  if (selection.kind === "cleanup") return <CleanupDetail item={selection.item} />
   return <NotBuiltDetail item={selection.item} />
+}
+
+function CleanupDetail({ item }: { item: CleanupCandidate }) {
+  const tone =
+    item.certainty === "high" ? "border-rose-500/30 bg-rose-500/10 text-rose-300"
+    : item.certainty === "medium" ? "border-amber-500/30 bg-amber-500/10 text-amber-300"
+    : "border-zinc-700 bg-zinc-900/40 text-zinc-300"
+  const certaintyLabel = item.certainty === "high" ? "Likely safe to delete" : item.certainty === "medium" ? "Probably old, but check first" : "Worth reviewing"
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center gap-2 flex-wrap">
+        <span className="text-2xl">{item.certainty === "high" ? "🗑️" : item.certainty === "medium" ? "❓" : "🤔"}</span>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold text-zinc-100 truncate font-mono">{item.path}</div>
+          <span className={cn("inline-flex items-center px-2 py-0.5 rounded border text-[10px] mt-0.5", tone)}>
+            {certaintyLabel}
+          </span>
+        </div>
+      </div>
+      <div className="p-6 space-y-4 text-sm">
+        <Field label="Why I think it's old" value={item.reason} />
+        <Field label="What to do" value={item.recommendation} />
+        <div className="pt-4 border-t border-zinc-800/60 text-xs text-zinc-500">
+          To actually delete: open this file in the 📁 Files view, click the GitHub link, and delete it from GitHub. Or tell me to do it for you.
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function PageDetail({ page }: { page: FriendlyPage }) {
@@ -292,39 +367,104 @@ function CronDetail({ cron }: { cron: FriendlyCron }) {
   )
 }
 
-function AgentDetail({ name, path }: { name: string; path: string }) {
+function AgentDetail({ name, path, onDeleted }: { name: string; path: string; onDeleted: () => void }) {
   const [content, setContent] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [errorStatus, setErrorStatus] = useState<number | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
   useEffect(() => {
-    fetch(`/api/memory-vault/file?path=${encodeURIComponent(path)}`)
+    setError(null); setErrorStatus(null); setContent(null)
+    fetch(`/api/memory-vault/file?path=${encodeURIComponent(path)}`, { cache: "no-store" })
       .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        if (!r.ok) {
+          setErrorStatus(r.status)
+          throw new Error(`HTTP ${r.status}`)
+        }
         const j = await r.json()
         setContent(j.content || "")
+        setDraft(j.content || "")
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
   }, [path])
+
+  async function save() {
+    setSaving(true)
+    try {
+      const res = await fetch("/api/memory-vault/file", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path, content: draft }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setContent(draft)
+      setEditing(false)
+    } catch (e) {
+      alert(`Save failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally { setSaving(false) }
+  }
+
+  async function del() {
+    try {
+      const res = await fetch(`/api/memory-vault/file?path=${encodeURIComponent(path)}`, { method: "DELETE" })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      onDeleted()
+    } catch (e) {
+      alert(`Delete failed: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
 
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-3 border-b border-zinc-800/60 flex items-center gap-2">
         <span className="text-2xl">🤖</span>
-        <div>
-          <div className="text-sm font-semibold text-zinc-100">{prettyAgentName(name)}</div>
-          <div className="text-[11px] font-mono text-zinc-500">{path}</div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold text-zinc-100 truncate">{prettyAgentName(name)}</div>
+          <div className="text-[11px] font-mono text-zinc-500 truncate">{path}</div>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          {editing ? (
+            <>
+              <Button size="sm" onClick={save} disabled={saving} className="h-7 px-2 text-xs">
+                {saving ? "Saving…" : "Save"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setDraft(content || "") }} className="h-7 px-2 text-xs">Cancel</Button>
+            </>
+          ) : confirmDelete ? (
+            <>
+              <Button size="sm" variant="destructive" onClick={del} className="h-7 px-2 text-xs">Delete</Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(false)} className="h-7 px-2 text-xs">Cancel</Button>
+            </>
+          ) : content !== null && (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setEditing(true)} className="h-7 px-2 text-xs">Edit</Button>
+              <Button size="sm" variant="ghost" onClick={() => setConfirmDelete(true)} className="h-7 px-2 text-zinc-500 hover:text-rose-400">🗑️</Button>
+            </>
+          )}
         </div>
       </div>
       <div className="flex-1 overflow-auto p-6">
-        {error && <div className="text-rose-300 text-sm">Couldn&apos;t load: {error}</div>}
+        {errorStatus === 401 && <SessionExpiredCard what="this agent" />}
+        {error && errorStatus !== 401 && <div className="text-rose-300 text-sm">Couldn&apos;t load: {error}</div>}
         {content === null && !error && (
           <div className="flex items-center text-zinc-500 text-sm">
             <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Loading…
           </div>
         )}
-        {content !== null && (
+        {content !== null && !editing && (
           <article className="prose prose-invert prose-sm max-w-none">
             <ReactMarkdown>{content}</ReactMarkdown>
           </article>
+        )}
+        {content !== null && editing && (
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            className="w-full h-full min-h-[400px] bg-zinc-950 border border-zinc-800 rounded p-3 text-xs font-mono text-zinc-200 focus:outline-none focus:border-amber-500/50"
+          />
         )}
       </div>
     </div>

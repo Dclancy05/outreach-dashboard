@@ -11,6 +11,7 @@ import { ChevronRight, File, Folder, FolderOpen, Loader2, RefreshCw, Search } fr
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { SessionExpiredCard } from "./session-expired"
 
 export interface CodeNode {
   name: string
@@ -36,6 +37,7 @@ export function CodeTreeView({ selectedPath, onSelect }: Props) {
   const [data, setData] = useState<TreeResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [errorStatus, setErrorStatus] = useState<number | null>(null)
   const [filter, setFilter] = useState("")
   const [openDirs, setOpenDirs] = useState<Set<string>>(new Set())
 
@@ -44,7 +46,11 @@ export function CodeTreeView({ selectedPath, onSelect }: Props) {
     try {
       const res = await fetch("/api/projects/tree", { cache: "no-store" })
       const body = (await res.json()) as TreeResponse & { error?: string }
-      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`)
+      if (!res.ok) {
+        setErrorStatus(res.status)
+        throw new Error(body.error || `HTTP ${res.status}`)
+      }
+      setErrorStatus(null)
       setData(body)
       // Auto-expand the project root folders so the user sees them by default
       if (body.tree?.length) {
@@ -80,6 +86,7 @@ export function CodeTreeView({ selectedPath, onSelect }: Props) {
   }
 
   if (error) {
+    if (errorStatus === 401) return <SessionExpiredCard what="the source code tree" />
     return (
       <div className="p-3 text-sm text-red-300">
         {error}
