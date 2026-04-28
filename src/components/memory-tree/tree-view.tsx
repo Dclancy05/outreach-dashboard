@@ -20,6 +20,7 @@ import {
   Pencil, Trash2, FolderInput, Cog,
 } from "lucide-react"
 import { toast } from "sonner"
+import { SessionExpiredCard } from "@/components/projects/session-expired"
 import {
   DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable,
   useSensor, useSensors, closestCenter,
@@ -253,6 +254,10 @@ export function TreeView({ selectedPath, onSelect }: TreeViewProps) {
 
   if (errorStatus === 503) {
     return <NotConfiguredEmptyState />
+  }
+
+  if (errorStatus === 401) {
+    return <SessionExpiredCard what="the memory tree" />
   }
 
   if (error) {

@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { SaveIndicator, type SaveState } from "@/components/memory/save-indicator"
+import { SessionExpiredCard } from "@/components/projects/session-expired"
 import { cn } from "@/lib/utils"
 
 const SAVE_DEBOUNCE_MS = 700
@@ -43,6 +44,7 @@ export function FileEditor({ path, onPathChange }: FileEditorProps) {
   const [content, setContent] = useState<string>("")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [errorStatus, setErrorStatus] = useState<number | null>(null)
   const [saveState, setSaveState] = useState<SaveState>("idle")
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
   const [moveDialogOpen, setMoveDialogOpen] = useState(false)
@@ -54,10 +56,12 @@ export function FileEditor({ path, onPathChange }: FileEditorProps) {
     let cancelled = false
     setLoading(true)
     setError(null)
+    setErrorStatus(null)
     fetch(`/api/memory-vault/file?path=${encodeURIComponent(path)}`, { cache: "no-store" })
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
+          if (!cancelled) setErrorStatus(res.status)
           throw new Error(body.error || `HTTP ${res.status}`)
         }
         return res.json() as Promise<FileResponse>
@@ -141,6 +145,10 @@ export function FileEditor({ path, onPathChange }: FileEditorProps) {
         <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Loading {path}…
       </div>
     )
+  }
+
+  if (errorStatus === 401) {
+    return <SessionExpiredCard what="this file" />
   }
 
   if (error) {
