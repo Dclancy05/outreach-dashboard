@@ -65,7 +65,7 @@ function hardcodedAgencyHQ(): Project {
     slug: "agency-hq",
     display_name: "Agency HQ",
     github_owner: "Dclancy05",
-    github_repo: "outreach-github",
+    github_repo: "outreach-dashboard",
     branch: "main",
     blocklist_globs: DEFAULT_BLOCKLIST,
     sort_order: 0,
