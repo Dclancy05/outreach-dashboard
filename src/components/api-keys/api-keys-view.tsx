@@ -236,7 +236,16 @@ export function ApiKeysView() {
           </div>
         )}
 
-        {grouped.map(([cat, items]) => (
+        {grouped.map(([cat, items]) => {
+          // Within each category, group by provider slug — providers with >1 row
+          // (e.g. Supabase has URL+Anon+Admin, Kling has Access+Secret) render
+          // as one expandable card with internal tabs.
+          const byProvider = new Map<string, ApiKeyShape[]>()
+          for (const r of items) {
+            const arr = byProvider.get(r.provider) ?? byProvider.set(r.provider, []).get(r.provider)!
+            arr.push(r)
+          }
+          return (
           <section key={cat} className="space-y-2">
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-zinc-500">
               <span>{cat}</span>
@@ -244,23 +253,40 @@ export function ApiKeysView() {
               <span>{items.length}</span>
               <div className="flex-1 h-px bg-zinc-800/60" />
             </div>
-            {items.map((row) => (
+            {Array.from(byProvider.entries()).map(([slug, rs]) =>
+              rs.length > 1 ? (
+                <ProviderGroupCard
+                  key={slug}
+                  rows={rs}
+                  results={results}
+                  testing={testing}
+                  onReconnect={reconnect}
+                  onEdit={openEdit}
+                  onAskDelete={(id) => setConfirmDelete(id)}
+                  onCancelDelete={() => setConfirmDelete(null)}
+                  onConfirmDelete={handleDelete}
+                  confirmDeleteId={confirmDelete}
+                  onCopyEnvVar={copyEnvVar}
+                />
+              ) : (
               <KeyRow
-                key={row.id}
-                row={row}
-                result={results[row.id]}
-                testing={testing.has(row.id)}
-                confirmDelete={confirmDelete === row.id}
-                onCopyEnvVar={() => copyEnvVar(row.env_var)}
-                onReconnect={() => reconnect(row)}
-                onEdit={() => openEdit(row)}
-                onAskDelete={() => setConfirmDelete(row.id)}
+                key={rs[0].id}
+                row={rs[0]}
+                result={results[rs[0].id]}
+                testing={testing.has(rs[0].id)}
+                confirmDelete={confirmDelete === rs[0].id}
+                onCopyEnvVar={() => copyEnvVar(rs[0].env_var)}
+                onReconnect={() => reconnect(rs[0])}
+                onEdit={() => openEdit(rs[0])}
+                onAskDelete={() => setConfirmDelete(rs[0].id)}
                 onCancelDelete={() => setConfirmDelete(null)}
-                onConfirmDelete={() => handleDelete(row.id)}
+                onConfirmDelete={() => handleDelete(rs[0].id)}
               />
-            ))}
+              ),
+            )}
           </section>
-        ))}
+          )
+        })}
       </div>
 
       <ApiKeyEditModal
@@ -278,6 +304,168 @@ export function ApiKeysView() {
       />
     </div>
   )
+}
+
+interface ProviderGroupCardProps {
+  rows: ApiKeyShape[]
+  results: Record<string, ProbeResult>
+  testing: Set<string>
+  confirmDeleteId: string | null
+  onReconnect: (row: ApiKeyShape) => void
+  onEdit: (row: ApiKeyShape) => void
+  onAskDelete: (id: string) => void
+  onCancelDelete: () => void
+  onConfirmDelete: (id: string) => void
+  onCopyEnvVar: (envVar: string) => void
+}
+
+/**
+ * Multi-key provider card — folds 2+ rows that share a provider slug into
+ * one outer card with internal mini-tabs (one tab per env_var). Used for
+ * Supabase (URL/Anon/Admin), Kling (Access/Secret), GHL (Key/Location), etc.
+ */
+function ProviderGroupCard(p: ProviderGroupCardProps) {
+  const [activeTab, setActiveTab] = useState(p.rows[0].env_var)
+  const provider = findProviderBySlug(p.rows[0].provider)
+  const active = p.rows.find((r) => r.env_var === activeTab) ?? p.rows[0]
+  const activeResult = p.results[active.id]
+  const activeStatus = deriveStatus(active, activeResult)
+
+  // Summary status across all keys: connected if every key is connected.
+  let okCount = 0, failCount = 0, untestedCount = 0
+  for (const r of p.rows) {
+    const res = p.results[r.id]
+    if (!res) untestedCount++
+    else if (res.ok) okCount++
+    else failCount++
+  }
+
+  return (
+    <div className="border border-zinc-800/60 rounded-lg bg-zinc-900/40 hover:bg-zinc-900/70 transition-colors overflow-hidden">
+      <div className="flex items-start gap-3 p-3">
+        <div className="text-2xl leading-none mt-0.5 shrink-0">{provider?.emoji ?? "🔑"}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-zinc-100 truncate">{provider?.label ?? p.rows[0].provider}</span>
+            <Badge variant="outline" className="text-[10px]">{p.rows.length} keys</Badge>
+            {okCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-emerald-500/30 text-emerald-300 bg-emerald-500/10">
+                <CheckCircle className="h-3 w-3" /> {okCount}/{p.rows.length} connected
+              </span>
+            )}
+            {failCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-rose-500/30 text-rose-300 bg-rose-500/10">
+                <XCircle className="h-3 w-3" /> {failCount} failing
+              </span>
+            )}
+            {untestedCount > 0 && okCount === 0 && failCount === 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-zinc-700 text-zinc-400 bg-zinc-900/40">
+                <AlertCircle className="h-3 w-3" /> untested
+              </span>
+            )}
+          </div>
+          {provider?.help && (
+            <p className="mt-1 text-[11px] text-zinc-400">{provider.help}</p>
+          )}
+          {provider?.href && (
+            <a
+              href={provider.href}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 inline-flex items-center gap-0.5 text-[11px] text-amber-300/70 hover:text-amber-200"
+            >
+              where to get these <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* Mini-tabs — one per env_var */}
+      <div className="border-t border-zinc-800/60 px-3 pt-2 pb-1 flex flex-wrap gap-1 bg-zinc-950/40">
+        {p.rows.map((r) => {
+          const res = p.results[r.id]
+          const isActive = r.env_var === activeTab
+          const indicator = res ? (res.ok ? "🟢" : "🔴") : "⚪"
+          return (
+            <button
+              key={r.env_var}
+              onClick={() => setActiveTab(r.env_var)}
+              className={cn(
+                "text-[11px] font-mono px-2 py-1 rounded-t border-b-2 transition-colors",
+                isActive
+                  ? "border-amber-400 text-amber-200 bg-zinc-900"
+                  : "border-transparent text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900/60",
+              )}
+              title={r.name}
+            >
+              {indicator} {tabShortLabel(r.env_var)}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Active tab body */}
+      <div className="p-3 border-t border-zinc-800/60">
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-medium text-zinc-100 truncate">{active.name}</span>
+              <StatusBadge status={activeStatus} testing={p.testing.has(active.id)} />
+            </div>
+            <div className="mt-1 flex items-center gap-3 flex-wrap text-[11px] text-zinc-500">
+              <button
+                onClick={() => p.onCopyEnvVar(active.env_var)}
+                className="font-mono inline-flex items-center gap-1 hover:text-amber-300 transition-colors"
+                title="Copy env var name"
+              >
+                {active.env_var}
+                <Copy className="h-3 w-3 opacity-60" />
+              </button>
+              <span className="font-mono">{active.masked}</span>
+              <span>used {relativeTime(active.last_used_at)}</span>
+            </div>
+            {active.notes && <p className="mt-1 text-[11px] text-zinc-400">{active.notes}</p>}
+            {activeResult && !p.testing.has(active.id) && (
+              <p className={cn("mt-1 text-[11px]", activeResult.ok ? "text-emerald-400" : "text-rose-400")}>
+                {activeResult.ok ? activeResult.detail || "Connected" : activeResult.error || "Not connected"}
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {p.confirmDeleteId === active.id ? (
+              <>
+                <Button size="sm" variant="destructive" onClick={() => p.onConfirmDelete(active.id)} className="h-7 px-2 text-xs">
+                  Disconnect
+                </Button>
+                <Button size="sm" variant="ghost" onClick={p.onCancelDelete} className="h-7 px-2 text-xs">Cancel</Button>
+              </>
+            ) : (
+              <>
+                <Button size="sm" variant="ghost" onClick={() => p.onReconnect(active)} disabled={p.testing.has(active.id)} className="h-7 px-2 gap-1 text-xs">
+                  {p.testing.has(active.id) ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <PlugZap className="h-3.5 w-3.5" />}
+                  {activeResult?.ok ? "Reconnect" : activeResult ? "Retry" : "Connect"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => p.onEdit(active)} className="h-7 px-2 gap-1 text-xs" title="Edit">
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => p.onAskDelete(active.id)} className="h-7 px-2 text-zinc-500 hover:text-rose-400" title="Disconnect (delete row)">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Strip a common provider prefix to make the tab label compact: "SUPABASE_SERVICE_ROLE_KEY" → "service-role". */
+function tabShortLabel(envVar: string): string {
+  // Drop leading "NEXT_PUBLIC_", drop common provider prefixes, lowercase the rest.
+  let s = envVar.replace(/^NEXT_PUBLIC_/, "")
+  s = s.replace(/^(SUPABASE_|KLING_|GHL_|TELEGRAM_|BRAVE_|GOOGLE_|MICROSOFT_|META_|APIFY_|VNC_|MEMORY_VAULT_|CLAUDE_BRIDGE_|AGENT_RUNNER_|INNGEST_)/, "")
+  return s.toLowerCase().replace(/_/g, "-") || envVar.toLowerCase()
 }
 
 interface KeyRowProps {
@@ -434,15 +622,25 @@ interface SystemRow {
   preview: string | null
 }
 
+/** Group key for the System & Bootstrap section — folds related env vars
+ *  (e.g. all Supabase variants) onto one card with internal tabs. */
+function systemGroupKey(env: string): { slug: string; label: string; emoji: string } {
+  if (/^(NEXT_PUBLIC_)?SUPABASE/.test(env)) return { slug: "supabase", label: "Supabase", emoji: "🗄️" }
+  if (env === "OUTREACH_MEMORY_MCP_KEY") return { slug: "memory_mcp", label: "Memory MCP", emoji: "🧠" }
+  return { slug: "system_runtime", label: "System runtime", emoji: "⚙️" }
+}
+
 function SystemKeysSection() {
   const { data, isLoading } = useSWR<{ rows: SystemRow[] }>("/api/api-keys/system-status", fetcher)
   const rows = data?.rows ?? []
   if (isLoading || rows.length === 0) return null
 
-  const grouped = new Map<SystemRow["category"], SystemRow[]>()
+  // Group by virtual provider so e.g. all 3 Supabase env vars become one card.
+  const groups = new Map<string, { label: string; emoji: string; rows: SystemRow[] }>()
   for (const r of rows) {
-    const bucket = grouped.get(r.category) ?? grouped.set(r.category, []).get(r.category)!
-    bucket.push(r)
+    const k = systemGroupKey(r.env)
+    const g = groups.get(k.slug) ?? groups.set(k.slug, { label: k.label, emoji: k.emoji, rows: [] }).get(k.slug)!
+    g.rows.push(r)
   }
 
   return (
@@ -457,37 +655,110 @@ function SystemKeysSection() {
         </Badge>
         <div className="flex-1 h-px bg-zinc-800/60" />
       </div>
-      <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/30 divide-y divide-zinc-800/60">
-        {rows.map((r) => (
-          <div key={r.env} className="flex items-start gap-3 p-3">
-            <div className="text-xl leading-none mt-0.5 shrink-0">{r.emoji}</div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-medium text-zinc-100 truncate">{r.label}</span>
-                <Badge variant="outline" className="text-[10px]">{r.category}</Badge>
-                {r.set ? (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-emerald-500/30 text-emerald-300 bg-emerald-500/10">
-                    <CheckCircle className="h-3 w-3" /> Set in env
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-rose-500/30 text-rose-300 bg-rose-500/10">
-                    <XCircle className="h-3 w-3" /> Missing
-                  </span>
-                )}
-              </div>
-              <div className="mt-1 flex items-center gap-3 flex-wrap text-[11px] text-zinc-500">
-                <span className="font-mono">{r.env}</span>
-                {r.preview && <span className="font-mono">{r.preview}</span>}
-              </div>
-              <p className="mt-1 text-[11px] text-zinc-400">{r.help}</p>
-            </div>
-          </div>
+      <div className="space-y-2">
+        {Array.from(groups.entries()).map(([slug, g]) => (
+          g.rows.length > 1
+            ? <SystemGroupCard key={slug} label={g.label} emoji={g.emoji} rows={g.rows} />
+            : <SystemSingleRow key={slug} row={g.rows[0]} />
         ))}
       </div>
       <p className="text-[11px] text-zinc-500 px-1">
         These are loaded directly from Vercel environment variables and can&apos;t be changed from this UI — open Vercel → Project → Settings → Environment Variables to rotate one.
       </p>
     </section>
+  )
+}
+
+function SystemSingleRow({ row }: { row: SystemRow }) {
+  return (
+    <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/30 flex items-start gap-3 p-3">
+      <div className="text-xl leading-none mt-0.5 shrink-0">{row.emoji}</div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-medium text-zinc-100 truncate">{row.label}</span>
+          <Badge variant="outline" className="text-[10px]">{row.category}</Badge>
+          <SystemSetBadge set={row.set} />
+        </div>
+        <div className="mt-1 flex items-center gap-3 flex-wrap text-[11px] text-zinc-500">
+          <span className="font-mono">{row.env}</span>
+          {row.preview && <span className="font-mono">{row.preview}</span>}
+        </div>
+        <p className="mt-1 text-[11px] text-zinc-400">{row.help}</p>
+      </div>
+    </div>
+  )
+}
+
+function SystemGroupCard({ label, emoji, rows }: { label: string; emoji: string; rows: SystemRow[] }) {
+  const [activeEnv, setActiveEnv] = useState(rows[0].env)
+  const active = rows.find((r) => r.env === activeEnv) ?? rows[0]
+  const setCount = rows.filter((r) => r.set).length
+
+  return (
+    <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/30 overflow-hidden">
+      <div className="flex items-start gap-3 p-3">
+        <div className="text-xl leading-none mt-0.5 shrink-0">{emoji}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-zinc-100 truncate">{label}</span>
+            <Badge variant="outline" className="text-[10px]">{rows.length} keys</Badge>
+            {setCount === rows.length ? (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-emerald-500/30 text-emerald-300 bg-emerald-500/10">
+                <CheckCircle className="h-3 w-3" /> all set
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-amber-500/30 text-amber-300 bg-amber-500/10">
+                <AlertCircle className="h-3 w-3" /> {setCount}/{rows.length} set
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="border-t border-zinc-800/60 px-3 pt-2 pb-1 flex flex-wrap gap-1 bg-zinc-950/40">
+        {rows.map((r) => {
+          const isActive = r.env === activeEnv
+          const indicator = r.set ? "🟢" : "🔴"
+          return (
+            <button
+              key={r.env}
+              onClick={() => setActiveEnv(r.env)}
+              className={cn(
+                "text-[11px] font-mono px-2 py-1 rounded-t border-b-2 transition-colors",
+                isActive
+                  ? "border-amber-400 text-amber-200 bg-zinc-900"
+                  : "border-transparent text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900/60",
+              )}
+              title={r.label}
+            >
+              {indicator} {tabShortLabel(r.env)}
+            </button>
+          )
+        })}
+      </div>
+      <div className="p-3 border-t border-zinc-800/60">
+        <div className="flex items-center gap-2 flex-wrap mb-1">
+          <span className="text-sm font-medium text-zinc-100 truncate">{active.label}</span>
+          <SystemSetBadge set={active.set} />
+        </div>
+        <div className="flex items-center gap-3 flex-wrap text-[11px] text-zinc-500">
+          <span className="font-mono">{active.env}</span>
+          {active.preview && <span className="font-mono">{active.preview}</span>}
+        </div>
+        <p className="mt-1 text-[11px] text-zinc-400">{active.help}</p>
+      </div>
+    </div>
+  )
+}
+
+function SystemSetBadge({ set }: { set: boolean }) {
+  return set ? (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-emerald-500/30 text-emerald-300 bg-emerald-500/10">
+      <CheckCircle className="h-3 w-3" /> Set in env
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] border-rose-500/30 text-rose-300 bg-rose-500/10">
+      <XCircle className="h-3 w-3" /> Missing
+    </span>
   )
 }
 

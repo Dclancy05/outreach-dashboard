@@ -26,5 +26,5 @@ CREATE INDEX IF NOT EXISTS idx_projects_sort ON projects(sort_order, slug);
 
 -- Seed: this repo as the first project. Idempotent on slug.
 INSERT INTO projects (slug, display_name, github_owner, github_repo, branch, sort_order)
-VALUES ('agency-hq', 'Agency HQ', 'Dclancy05', 'outreach-github', 'main', 0)
+VALUES ('agency-hq', 'Agency HQ', 'Dclancy05', 'outreach-dashboard', 'main', 0)
 ON CONFLICT (slug) DO NOTHING;

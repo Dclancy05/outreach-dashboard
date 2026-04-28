@@ -26,6 +26,7 @@ import { AgentWorkflowsTabs } from "@/components/agent-workflows/agent-workflows
 import { CodeTreeView } from "@/components/projects/code-tree-view"
 import { CodeFileViewer } from "@/components/projects/code-file-viewer"
 import { GitHubStatusBadge } from "@/components/projects/github-status-badge"
+import { PagesView } from "@/components/projects/pages-view"
 import { ApiKeysView } from "@/components/api-keys/api-keys-view"
 
 type MemoryTab = "tree" | "project-tree" | "api-keys" | "conversations" | "agent-workflows"
@@ -42,8 +43,21 @@ export default function MemoryPage() {
   const [tab, setTabRaw] = useState<MemoryTab>("tree")
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [projectPath, setProjectPath] = useState<string | null>(null)
+  const [projectViewMode, setProjectViewMode] = useState<"files" | "pages">("pages")
   const [businessId, setBusinessId] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+
+  // Persist view-mode choice across reloads — non-technical users land on
+  // "pages" by default, technical users keep "files" once they've toggled.
+  useEffect(() => {
+    const stored = typeof window !== "undefined" ? localStorage.getItem("project_tree_mode") : null
+    if (stored === "files" || stored === "pages") setProjectViewMode(stored)
+  }, [])
+
+  function setProjectMode(mode: "files" | "pages") {
+    setProjectViewMode(mode)
+    if (typeof window !== "undefined") localStorage.setItem("project_tree_mode", mode)
+  }
 
   // Load the active tab from URL hash on mount + listen for back/forward nav.
   // This makes a browser refresh keep you on the tab you were on instead of
@@ -158,47 +172,73 @@ export default function MemoryPage() {
         </TabsContent>
 
         <TabsContent value="project-tree" className="flex-1 mt-3 min-h-0">
-          <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-3 px-4 pb-4 h-full">
-            <Card className="overflow-hidden p-0">
-              <div className="px-3 py-2 border-b border-zinc-800/60 text-xs text-zinc-500 uppercase tracking-wider">
-                Source code
+          <div className="px-4 pb-4 h-full flex flex-col gap-3">
+            {/* View-mode toggle: friendly Pages view by default, raw Files for power users */}
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="inline-flex rounded-md border border-zinc-800 bg-zinc-900/40 p-0.5">
+                <button
+                  onClick={() => setProjectMode("pages")}
+                  className={`px-3 py-1 text-xs rounded ${projectViewMode === "pages" ? "bg-amber-500/20 text-amber-100" : "text-zinc-400 hover:text-zinc-100"}`}
+                >
+                  🧭 Pages
+                </button>
+                <button
+                  onClick={() => setProjectMode("files")}
+                  className={`px-3 py-1 text-xs rounded ${projectViewMode === "files" ? "bg-amber-500/20 text-amber-100" : "text-zinc-400 hover:text-zinc-100"}`}
+                >
+                  📁 Files
+                </button>
               </div>
-              <div className="h-[calc(100%-2.5rem)]">
-                <CodeTreeView
-                  selectedPath={projectPath}
-                  onSelect={(path, kind) => {
-                    if (kind === "file") {
-                      setProjectPath(path)
-                    } else {
-                      // Folder click — try to auto-load README at that level.
-                      // The viewer handles 404 gracefully if there isn't one.
-                      setProjectPath(`${path}/README.md`)
-                    }
-                  }}
-                />
+              <span className="text-[11px] text-zinc-600">
+                {projectViewMode === "pages"
+                  ? "Friendly view — pages, jobs, agents, and what's not built yet"
+                  : "Raw source code from GitHub, read-only"}
+              </span>
+            </div>
+
+            {projectViewMode === "pages" ? (
+              <div className="flex-1 min-h-0">
+                <PagesView />
               </div>
-            </Card>
-            <Card className="overflow-hidden p-0">
-              {projectPath ? (
-                <CodeFileViewer
-                  key={projectPath}
-                  path={projectPath}
-                  onSegmentClick={(segPath) => {
-                    // Clicking a breadcrumb segment loads its README (folder-like nav).
-                    setProjectPath(`${segPath}/README.md`)
-                  }}
-                />
-              ) : (
-                <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-sm">
-                  <Code2 className="w-8 h-8 mb-3 text-zinc-700" />
-                  <div>Pick a file to view its code.</div>
-                  <div className="text-xs text-zinc-600 mt-2 max-w-md text-center px-6">
-                    Folders show the project README when clicked. Each top-level
-                    folder is a different project — pull from GitHub, syntax-highlighted, read-only.
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-3 flex-1 min-h-0">
+                <Card className="overflow-hidden p-0">
+                  <div className="px-3 py-2 border-b border-zinc-800/60 text-xs text-zinc-500 uppercase tracking-wider">
+                    Source code
                   </div>
-                </div>
-              )}
-            </Card>
+                  <div className="h-[calc(100%-2.5rem)]">
+                    <CodeTreeView
+                      selectedPath={projectPath}
+                      onSelect={(path, kind) => {
+                        if (kind === "file") {
+                          setProjectPath(path)
+                        } else {
+                          setProjectPath(`${path}/README.md`)
+                        }
+                      }}
+                    />
+                  </div>
+                </Card>
+                <Card className="overflow-hidden p-0">
+                  {projectPath ? (
+                    <CodeFileViewer
+                      key={projectPath}
+                      path={projectPath}
+                      onSegmentClick={(segPath) => setProjectPath(`${segPath}/README.md`)}
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-sm">
+                      <Code2 className="w-8 h-8 mb-3 text-zinc-700" />
+                      <div>Pick a file to view its code.</div>
+                      <div className="text-xs text-zinc-600 mt-2 max-w-md text-center px-6">
+                        Folders show the project README when clicked. Each top-level
+                        folder is a different project — pulled from GitHub, syntax-highlighted, read-only.
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              </div>
+            )}
           </div>
         </TabsContent>
 
