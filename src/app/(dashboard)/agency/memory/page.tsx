@@ -9,7 +9,7 @@
  * users can still tweak token budgets, MCP keys, default personas, etc.
  */
 import { useEffect, useState } from "react"
-import { Brain, Bot, Code2, FolderTree, MessageSquare, Settings as SettingsIcon } from "lucide-react"
+import { Brain, Bot, Code2, FolderTree, KeyRound, MessageSquare, Settings as SettingsIcon } from "lucide-react"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -26,9 +26,10 @@ import { AgentWorkflowsTabs } from "@/components/agent-workflows/agent-workflows
 import { CodeTreeView } from "@/components/projects/code-tree-view"
 import { CodeFileViewer } from "@/components/projects/code-file-viewer"
 import { GitHubStatusBadge } from "@/components/projects/github-status-badge"
+import { ApiKeysView } from "@/components/api-keys/api-keys-view"
 
-type MemoryTab = "tree" | "project-tree" | "conversations" | "agent-workflows"
-const VALID_TABS: MemoryTab[] = ["tree", "project-tree", "conversations", "agent-workflows"]
+type MemoryTab = "tree" | "project-tree" | "api-keys" | "conversations" | "agent-workflows"
+const VALID_TABS: MemoryTab[] = ["tree", "project-tree", "api-keys", "conversations", "agent-workflows"]
 
 function readTabFromHash(): MemoryTab {
   if (typeof window === "undefined") return "tree"
@@ -116,6 +117,10 @@ export default function MemoryPage() {
             <Code2 className="w-4 h-4" />
             Project Tree
           </TabsTrigger>
+          <TabsTrigger value="api-keys" className="gap-2">
+            <KeyRound className="w-4 h-4" />
+            API Keys
+          </TabsTrigger>
           <TabsTrigger value="conversations" className="gap-2">
             <MessageSquare className="w-4 h-4" />
             Conversations
@@ -193,6 +198,14 @@ export default function MemoryPage() {
                   </div>
                 </div>
               )}
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="api-keys" className="flex-1 mt-3 min-h-0">
+          <div className="px-4 pb-4 h-full">
+            <Card className="h-full overflow-hidden p-0">
+              <ApiKeysView />
             </Card>
           </div>
         </TabsContent>
