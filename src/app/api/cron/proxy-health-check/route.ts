@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
-import { getSecret } from "@/lib/secrets"
+import { sendTelegram } from "@/lib/telegram"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -18,23 +18,6 @@ type ProxyRow = {
   username: string | null
   password: string | null
   status: string | null
-}
-
-async function sendTelegram(text: string) {
-  const token = await getSecret("TELEGRAM_BOT_TOKEN")
-  const chatId = await getSecret("TELEGRAM_CHAT_ID")
-  if (!token || !chatId) return false
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
-    })
-    return res.ok
-  } catch (e) {
-    console.error("[proxy-health-check] telegram send failed:", e)
-    return false
-  }
 }
 
 // Build a fetch through a residential proxy using https-proxy-agent +

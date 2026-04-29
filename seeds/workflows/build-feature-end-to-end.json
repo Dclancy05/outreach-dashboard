@@ -1,0 +1,129 @@
+{
+  "id": "00000000-0000-4000-a000-000000000020",
+  "name": "Build Feature End-to-End",
+  "description": "Plans, structures, builds (frontend + backend), tests, gets your sign-off, then opens a PR. Studio-coach plans the work, backend-architect lays out files/APIs/data model, frontend-developer wires the UI, backend-architect implements server logic, test-writer-fixer writes & runs tests, you approve the diff, then a final agent opens the PR via the gh CLI.",
+  "emoji": "🏗️",
+  "status": "active",
+  "is_template": false,
+  "budget_usd": 5.0,
+  "max_steps": 30,
+  "max_loop_iters": 0,
+  "entry_node_id": "trigger",
+  "graph": {
+    "nodes": [
+      {
+        "id": "trigger",
+        "type": "trigger",
+        "position": { "x": 40, "y": 200 },
+        "data": {
+          "label": "Start",
+          "input_schema": { "message": "string" }
+        }
+      },
+      {
+        "id": "plan",
+        "type": "agent",
+        "position": { "x": 260, "y": 200 },
+        "data": {
+          "label": "Plan",
+          "agent_slug": "studio-coach",
+          "prompt": "We're building a new feature for Dylan's outreach dashboard. Read the request below, then write a tight plan: (1) what the user-visible outcome is in one sentence, (2) the files that will likely change, (3) the order of work (data model -> API -> UI -> tests), (4) anything risky or unclear. Keep it under 200 words.\n\nFeature request:\n{{message}}",
+          "output_var": "plan"
+        }
+      },
+      {
+        "id": "structure",
+        "type": "agent",
+        "position": { "x": 520, "y": 200 },
+        "data": {
+          "label": "Structure",
+          "agent_slug": "backend-architect",
+          "prompt": "Based on the plan below, design the structure: data model changes (Supabase tables/columns/migrations), API surface (routes + request/response shapes), and any shared lib helpers. Write enough detail that a developer agent can implement directly. Reference real paths under /root/projects/outreach-dashboard.\n\nPlan:\n{{plan}}\n\nOriginal request:\n{{message}}",
+          "output_var": "structure"
+        }
+      },
+      {
+        "id": "build_frontend",
+        "type": "agent",
+        "position": { "x": 780, "y": 120 },
+        "data": {
+          "label": "Build (frontend)",
+          "agent_slug": "frontend-developer",
+          "prompt": "Implement the UI portion of this feature. Use Next.js App Router, Tailwind, shadcn/ui, and the patterns already in src/components and src/app/(dashboard). Write the actual files. Wire to the API surface defined in the structure. Output a short list of files created/modified.\n\nPlan:\n{{plan}}\n\nStructure:\n{{structure}}\n\nOriginal request:\n{{message}}",
+          "output_var": "frontend_changes"
+        }
+      },
+      {
+        "id": "build_backend",
+        "type": "agent",
+        "position": { "x": 1040, "y": 280 },
+        "data": {
+          "label": "Build (backend)",
+          "agent_slug": "backend-architect",
+          "prompt": "Implement the server portion: API routes under src/app/api, any new Supabase migrations under migrations/, shared helpers under src/lib. Write the actual files. The frontend agent already wrote the UI based on the same structure spec, so keep request/response shapes consistent.\n\nPlan:\n{{plan}}\n\nStructure:\n{{structure}}\n\nFrontend changes:\n{{frontend_changes}}\n\nOriginal request:\n{{message}}",
+          "output_var": "backend_changes"
+        }
+      },
+      {
+        "id": "test",
+        "type": "agent",
+        "position": { "x": 1300, "y": 200 },
+        "data": {
+          "label": "Test",
+          "agent_slug": "test-writer-fixer",
+          "prompt": "Write tests for the new feature and run them. Cover the happy path plus 1-2 obvious edge cases. If anything fails, fix it. Run `npx tsc --noEmit` clean too. Return: tests added, run results, and any fixes applied.\n\nFrontend changes:\n{{frontend_changes}}\n\nBackend changes:\n{{backend_changes}}",
+          "output_var": "test_results"
+        }
+      },
+      {
+        "id": "approval",
+        "type": "approval",
+        "position": { "x": 1560, "y": 200 },
+        "data": {
+          "label": "Approve & ship?",
+          "message": "Ready to ship this feature?\n\n*Plan:* {{plan}}\n\n*Tests:* {{test_results}}\n\nApprove to open the PR. Reject to halt.",
+          "channel": "in_app",
+          "timeout_minutes": 1440
+        }
+      },
+      {
+        "id": "ship",
+        "type": "agent",
+        "position": { "x": 1820, "y": 200 },
+        "data": {
+          "label": "Open PR",
+          "agent_slug": "backend-architect",
+          "prompt": "Stage all changes, commit them with a clear message tied to the feature, push the branch, and open a PR via the gh CLI. PR title under 70 chars. Body should include a Summary (1-3 bullets) and a Test plan (markdown checklist). Use the repo's existing commit style. Return the PR URL.\n\nFeature: {{message}}\n\nPlan: {{plan}}\n\nFrontend changes: {{frontend_changes}}\n\nBackend changes: {{backend_changes}}\n\nTest results: {{test_results}}",
+          "output_var": "pr_url"
+        }
+      },
+      {
+        "id": "output",
+        "type": "output",
+        "position": { "x": 2080, "y": 200 },
+        "data": {
+          "label": "Done",
+          "output_schema": {
+            "plan": "string",
+            "structure": "string",
+            "frontend_changes": "string",
+            "backend_changes": "string",
+            "test_results": "string",
+            "pr_url": "string"
+          }
+        }
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "trigger", "target": "plan" },
+      { "id": "e2", "source": "plan", "target": "structure" },
+      { "id": "e3", "source": "structure", "target": "build_frontend" },
+      { "id": "e4", "source": "build_frontend", "target": "build_backend" },
+      { "id": "e5", "source": "build_backend", "target": "test" },
+      { "id": "e6", "source": "test", "target": "approval" },
+      { "id": "e7", "source": "approval", "target": "ship", "label": "approved" },
+      { "id": "e8", "source": "ship", "target": "output" }
+    ],
+    "viewport": { "x": 0, "y": 0, "zoom": 0.75 }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "00000000-0000-4000-a000-000000000010",
+  "name": "Quick Ask",
+  "description": "One-shot Claude reply to a message. The default workflow when Dylan messages the bot from his phone — no orchestration, no loops, just ask and get an answer.",
+  "emoji": "💬",
+  "status": "active",
+  "is_template": false,
+  "budget_usd": 0.5,
+  "max_steps": 5,
+  "max_loop_iters": 0,
+  "entry_node_id": "trigger",
+  "graph": {
+    "nodes": [
+      {
+        "id": "trigger",
+        "type": "trigger",
+        "position": { "x": 40, "y": 160 },
+        "data": {
+          "label": "Start",
+          "input_schema": { "message": "string" }
+        }
+      },
+      {
+        "id": "n_root",
+        "type": "agent",
+        "position": { "x": 280, "y": 160 },
+        "data": {
+          "label": "Reply",
+          "agent_slug": "studio-coach",
+          "prompt": "{{message}}",
+          "output_var": "reply"
+        }
+      },
+      {
+        "id": "output",
+        "type": "output",
+        "position": { "x": 540, "y": 160 },
+        "data": {
+          "label": "Done",
+          "output_schema": { "reply": "string" }
+        }
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "trigger", "target": "n_root" },
+      { "id": "e2", "source": "n_root", "target": "output" }
+    ],
+    "viewport": { "x": 0, "y": 0, "zoom": 1 }
+  }
+}

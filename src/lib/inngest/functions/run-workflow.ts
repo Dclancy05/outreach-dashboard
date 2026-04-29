@@ -19,6 +19,14 @@
 // the function. Each iteration's body is itself a sequence of step.run() calls
 // — Inngest persists state per call, so a loop interrupted mid-iter-7 resumes
 // exactly there.
+//
+// Notification dispatch: lifecycle events (run started, stage transitions,
+// approval gates, completion, failure, budget cap) are routed through the
+// central `dispatchNotification` helper in `@/lib/notifications/dispatch`.
+// That helper inspects `meta.source` (telegram | api | manual | …) and routes
+// to the right channel — Telegram with inline buttons for telegram-triggered
+// runs, in-app stub for everything else. Notification calls are wrapped in
+// try/catch and never throw — a Telegram outage must not fail a real run.
 
 import { createClient } from "@supabase/supabase-js"
 import { inngest, EVENT_RUN_QUEUED, EVENT_RUN_APPROVAL, EVENT_RUN_ABORTED, type RunQueuedEvent } from "@/lib/inngest/client"
@@ -30,6 +38,12 @@ import {
   BudgetExceededError, checkWorkflowLimits, checkLoopIterations,
   checkGlobalDailyBudget, getRunCostState, markRunBudgetExceeded,
 } from "@/lib/workflow/cost-guards"
+import {
+  dispatchNotification,
+  type NotifyKind,
+  type NotifyPayload,
+  type NotifyOptions,
+} from "@/lib/notifications/dispatch"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -57,6 +71,64 @@ interface StepContext {
   dry_run: boolean
   parent_step_id?: string | null
   iteration?: number
+}
+
+/** Trigger metadata threaded through `input._meta` by the producer. The
+ *  workflow_runs table has no dedicated `metadata` column (per migration
+ *  20260427_agent_workflows.sql) so callers piggyback on `input`. */
+interface TriggerMeta {
+  source?: "telegram" | "api" | "schedule" | "manual" | "test" | string
+  telegram_chat_id?: string | number
+  telegram_message_id?: number
+}
+
+function extractMeta(input: Record<string, unknown>): TriggerMeta {
+  const m = (input as { _meta?: unknown })._meta
+  if (m && typeof m === "object") return m as TriggerMeta
+  return {}
+}
+
+/** Pull a human-readable reply string out of the run's vars. We look at the
+ *  graph's last agent node's `output_var` first, then common names ("reply",
+ *  "answer", "text", "draft"), then fall back to a JSON dump. */
+function extractFinalReply(graph: WorkflowGraph, vars: Record<string, unknown>): string {
+  const stringify = (v: unknown): string => {
+    if (typeof v === "string") return v
+    if (v == null) return ""
+    if (typeof v === "object") {
+      const obj = v as Record<string, unknown>
+      // Agent-runner often returns { text } or { reply } or { content }.
+      if (typeof obj.text === "string") return obj.text
+      if (typeof obj.reply === "string") return obj.reply
+      if (typeof obj.content === "string") return obj.content
+      if (typeof obj.message === "string") return obj.message
+      try { return JSON.stringify(v, null, 2) } catch { return String(v) }
+    }
+    return String(v)
+  }
+
+  // Walk nodes in declared order; remember the last agent node's output_var.
+  let lastVar: string | undefined
+  for (const n of graph.nodes) {
+    if (n.type === "agent") {
+      const ov = (n.data as { output_var?: string }).output_var
+      if (ov) lastVar = ov
+    }
+  }
+  if (lastVar && lastVar in vars) {
+    const out = stringify(vars[lastVar])
+    if (out) return out
+  }
+  for (const k of ["reply", "answer", "text", "draft", "content", "result"]) {
+    if (k in vars) {
+      const out = stringify(vars[k])
+      if (out) return out
+    }
+  }
+  // Last resort: dump everything except internal `_meta`.
+  const { _meta: _omit, ...rest } = vars as { _meta?: unknown } & Record<string, unknown>
+  void _omit
+  try { return JSON.stringify(rest, null, 2) } catch { return String(rest) }
 }
 
 async function recordStep(
@@ -159,6 +231,26 @@ export const runWorkflow = inngest.createFunction(
   { event: EVENT_RUN_QUEUED },
   async ({ event, step, logger }) => {
     const { run_id, workflow_id, input, dry_run = false } = (event as RunQueuedEvent).data
+    const meta = extractMeta(input || {})
+
+    /** Fire-and-forget notification dispatch. Wrapped in step.run for
+     *  durability + checkpointing. Never throws — a Telegram (or any
+     *  channel) outage must not mark the run as failed. */
+    const notify = async (
+      step_id: string,
+      kind: NotifyKind,
+      payload: NotifyPayload,
+      options?: NotifyOptions,
+    ): Promise<void> => {
+      await step.run(step_id, async () => {
+        try {
+          await dispatchNotification(kind, payload, options ?? { meta: meta as Record<string, unknown> })
+        } catch (e) {
+          console.error("[notify] failed", step_id, (e as Error).message)
+        }
+        return { notified: true }
+      })
+    }
 
     const wf = await step.run("load-workflow", async () => {
       const { data, error } = await supabase
@@ -176,6 +268,7 @@ export const runWorkflow = inngest.createFunction(
       max_loop_iters: wf.max_loop_iters,
     }
     const graph = wf.graph as WorkflowGraph
+    const workflow_name = (wf as { name?: string }).name || "Untitled workflow"
 
     await step.run("mark-running", async () => {
       await supabase.from("workflow_runs").update({
@@ -186,6 +279,12 @@ export const runWorkflow = inngest.createFunction(
       await checkGlobalDailyBudget()
     })
 
+    // Notify: run started.
+    await notify("notify-run-started", "run_started", {
+      run_id,
+      workflow_name,
+    })
+
     const entry = findEntry(graph)
     if (!entry) {
       await step.run("no-entry", async () => {
@@ -194,6 +293,12 @@ export const runWorkflow = inngest.createFunction(
           finished_at: new Date().toISOString(),
           error: "Workflow has no Trigger node",
         }).eq("id", run_id)
+      })
+      // Notify: run failed (no entry node).
+      await notify("notify-no-entry", "run_failed", {
+        run_id,
+        workflow_name,
+        error_text: "No entry node found in workflow graph",
       })
       return { ok: false, error: "no-entry" }
     }
@@ -216,6 +321,15 @@ export const runWorkflow = inngest.createFunction(
         }).eq("id", workflow_id)
       })
 
+      // Notify: run completed. Pass the extracted final reply so the
+      // dispatcher can format it for the channel of choice.
+      const finalReply = extractFinalReply(graph, ctx.vars) || "(no reply produced)"
+      await notify("notify-run-completed", "run_completed", {
+        run_id,
+        workflow_name,
+        output_text: finalReply,
+      })
+
       // Fire-and-forget: have the summarizer write a plain-English summary.
       await step.sendEvent("queue-summary", {
         name: "workflow/run.summarize",
@@ -228,6 +342,18 @@ export const runWorkflow = inngest.createFunction(
         await step.run("mark-budget-exceeded", async () => {
           await markRunBudgetExceeded(run_id, err)
         })
+        // Notify: budget exceeded.
+        const cost_state = await step.run("read-cost-for-budget-notify", async () => {
+          return await getRunCostState(run_id)
+        })
+        await notify("notify-budget-exceeded", "budget_exceeded", {
+          run_id,
+          workflow_name,
+          cost_so_far_usd: cost_state.cost_usd,
+          budget_usd: limits.budget_usd,
+          error_text: err.message,
+          extra: { layer: err.layer },
+        })
         return { ok: false, run_id, budget: err.layer, error: err.message }
       }
       logger.error("Workflow run failed", { run_id, workflow_id, err: (err as Error).message })
@@ -238,10 +364,16 @@ export const runWorkflow = inngest.createFunction(
           error: (err as Error).message?.slice(0, 1000),
         }).eq("id", run_id)
       })
+      const errorMessage = ((err as Error).message || "Unknown error").slice(0, 800)
+      await notify("notify-run-failed", "run_failed", {
+        run_id,
+        workflow_name,
+        error_text: errorMessage,
+      })
       throw err // let Inngest retries kick in
     }
 
-    /* ─── Inner walker (closure over step + supabase) ─────────────────── */
+    /* ─── Inner walker (closure over step + supabase + notify) ─────────── */
 
     async function walkFromNode(
       node_id: string,
@@ -251,9 +383,31 @@ export const runWorkflow = inngest.createFunction(
       s: typeof step,
     ): Promise<void> {
       let cur: string | null = node_id
+      let stage_index = 0
+      let last_stage_node_id: string | null = null
       while (cur) {
         const node = getNode(g, cur)
         if (!node) throw new Error(`Node ${cur} not found in graph`)
+
+        // Stage transition: when we move into a new "stage" node (agent,
+        // orchestrator, loop, approval) and there was a prior stage node,
+        // notify. Trigger/output/router don't count as visible stages.
+        const isStage = node.type === "agent" || node.type === "orchestrator" || node.type === "loop" || node.type === "approval"
+        if (isStage && last_stage_node_id !== null && last_stage_node_id !== node.id) {
+          stage_index += 1
+          const stage_label = (node.data as { label?: string }).label || node.id
+          await notify(
+            `notify-stage-transition:${node.id}`,
+            "stage_transition",
+            {
+              run_id: c.run_id,
+              workflow_name,
+              stage_name: stage_label,
+              step_count: stage_index + 1,
+            },
+          )
+        }
+        if (isStage) last_stage_node_id = node.id
 
         await s.run(`guard:${node.id}`, async () => {
           const state = await getRunCostState(c.run_id)
@@ -324,9 +478,33 @@ export const runWorkflow = inngest.createFunction(
             const stepId = await s.run(`record-pending:${node.id}`, async () => {
               const id = await recordStep(c, node, "awaiting_approval", { input: { message: renderTemplate(node.data.message, c.vars) } })
               await supabase.from("workflow_runs").update({ status: "paused" }).eq("id", c.run_id)
-              // TODO: dispatch notification (in-app/sms/email) per node.data.channel
               return id
             })
+
+            // Notify: approval gate entered. The dispatcher attaches the
+            // Approve / Reject inline buttons (telegram channel) or rings
+            // the in-app bell with a deep-link.
+            const approval_cost_state = await s.run(`approval-cost-snapshot:${node.id}`, async () => {
+              return await getRunCostState(c.run_id)
+            })
+            const stage_label = (node.data as { label?: string }).label || node.id
+            await notify(
+              `notify-approval-required:${node.id}`,
+              "approval_required",
+              {
+                run_id: c.run_id,
+                workflow_name,
+                stage_name: stage_label,
+                cost_so_far_usd: approval_cost_state.cost_usd,
+                pr_url: typeof c.vars.pr_url === "string" ? (c.vars.pr_url as string) : undefined,
+                extra: {
+                  step_id: stepId,
+                  message: renderTemplate(node.data.message, c.vars),
+                  timeout_minutes: node.data.timeout_minutes,
+                },
+              },
+            )
+
             const evt = await s.waitForEvent(`approval:${node.id}`, {
               event: EVENT_RUN_APPROVAL,
               timeout: `${node.data.timeout_minutes}m`,

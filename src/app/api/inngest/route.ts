@@ -4,10 +4,11 @@
 import { serve } from "inngest/next"
 import { inngest } from "@/lib/inngest/client"
 import { runWorkflow, summarizeRun } from "@/lib/inngest/functions/run-workflow"
+import { costCapCheck, morningDigest } from "@/lib/inngest/functions/scheduled"
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [runWorkflow, summarizeRun],
+  functions: [runWorkflow, summarizeRun, costCapCheck, morningDigest],
 })
 
 export const dynamic = "force-dynamic"

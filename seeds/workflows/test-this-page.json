@@ -1,0 +1,50 @@
+{
+  "id": "00000000-0000-4000-a000-000000000030",
+  "name": "Test This Page",
+  "description": "Runs the testing-plan for one page: reads the sibling 'Testing Plan.md', executes each stable-ID test, writes results to 'Test Results/<date>.md', diffs against the previous run, and flags regressions. One agent, one shot.",
+  "emoji": "🧪",
+  "status": "active",
+  "is_template": false,
+  "budget_usd": 1.0,
+  "max_steps": 5,
+  "max_loop_iters": 0,
+  "entry_node_id": "trigger",
+  "graph": {
+    "nodes": [
+      {
+        "id": "trigger",
+        "type": "trigger",
+        "position": { "x": 40, "y": 160 },
+        "data": {
+          "label": "Start",
+          "input_schema": { "page_path": "string", "date": "string" }
+        }
+      },
+      {
+        "id": "tester",
+        "type": "agent",
+        "position": { "x": 280, "y": 160 },
+        "data": {
+          "label": "Run testing plan",
+          "agent_slug": "test-writer-fixer",
+          "prompt": "Read /root/projects/outreach-dashboard/{{page_path}} — Testing Plan.md. Execute each stable-ID test. Write results to {{page_path}} — Test Results/{{date}}.md. Diff vs the previous run; flag regressions. Return a one-paragraph summary + counts (passed/failed/regressions).",
+          "output_var": "results"
+        }
+      },
+      {
+        "id": "output",
+        "type": "output",
+        "position": { "x": 540, "y": 160 },
+        "data": {
+          "label": "Done",
+          "output_schema": { "results": "string" }
+        }
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "trigger", "target": "tester" },
+      { "id": "e2", "source": "tester", "target": "output" }
+    ],
+    "viewport": { "x": 0, "y": 0, "zoom": 1 }
+  }
+}
