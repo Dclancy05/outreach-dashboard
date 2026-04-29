@@ -1,0 +1,50 @@
+{
+  "id": "00000000-0000-4000-a000-000000000040",
+  "name": "Daily Health Check",
+  "description": "Cron-triggered. Asks the orchestrator agent to query Supabase for accounts, cookies, proxies, and the send queue, then compose a 6-bullet plain-English status summary ending with a green/yellow/red light. No inputs needed.",
+  "emoji": "🏥",
+  "status": "active",
+  "is_template": false,
+  "budget_usd": 0.5,
+  "max_steps": 8,
+  "max_loop_iters": 0,
+  "entry_node_id": "trigger",
+  "graph": {
+    "nodes": [
+      {
+        "id": "trigger",
+        "type": "trigger",
+        "position": { "x": 40, "y": 160 },
+        "data": {
+          "label": "Start",
+          "input_schema": {}
+        }
+      },
+      {
+        "id": "health",
+        "type": "agent",
+        "position": { "x": 280, "y": 160 },
+        "data": {
+          "label": "Health check",
+          "agent_slug": "studio-coach",
+          "prompt": "Run the daily-health-check workflow: query Supabase for accounts (last_health_check stats), cookies (per-platform freshness), proxies (last successful ping), send_queue (depth + failures last 24h). Compose a 6-bullet status summary in plain English. End with one of: 🟢 all good / 🟡 minor issues / 🔴 needs attention.",
+          "output_var": "report"
+        }
+      },
+      {
+        "id": "output",
+        "type": "output",
+        "position": { "x": 540, "y": 160 },
+        "data": {
+          "label": "Done",
+          "output_schema": { "report": "string" }
+        }
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "trigger", "target": "health" },
+      { "id": "e2", "source": "health", "target": "output" }
+    ],
+    "viewport": { "x": 0, "y": 0, "zoom": 1 }
+  }
+}

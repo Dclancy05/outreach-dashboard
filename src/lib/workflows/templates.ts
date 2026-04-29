@@ -4,9 +4,13 @@
 // ship with the product. Edit the matching JSON in seeds/workflows/, register
 // it here, and run `npm run seed:workflows` to upsert into the live DB.
 //
-// Phase 1 ships only "Quick Ask" — the default reply workflow used by the
-// Telegram bot. Phase 2 will add four more (research+draft, code-loop fast,
-// daily-report, etc.).
+// Phase 1 shipped "Quick Ask" — the default reply workflow used by the
+// Telegram bot. Phase 2 adds four more so Dylan can trigger them by slug from
+// his phone:
+//   - build-feature-end-to-end : 🏗️ plan -> structure -> build -> test -> approve -> ship
+//   - test-this-page           : 🧪 run a page's testing-plan + diff vs prev
+//   - daily-health-check       : 🏥 6-bullet plain-English status (cron)
+//   - investigate-bug          : 🔍 read -> reproduce -> root-cause -> approve -> fix -> PR
 //
 // Why a typed registry instead of just iterating files: the WorkflowTemplate
 // type forces every template to declare the same fields the `workflows` table
@@ -15,6 +19,10 @@
 // here and the compiler will tell you which templates need updating.
 
 import quickAsk from "../../../seeds/workflows/quick-ask.json"
+import buildFeature from "../../../seeds/workflows/build-feature-end-to-end.json"
+import testThisPage from "../../../seeds/workflows/test-this-page.json"
+import dailyHealthCheck from "../../../seeds/workflows/daily-health-check.json"
+import investigateBug from "../../../seeds/workflows/investigate-bug.json"
 
 /** xyflow-compatible node. We keep this loose because each node `type` has a
  *  different `data` shape (agent / loop / router / approval / …). The runner
@@ -63,6 +71,10 @@ export interface WorkflowTemplate {
  *  "Start from template" picker. */
 export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   quickAsk as WorkflowTemplate,
+  buildFeature as WorkflowTemplate,
+  testThisPage as WorkflowTemplate,
+  dailyHealthCheck as WorkflowTemplate,
+  investigateBug as WorkflowTemplate,
 ]
 
 /** Find a template by its stable id. Returns undefined if not registered. */

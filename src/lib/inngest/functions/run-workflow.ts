@@ -20,14 +20,13 @@
 // — Inngest persists state per call, so a loop interrupted mid-iter-7 resumes
 // exactly there.
 //
-// Telegram completion: when a run was triggered by the Telegram bot (Jarvis
-// remote-Claude — see src/app/api/telegram/webhook/route.ts), the producer
-// stashes routing metadata under `input._meta = { source: 'telegram',
-// telegram_chat_id, telegram_message_id }`. After the run succeeds (or fails)
-// we fire one Telegram message back to that chat so Dylan sees the result on
-// his phone without opening the dashboard. We use a dynamic import for
-// `@/lib/telegram` so the type/build is decoupled from Agent A's parallel work
-// — and so a Telegram outage can't take down the workflow runner.
+// Notification dispatch: lifecycle events (run started, stage transitions,
+// approval gates, completion, failure, budget cap) are routed through the
+// central `dispatchNotification` helper in `@/lib/notifications/dispatch`.
+// That helper inspects `meta.source` (telegram | api | manual | …) and routes
+// to the right channel — Telegram with inline buttons for telegram-triggered
+// runs, in-app stub for everything else. Notification calls are wrapped in
+// try/catch and never throw — a Telegram outage must not fail a real run.
 
 import { createClient } from "@supabase/supabase-js"
 import { inngest, EVENT_RUN_QUEUED, EVENT_RUN_APPROVAL, EVENT_RUN_ABORTED, type RunQueuedEvent } from "@/lib/inngest/client"
@@ -39,6 +38,12 @@ import {
   BudgetExceededError, checkWorkflowLimits, checkLoopIterations,
   checkGlobalDailyBudget, getRunCostState, markRunBudgetExceeded,
 } from "@/lib/workflow/cost-guards"
+import {
+  dispatchNotification,
+  type NotifyKind,
+  type NotifyPayload,
+  type NotifyOptions,
+} from "@/lib/notifications/dispatch"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -124,11 +129,6 @@ function extractFinalReply(graph: WorkflowGraph, vars: Record<string, unknown>):
   const { _meta: _omit, ...rest } = vars as { _meta?: unknown } & Record<string, unknown>
   void _omit
   try { return JSON.stringify(rest, null, 2) } catch { return String(rest) }
-}
-
-function truncateForTelegram(text: string, max = 3500): string {
-  if (text.length <= max) return text
-  return text.slice(0, max - 100) + "\n\n…(truncated)"
 }
 
 async function recordStep(
@@ -233,6 +233,25 @@ export const runWorkflow = inngest.createFunction(
     const { run_id, workflow_id, input, dry_run = false } = (event as RunQueuedEvent).data
     const meta = extractMeta(input || {})
 
+    /** Fire-and-forget notification dispatch. Wrapped in step.run for
+     *  durability + checkpointing. Never throws — a Telegram (or any
+     *  channel) outage must not mark the run as failed. */
+    const notify = async (
+      step_id: string,
+      kind: NotifyKind,
+      payload: NotifyPayload,
+      options?: NotifyOptions,
+    ): Promise<void> => {
+      await step.run(step_id, async () => {
+        try {
+          await dispatchNotification(kind, payload, options ?? { meta: meta as Record<string, unknown> })
+        } catch (e) {
+          console.error("[notify] failed", step_id, (e as Error).message)
+        }
+        return { notified: true }
+      })
+    }
+
     const wf = await step.run("load-workflow", async () => {
       const { data, error } = await supabase
         .from("workflows")
@@ -249,6 +268,7 @@ export const runWorkflow = inngest.createFunction(
       max_loop_iters: wf.max_loop_iters,
     }
     const graph = wf.graph as WorkflowGraph
+    const workflow_name = (wf as { name?: string }).name || "Untitled workflow"
 
     await step.run("mark-running", async () => {
       await supabase.from("workflow_runs").update({
@@ -257,6 +277,12 @@ export const runWorkflow = inngest.createFunction(
         inngest_run_id: event.id ?? null,
       }).eq("id", run_id)
       await checkGlobalDailyBudget()
+    })
+
+    // Notify: run started.
+    await notify("notify-run-started", "run_started", {
+      run_id,
+      workflow_name,
     })
 
     const entry = findEntry(graph)
@@ -268,24 +294,12 @@ export const runWorkflow = inngest.createFunction(
           error: "Workflow has no Trigger node",
         }).eq("id", run_id)
       })
-      // Still ping Telegram so the user isn't left hanging.
-      if (meta.source === "telegram" && meta.telegram_chat_id) {
-        await step.run("notify-telegram-on-no-entry", async () => {
-          try {
-            const { sendTelegram } = await import("@/lib/telegram")
-            await sendTelegram(
-              `❌ *Run failed*\n\nWorkflow has no Trigger node.\n\n_Run \`${run_id}\`_`,
-              {
-                chatId: meta.telegram_chat_id,
-                parseMode: "Markdown",
-                replyToMessageId: meta.telegram_message_id,
-              },
-            )
-          } catch (e) {
-            logger.error("Telegram notify (no-entry) failed", { run_id, err: (e as Error).message })
-          }
-        })
-      }
+      // Notify: run failed (no entry node).
+      await notify("notify-no-entry", "run_failed", {
+        run_id,
+        workflow_name,
+        error_text: "No entry node found in workflow graph",
+      })
       return { ok: false, error: "no-entry" }
     }
 
@@ -307,27 +321,14 @@ export const runWorkflow = inngest.createFunction(
         }).eq("id", workflow_id)
       })
 
-      // ── Telegram: round-trip the final reply back to the chat that asked.
-      if (meta.source === "telegram" && meta.telegram_chat_id) {
-        await step.run("notify-telegram-on-complete", async () => {
-          try {
-            const { sendTelegram } = await import("@/lib/telegram")
-            const reply = extractFinalReply(graph, ctx.vars)
-            const body = truncateForTelegram(reply || "(no reply produced)")
-            await sendTelegram(
-              `✅ *Done!*\n\n${body}\n\n_Run \`${run_id}\`_`,
-              {
-                chatId: meta.telegram_chat_id,
-                parseMode: "Markdown",
-                replyToMessageId: meta.telegram_message_id,
-              },
-            )
-          } catch (e) {
-            // Never let a Telegram blip mark the run as failed — it succeeded.
-            logger.error("Telegram notify (complete) failed", { run_id, err: (e as Error).message })
-          }
-        })
-      }
+      // Notify: run completed. Pass the extracted final reply so the
+      // dispatcher can format it for the channel of choice.
+      const finalReply = extractFinalReply(graph, ctx.vars) || "(no reply produced)"
+      await notify("notify-run-completed", "run_completed", {
+        run_id,
+        workflow_name,
+        output_text: finalReply,
+      })
 
       // Fire-and-forget: have the summarizer write a plain-English summary.
       await step.sendEvent("queue-summary", {
@@ -341,23 +342,18 @@ export const runWorkflow = inngest.createFunction(
         await step.run("mark-budget-exceeded", async () => {
           await markRunBudgetExceeded(run_id, err)
         })
-        if (meta.source === "telegram" && meta.telegram_chat_id) {
-          await step.run("notify-telegram-on-budget", async () => {
-            try {
-              const { sendTelegram } = await import("@/lib/telegram")
-              await sendTelegram(
-                `⚠️ *Budget cap hit*\n\n${err.message}\n\n_Run \`${run_id}\`_`,
-                {
-                  chatId: meta.telegram_chat_id,
-                  parseMode: "Markdown",
-                  replyToMessageId: meta.telegram_message_id,
-                },
-              )
-            } catch (e) {
-              logger.error("Telegram notify (budget) failed", { run_id, err: (e as Error).message })
-            }
-          })
-        }
+        // Notify: budget exceeded.
+        const cost_state = await step.run("read-cost-for-budget-notify", async () => {
+          return await getRunCostState(run_id)
+        })
+        await notify("notify-budget-exceeded", "budget_exceeded", {
+          run_id,
+          workflow_name,
+          cost_so_far_usd: cost_state.cost_usd,
+          budget_usd: limits.budget_usd,
+          error_text: err.message,
+          extra: { layer: err.layer },
+        })
         return { ok: false, run_id, budget: err.layer, error: err.message }
       }
       logger.error("Workflow run failed", { run_id, workflow_id, err: (err as Error).message })
@@ -368,28 +364,16 @@ export const runWorkflow = inngest.createFunction(
           error: (err as Error).message?.slice(0, 1000),
         }).eq("id", run_id)
       })
-      if (meta.source === "telegram" && meta.telegram_chat_id) {
-        await step.run("notify-telegram-on-failure", async () => {
-          try {
-            const { sendTelegram } = await import("@/lib/telegram")
-            const errMsg = ((err as Error).message || "Unknown error").slice(0, 800)
-            await sendTelegram(
-              `❌ *Run failed*\n\n${errMsg}\n\n_Run \`${run_id}\`_`,
-              {
-                chatId: meta.telegram_chat_id,
-                parseMode: "Markdown",
-                replyToMessageId: meta.telegram_message_id,
-              },
-            )
-          } catch (e) {
-            logger.error("Telegram notify (failure) failed", { run_id, err: (e as Error).message })
-          }
-        })
-      }
+      const errorMessage = ((err as Error).message || "Unknown error").slice(0, 800)
+      await notify("notify-run-failed", "run_failed", {
+        run_id,
+        workflow_name,
+        error_text: errorMessage,
+      })
       throw err // let Inngest retries kick in
     }
 
-    /* ─── Inner walker (closure over step + supabase) ─────────────────── */
+    /* ─── Inner walker (closure over step + supabase + notify) ─────────── */
 
     async function walkFromNode(
       node_id: string,
@@ -399,9 +383,31 @@ export const runWorkflow = inngest.createFunction(
       s: typeof step,
     ): Promise<void> {
       let cur: string | null = node_id
+      let stage_index = 0
+      let last_stage_node_id: string | null = null
       while (cur) {
         const node = getNode(g, cur)
         if (!node) throw new Error(`Node ${cur} not found in graph`)
+
+        // Stage transition: when we move into a new "stage" node (agent,
+        // orchestrator, loop, approval) and there was a prior stage node,
+        // notify. Trigger/output/router don't count as visible stages.
+        const isStage = node.type === "agent" || node.type === "orchestrator" || node.type === "loop" || node.type === "approval"
+        if (isStage && last_stage_node_id !== null && last_stage_node_id !== node.id) {
+          stage_index += 1
+          const stage_label = (node.data as { label?: string }).label || node.id
+          await notify(
+            `notify-stage-transition:${node.id}`,
+            "stage_transition",
+            {
+              run_id: c.run_id,
+              workflow_name,
+              stage_name: stage_label,
+              step_count: stage_index + 1,
+            },
+          )
+        }
+        if (isStage) last_stage_node_id = node.id
 
         await s.run(`guard:${node.id}`, async () => {
           const state = await getRunCostState(c.run_id)
@@ -472,9 +478,33 @@ export const runWorkflow = inngest.createFunction(
             const stepId = await s.run(`record-pending:${node.id}`, async () => {
               const id = await recordStep(c, node, "awaiting_approval", { input: { message: renderTemplate(node.data.message, c.vars) } })
               await supabase.from("workflow_runs").update({ status: "paused" }).eq("id", c.run_id)
-              // TODO: dispatch notification (in-app/sms/email) per node.data.channel
               return id
             })
+
+            // Notify: approval gate entered. The dispatcher attaches the
+            // Approve / Reject inline buttons (telegram channel) or rings
+            // the in-app bell with a deep-link.
+            const approval_cost_state = await s.run(`approval-cost-snapshot:${node.id}`, async () => {
+              return await getRunCostState(c.run_id)
+            })
+            const stage_label = (node.data as { label?: string }).label || node.id
+            await notify(
+              `notify-approval-required:${node.id}`,
+              "approval_required",
+              {
+                run_id: c.run_id,
+                workflow_name,
+                stage_name: stage_label,
+                cost_so_far_usd: approval_cost_state.cost_usd,
+                pr_url: typeof c.vars.pr_url === "string" ? (c.vars.pr_url as string) : undefined,
+                extra: {
+                  step_id: stepId,
+                  message: renderTemplate(node.data.message, c.vars),
+                  timeout_minutes: node.data.timeout_minutes,
+                },
+              },
+            )
+
             const evt = await s.waitForEvent(`approval:${node.id}`, {
               event: EVENT_RUN_APPROVAL,
               timeout: `${node.data.timeout_minutes}m`,

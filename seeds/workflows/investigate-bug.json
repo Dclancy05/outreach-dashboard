@@ -1,0 +1,142 @@
+{
+  "id": "00000000-0000-4000-a000-000000000050",
+  "name": "Investigate Bug",
+  "description": "Walks a reported bug from description to fix: reads the repo, reproduces the issue, diagnoses root cause, proposes a fix for your approval, then implements it, tests it, and opens a PR. Uses backend-architect for diagnosis & implementation, feedback-synthesizer to translate the bug report into a concrete reproduction, test-writer-fixer to verify the fix.",
+  "emoji": "🔍",
+  "status": "active",
+  "is_template": false,
+  "budget_usd": 3.0,
+  "max_steps": 25,
+  "max_loop_iters": 0,
+  "entry_node_id": "trigger",
+  "graph": {
+    "nodes": [
+      {
+        "id": "trigger",
+        "type": "trigger",
+        "position": { "x": 40, "y": 200 },
+        "data": {
+          "label": "Start",
+          "input_schema": { "message": "string" }
+        }
+      },
+      {
+        "id": "read_repo",
+        "type": "agent",
+        "position": { "x": 260, "y": 200 },
+        "data": {
+          "label": "Read repo",
+          "agent_slug": "backend-architect",
+          "prompt": "Dylan reported a bug. Find the relevant code. Read /root/projects/outreach-dashboard, search for the files most likely involved in the bug, and summarize what the affected code currently does (don't propose a fix yet). Cite file paths and line ranges.\n\nBug report:\n{{message}}",
+          "output_var": "repo_context"
+        }
+      },
+      {
+        "id": "reproduce",
+        "type": "agent",
+        "position": { "x": 520, "y": 200 },
+        "data": {
+          "label": "Reproduce",
+          "agent_slug": "feedback-synthesizer",
+          "prompt": "Translate the bug report into concrete reproduction steps a developer can follow. If the report is vague, list the assumptions you're making. Then describe what the bug actually looks like (error message, wrong output, broken UI, etc) vs what should happen.\n\nBug report:\n{{message}}\n\nRepo context:\n{{repo_context}}",
+          "output_var": "reproduction"
+        }
+      },
+      {
+        "id": "root_cause",
+        "type": "agent",
+        "position": { "x": 780, "y": 200 },
+        "data": {
+          "label": "Root cause",
+          "agent_slug": "backend-architect",
+          "prompt": "Given the reproduction steps and the affected code, identify the root cause. Be specific: which line, which condition, why it misbehaves. If you can't tell from static reading, say so and propose what to log/inspect.\n\nReproduction:\n{{reproduction}}\n\nRepo context:\n{{repo_context}}",
+          "output_var": "root_cause"
+        }
+      },
+      {
+        "id": "propose_fix",
+        "type": "agent",
+        "position": { "x": 1040, "y": 200 },
+        "data": {
+          "label": "Propose fix",
+          "agent_slug": "backend-architect",
+          "prompt": "Propose the fix. Show the exact diff (file path + before/after) for each change. Explain why this fix addresses the root cause and not just the symptom. If there's a risk of regression elsewhere, call it out.\n\nRoot cause:\n{{root_cause}}\n\nReproduction:\n{{reproduction}}",
+          "output_var": "proposed_fix"
+        }
+      },
+      {
+        "id": "approval",
+        "type": "approval",
+        "position": { "x": 1300, "y": 200 },
+        "data": {
+          "label": "Approve fix?",
+          "message": "Ready to apply this fix?\n\n*Bug:* {{message}}\n\n*Root cause:* {{root_cause}}\n\n*Proposed fix:*\n{{proposed_fix}}\n\nApprove to implement. Reject to halt.",
+          "channel": "in_app",
+          "timeout_minutes": 1440
+        }
+      },
+      {
+        "id": "implement",
+        "type": "agent",
+        "position": { "x": 1560, "y": 200 },
+        "data": {
+          "label": "Implement",
+          "agent_slug": "backend-architect",
+          "prompt": "Apply the approved fix. Write the actual file changes. Keep the diff minimal — don't refactor unrelated code. Report files modified.\n\nProposed fix:\n{{proposed_fix}}",
+          "output_var": "implementation"
+        }
+      },
+      {
+        "id": "test",
+        "type": "agent",
+        "position": { "x": 1820, "y": 200 },
+        "data": {
+          "label": "Test fix",
+          "agent_slug": "test-writer-fixer",
+          "prompt": "Verify the fix. (1) Add a regression test that would have caught this bug. (2) Run the existing test suite. (3) Run `npx tsc --noEmit` clean. If anything fails, fix it. Report tests added and run results.\n\nReproduction:\n{{reproduction}}\n\nImplementation:\n{{implementation}}",
+          "output_var": "test_results"
+        }
+      },
+      {
+        "id": "open_pr",
+        "type": "agent",
+        "position": { "x": 2080, "y": 200 },
+        "data": {
+          "label": "Open PR",
+          "agent_slug": "backend-architect",
+          "prompt": "Stage the fix, commit with a `fix:` prefix tied to the bug, push the branch, and open a PR via the gh CLI. PR title under 70 chars. Body: Summary (what broke + what fixed it), Root cause, Test plan. Return the PR URL.\n\nBug: {{message}}\n\nRoot cause: {{root_cause}}\n\nImplementation: {{implementation}}\n\nTest results: {{test_results}}",
+          "output_var": "pr_url"
+        }
+      },
+      {
+        "id": "output",
+        "type": "output",
+        "position": { "x": 2340, "y": 200 },
+        "data": {
+          "label": "Done",
+          "output_schema": {
+            "repo_context": "string",
+            "reproduction": "string",
+            "root_cause": "string",
+            "proposed_fix": "string",
+            "implementation": "string",
+            "test_results": "string",
+            "pr_url": "string"
+          }
+        }
+      }
+    ],
+    "edges": [
+      { "id": "e1", "source": "trigger", "target": "read_repo" },
+      { "id": "e2", "source": "read_repo", "target": "reproduce" },
+      { "id": "e3", "source": "reproduce", "target": "root_cause" },
+      { "id": "e4", "source": "root_cause", "target": "propose_fix" },
+      { "id": "e5", "source": "propose_fix", "target": "approval" },
+      { "id": "e6", "source": "approval", "target": "implement", "label": "approved" },
+      { "id": "e7", "source": "implement", "target": "test" },
+      { "id": "e8", "source": "test", "target": "open_pr" },
+      { "id": "e9", "source": "open_pr", "target": "output" }
+    ],
+    "viewport": { "x": 0, "y": 0, "zoom": 0.7 }
+  }
+}
