@@ -1,26 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
-import { getSecret } from "@/lib/secrets"
+import { sendTelegram } from "@/lib/telegram"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
-
-async function sendTelegram(chatId: string, text: string) {
-  const token = await getSecret("TELEGRAM_BOT_TOKEN")
-  if (!token) return false
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" }),
-    })
-    return res.ok
-  } catch {
-    return false
-  }
-}
 
 export async function GET(req: NextRequest) {
   const auth = req.headers.get("authorization") || ""
@@ -69,7 +54,7 @@ export async function GET(req: NextRequest) {
   })
 
   if (cfg.alert_method === "telegram" && cfg.telegram_chat_id) {
-    await sendTelegram(cfg.telegram_chat_id, msg)
+    await sendTelegram(msg, { chatId: cfg.telegram_chat_id })
   }
 
   // Update last_fired_at

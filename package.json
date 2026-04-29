@@ -13,7 +13,8 @@
     "start": "next start",
     "start:scheduler": "npx tsx src/scripts/start-daily-scheduler.ts",
     "lint": "next lint",
-    "migrate": "npx tsx scripts/migrate-to-supabase.ts"
+    "migrate": "npx tsx scripts/migrate-to-supabase.ts",
+    "seed:workflows": "tsx scripts/seed-workflow-templates.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

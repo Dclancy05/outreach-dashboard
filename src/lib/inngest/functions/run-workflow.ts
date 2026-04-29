@@ -19,6 +19,15 @@
 // the function. Each iteration's body is itself a sequence of step.run() calls
 // — Inngest persists state per call, so a loop interrupted mid-iter-7 resumes
 // exactly there.
+//
+// Telegram completion: when a run was triggered by the Telegram bot (Jarvis
+// remote-Claude — see src/app/api/telegram/webhook/route.ts), the producer
+// stashes routing metadata under `input._meta = { source: 'telegram',
+// telegram_chat_id, telegram_message_id }`. After the run succeeds (or fails)
+// we fire one Telegram message back to that chat so Dylan sees the result on
+// his phone without opening the dashboard. We use a dynamic import for
+// `@/lib/telegram` so the type/build is decoupled from Agent A's parallel work
+// — and so a Telegram outage can't take down the workflow runner.
 
 import { createClient } from "@supabase/supabase-js"
 import { inngest, EVENT_RUN_QUEUED, EVENT_RUN_APPROVAL, EVENT_RUN_ABORTED, type RunQueuedEvent } from "@/lib/inngest/client"
@@ -57,6 +66,69 @@ interface StepContext {
   dry_run: boolean
   parent_step_id?: string | null
   iteration?: number
+}
+
+/** Trigger metadata threaded through `input._meta` by the producer. The
+ *  workflow_runs table has no dedicated `metadata` column (per migration
+ *  20260427_agent_workflows.sql) so callers piggyback on `input`. */
+interface TriggerMeta {
+  source?: "telegram" | "api" | "schedule" | "manual" | "test" | string
+  telegram_chat_id?: string | number
+  telegram_message_id?: number
+}
+
+function extractMeta(input: Record<string, unknown>): TriggerMeta {
+  const m = (input as { _meta?: unknown })._meta
+  if (m && typeof m === "object") return m as TriggerMeta
+  return {}
+}
+
+/** Pull a human-readable reply string out of the run's vars. We look at the
+ *  graph's last agent node's `output_var` first, then common names ("reply",
+ *  "answer", "text", "draft"), then fall back to a JSON dump. */
+function extractFinalReply(graph: WorkflowGraph, vars: Record<string, unknown>): string {
+  const stringify = (v: unknown): string => {
+    if (typeof v === "string") return v
+    if (v == null) return ""
+    if (typeof v === "object") {
+      const obj = v as Record<string, unknown>
+      // Agent-runner often returns { text } or { reply } or { content }.
+      if (typeof obj.text === "string") return obj.text
+      if (typeof obj.reply === "string") return obj.reply
+      if (typeof obj.content === "string") return obj.content
+      if (typeof obj.message === "string") return obj.message
+      try { return JSON.stringify(v, null, 2) } catch { return String(v) }
+    }
+    return String(v)
+  }
+
+  // Walk nodes in declared order; remember the last agent node's output_var.
+  let lastVar: string | undefined
+  for (const n of graph.nodes) {
+    if (n.type === "agent") {
+      const ov = (n.data as { output_var?: string }).output_var
+      if (ov) lastVar = ov
+    }
+  }
+  if (lastVar && lastVar in vars) {
+    const out = stringify(vars[lastVar])
+    if (out) return out
+  }
+  for (const k of ["reply", "answer", "text", "draft", "content", "result"]) {
+    if (k in vars) {
+      const out = stringify(vars[k])
+      if (out) return out
+    }
+  }
+  // Last resort: dump everything except internal `_meta`.
+  const { _meta: _omit, ...rest } = vars as { _meta?: unknown } & Record<string, unknown>
+  void _omit
+  try { return JSON.stringify(rest, null, 2) } catch { return String(rest) }
+}
+
+function truncateForTelegram(text: string, max = 3500): string {
+  if (text.length <= max) return text
+  return text.slice(0, max - 100) + "\n\n…(truncated)"
 }
 
 async function recordStep(
@@ -159,6 +231,7 @@ export const runWorkflow = inngest.createFunction(
   { event: EVENT_RUN_QUEUED },
   async ({ event, step, logger }) => {
     const { run_id, workflow_id, input, dry_run = false } = (event as RunQueuedEvent).data
+    const meta = extractMeta(input || {})
 
     const wf = await step.run("load-workflow", async () => {
       const { data, error } = await supabase
@@ -195,6 +268,24 @@ export const runWorkflow = inngest.createFunction(
           error: "Workflow has no Trigger node",
         }).eq("id", run_id)
       })
+      // Still ping Telegram so the user isn't left hanging.
+      if (meta.source === "telegram" && meta.telegram_chat_id) {
+        await step.run("notify-telegram-on-no-entry", async () => {
+          try {
+            const { sendTelegram } = await import("@/lib/telegram")
+            await sendTelegram(
+              `❌ *Run failed*\n\nWorkflow has no Trigger node.\n\n_Run \`${run_id}\`_`,
+              {
+                chatId: meta.telegram_chat_id,
+                parseMode: "Markdown",
+                replyToMessageId: meta.telegram_message_id,
+              },
+            )
+          } catch (e) {
+            logger.error("Telegram notify (no-entry) failed", { run_id, err: (e as Error).message })
+          }
+        })
+      }
       return { ok: false, error: "no-entry" }
     }
 
@@ -216,6 +307,28 @@ export const runWorkflow = inngest.createFunction(
         }).eq("id", workflow_id)
       })
 
+      // ── Telegram: round-trip the final reply back to the chat that asked.
+      if (meta.source === "telegram" && meta.telegram_chat_id) {
+        await step.run("notify-telegram-on-complete", async () => {
+          try {
+            const { sendTelegram } = await import("@/lib/telegram")
+            const reply = extractFinalReply(graph, ctx.vars)
+            const body = truncateForTelegram(reply || "(no reply produced)")
+            await sendTelegram(
+              `✅ *Done!*\n\n${body}\n\n_Run \`${run_id}\`_`,
+              {
+                chatId: meta.telegram_chat_id,
+                parseMode: "Markdown",
+                replyToMessageId: meta.telegram_message_id,
+              },
+            )
+          } catch (e) {
+            // Never let a Telegram blip mark the run as failed — it succeeded.
+            logger.error("Telegram notify (complete) failed", { run_id, err: (e as Error).message })
+          }
+        })
+      }
+
       // Fire-and-forget: have the summarizer write a plain-English summary.
       await step.sendEvent("queue-summary", {
         name: "workflow/run.summarize",
@@ -228,6 +341,23 @@ export const runWorkflow = inngest.createFunction(
         await step.run("mark-budget-exceeded", async () => {
           await markRunBudgetExceeded(run_id, err)
         })
+        if (meta.source === "telegram" && meta.telegram_chat_id) {
+          await step.run("notify-telegram-on-budget", async () => {
+            try {
+              const { sendTelegram } = await import("@/lib/telegram")
+              await sendTelegram(
+                `⚠️ *Budget cap hit*\n\n${err.message}\n\n_Run \`${run_id}\`_`,
+                {
+                  chatId: meta.telegram_chat_id,
+                  parseMode: "Markdown",
+                  replyToMessageId: meta.telegram_message_id,
+                },
+              )
+            } catch (e) {
+              logger.error("Telegram notify (budget) failed", { run_id, err: (e as Error).message })
+            }
+          })
+        }
         return { ok: false, run_id, budget: err.layer, error: err.message }
       }
       logger.error("Workflow run failed", { run_id, workflow_id, err: (err as Error).message })
@@ -238,6 +368,24 @@ export const runWorkflow = inngest.createFunction(
           error: (err as Error).message?.slice(0, 1000),
         }).eq("id", run_id)
       })
+      if (meta.source === "telegram" && meta.telegram_chat_id) {
+        await step.run("notify-telegram-on-failure", async () => {
+          try {
+            const { sendTelegram } = await import("@/lib/telegram")
+            const errMsg = ((err as Error).message || "Unknown error").slice(0, 800)
+            await sendTelegram(
+              `❌ *Run failed*\n\n${errMsg}\n\n_Run \`${run_id}\`_`,
+              {
+                chatId: meta.telegram_chat_id,
+                parseMode: "Markdown",
+                replyToMessageId: meta.telegram_message_id,
+              },
+            )
+          } catch (e) {
+            logger.error("Telegram notify (failure) failed", { run_id, err: (e as Error).message })
+          }
+        })
+      }
       throw err // let Inngest retries kick in
     }
 
