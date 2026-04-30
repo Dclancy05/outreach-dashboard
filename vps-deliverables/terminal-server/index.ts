@@ -38,10 +38,18 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { spawn, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync } from "node:fs"
-import { homedir } from "node:os"
 import { join } from "node:path"
 import { WebSocketServer, type WebSocket } from "ws"
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
+
+// Strip anything that isn't [a-zA-Z0-9-] from a string before putting it in a
+// log line. Defends against log-injection — even though our ids are UUIDs in
+// practice, any path that lets a request body's value reach a log call is a
+// CodeQL hit, so we sanitize at the boundary.
+function safe(s: unknown): string {
+  if (typeof s !== "string") return String(s)
+  return s.replace(/[^a-zA-Z0-9_-]/g, "")
+}
 
 const PORT = parseInt(process.env.PORT || "10002", 10)
 const HOST = process.env.HOST || "127.0.0.1"
@@ -173,14 +181,14 @@ async function dbInsert(s: Session): Promise<void> {
     created_at: new Date(s.createdAt).toISOString(),
     last_activity_at: new Date(s.lastActivityAt).toISOString(),
   }).then(({ error }) => {
-    if (error) console.warn(`[terminal-server] db insert ${s.id} failed:`, error.message)
+    if (error) console.warn(`[terminal-server] db insert ${safe(s.id)} failed:`, error.message)
   })
 }
 
 async function dbUpdate(id: string, patch: Record<string, unknown>): Promise<void> {
   if (!supa) return
   await supa.from("terminal_sessions").update(patch).eq("id", id).then(({ error }) => {
-    if (error) console.warn(`[terminal-server] db update ${id} failed:`, error.message)
+    if (error) console.warn(`[terminal-server] db update ${safe(id)} failed:`, error.message)
   })
 }
 
@@ -243,7 +251,7 @@ function createSession(input: CreateInput): Session {
   }
   sessions.set(id, session)
   void dbInsert(session)
-  console.log(`[terminal-server] session ${id} created: branch=${branch}`)
+  console.log(`[terminal-server] session ${safe(id)} created: branch=${safe(branch)}`)
   return session
 }
 
@@ -254,21 +262,49 @@ function killSession(id: string): boolean {
   removeWorktree(s.worktreePath, s.branch)
   sessions.delete(id)
   void dbUpdate(id, { status: "stopped", finished_at: new Date().toISOString() })
-  console.log(`[terminal-server] session ${id} killed`)
+  console.log(`[terminal-server] session ${safe(id)} killed`)
   return true
 }
 
 // ─── HTTP routing ──────────────────────────────────────────────────────────
 
+// Allowlist of origins that may hit this service from a browser. Production
+// dashboard + Vercel preview deploys + local dev. Setting `*` would work too
+// since this service is bearer-token gated (not cookie-gated) and never sets
+// `Access-Control-Allow-Credentials`, but explicit allowlist is safer + makes
+// CodeQL happy. Add custom domains via env var if needed.
+const ALLOWED_ORIGIN_SUFFIXES = [
+  ".vercel.app",        // preview deploys
+  "outreach-github.vercel.app",
+  ...(process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
+]
+function originAllowed(origin: string | undefined): boolean {
+  if (!origin) return false
+  if (origin === "http://localhost:3000" || origin === "http://127.0.0.1:3000") return true
+  try {
+    const host = new URL(origin).host
+    return ALLOWED_ORIGIN_SUFFIXES.some(
+      (suf) => host === suf || host.endsWith(suf),
+    )
+  } catch {
+    return false
+  }
+}
+
 const server = createServer(async (req, res) => {
-  // CORS — the dashboard origin will hit us cross-origin via Tailscale Funnel.
-  // We don't know the exact origin (preview deploys vary), so reflect it back.
-  // This service is auth-gated by Bearer token, so a permissive CORS is fine.
-  const origin = (req.headers.origin as string | undefined) || "*"
-  res.setHeader("access-control-allow-origin", origin)
-  res.setHeader("access-control-allow-credentials", "true")
-  res.setHeader("access-control-allow-methods", "GET, POST, PATCH, DELETE, OPTIONS")
-  res.setHeader("access-control-allow-headers", "authorization, content-type")
+  // CORS — bearer-token-gated, no credentials. Echo the origin only when it's
+  // in the allowlist; otherwise the response has no CORS headers and the
+  // browser blocks it. This avoids CodeQL's CORS-reflection warning.
+  const origin = (req.headers.origin as string | undefined) || ""
+  if (originAllowed(origin)) {
+    res.setHeader("access-control-allow-origin", origin)
+    res.setHeader("vary", "origin")
+    res.setHeader("access-control-allow-methods", "GET, POST, PATCH, DELETE, OPTIONS")
+    res.setHeader("access-control-allow-headers", "authorization, content-type")
+  }
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return }
 
   const url = req.url || ""
@@ -433,7 +469,7 @@ function attachToSession(ws: WebSocket, s: Session): void {
   })
 
   ws.on("error", (err) => {
-    console.warn(`[terminal-server] ws error on ${s.id}:`, err.message)
+    console.warn(`[terminal-server] ws error on ${safe(s.id)}:`, err.message)
   })
 }
 
