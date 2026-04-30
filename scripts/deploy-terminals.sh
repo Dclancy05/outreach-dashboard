@@ -100,18 +100,59 @@ elif curl -s -o /dev/null -w "%{http_code}" \
       "$SUPABASE_URL/rest/v1/terminal_events?limit=1" 2>/dev/null | grep -q "200"; then
   ok "Migrations already applied (terminal_events table exists)"
 else
-  # Three paths to apply DDL, in preference order:
-  #   1. psql + a Postgres URL from .env.vercel.prod (Vercel-Supabase integration)
-  #   2. macOS pbcopy + open Supabase SQL editor in browser → user pastes
-  #   3. Print file paths for fully manual paste
+  # Four paths to apply DDL, in preference order (each attempts only if the
+  # previous wasn't available):
+  #   1. Supabase Management API + SUPABASE_ACCESS_TOKEN (best — fully automatic)
+  #   2. psql + a Postgres URL from .env.vercel.prod (Vercel-Supabase integration)
+  #   3. macOS pbcopy + open Supabase SQL editor in browser → user pastes
+  #   4. Print file paths for fully manual paste
+  PROJECT_REF=$(echo "$SUPABASE_URL" | sed 's|https://||; s|\..*||')
+
+  # Path 1: Supabase Management API (the cleanest — apply DDL via HTTPS).
+  # Token format: sbp_<long string>. Get one at:
+  #   https://supabase.com/dashboard/account/tokens
+  # Stored either as env var, in .env.vercel.prod, or in ~/.supabase-access-token
+  SBP_TOKEN="${SUPABASE_ACCESS_TOKEN:-}"
+  [[ -z "$SBP_TOKEN" ]] && SBP_TOKEN=$(grep '^SUPABASE_ACCESS_TOKEN=' .env.vercel.prod 2>/dev/null | head -1 | sed 's/^[^=]*=//' | tr -d '"' | sed 's/\\n//g')
+  [[ -z "$SBP_TOKEN" && -f "$HOME/.supabase-access-token" ]] && SBP_TOKEN=$(cat "$HOME/.supabase-access-token" | tr -d '\n')
+
+  if [[ -n "$SBP_TOKEN" ]]; then
+    if ask "Apply 3 migrations via Supabase Management API?"; then
+      for m in supabase/migrations/20260430_terminal_sessions.sql \
+               supabase/migrations/20260430_terminal_sessions_phase_b.sql \
+               supabase/migrations/20260430_terminal_sessions_phase_c.sql; do
+        echo "  applying $m..."
+        # Send each file as one query. Management API expects {"query": "..."}.
+        sql=$(cat "$m")
+        body=$(jq -nc --arg q "$sql" '{query: $q}')
+        resp=$(curl -s -w "\n%{http_code}" \
+          -X POST "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+          -H "Authorization: Bearer $SBP_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "$body")
+        code=$(echo "$resp" | tail -1)
+        if [[ "$code" != "200" && "$code" != "201" ]]; then
+          fail "migration $m failed (HTTP $code): $(echo "$resp" | head -n -1 | head -c 300)"
+        fi
+      done
+      ok "All 3 migrations applied via Management API"
+    fi
+  elif false; then :  # placeholder so the elif chain below stays readable
+  fi
+
   PG_URL=""
   for v in POSTGRES_URL_NON_POOLING POSTGRES_PRISMA_URL POSTGRES_URL DATABASE_URL SUPABASE_DB_URL; do
     val=$(grep "^${v}=" .env.vercel.prod 2>/dev/null | head -1 | sed 's/^[^=]*=//' | tr -d '"' | sed 's/\\n//g')
     [[ -n "$val" ]] && { PG_URL="$val"; break; }
   done
-  PROJECT_REF=$(echo "$SUPABASE_URL" | sed 's|https://||; s|\..*||')
 
-  if command -v psql >/dev/null 2>&1 && [[ -n "$PG_URL" ]]; then
+  # Re-check whether tables exist after path 1 attempted; skip remaining paths if so.
+  STILL_NEEDED=$(curl -s -o /dev/null -w "%{http_code}" \
+      -H "apikey: $SUPABASE_SR_KEY" -H "Authorization: Bearer $SUPABASE_SR_KEY" \
+      "$SUPABASE_URL/rest/v1/terminal_events?limit=1" 2>/dev/null)
+  if [[ "$STILL_NEEDED" == "200" ]]; then
+    ok "Migrations applied"
+  elif command -v psql >/dev/null 2>&1 && [[ -n "$PG_URL" ]]; then
     if ask "Apply 3 migrations via psql?"; then
       for m in supabase/migrations/20260430_terminal_sessions.sql \
                supabase/migrations/20260430_terminal_sessions_phase_b.sql \

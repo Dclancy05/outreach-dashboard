@@ -21,6 +21,21 @@ done.
   locations are `/root/.local/bin/claude` or `/usr/local/bin/claude`. Whatever
   you find, set `DEFAULT_TERMINAL_COMMAND` in the systemd unit below.
 
+## One-time setup: Supabase access token (so future migrations are auto)
+
+Without this, `scripts/deploy-terminals.sh` falls back to opening the Supabase
+SQL editor in your browser and asking you to paste. With it, migrations apply
+fully automatically over HTTPS.
+
+1. Open https://supabase.com/dashboard/account/tokens
+2. Click **Generate new token**, name it `claude-deploy`
+3. Copy the `sbp_...` value
+4. Save it to either of:
+   - `~/.supabase-access-token` (file) — `echo "sbp_xxx" > ~/.supabase-access-token && chmod 600 ~/.supabase-access-token`
+   - Vercel project env var `SUPABASE_ACCESS_TOKEN` — `vercel env add SUPABASE_ACCESS_TOKEN production` (then re-run `vercel env pull .env.vercel.prod`)
+
+Both work; the home-dir file is simpler and doesn't pollute your Vercel env.
+
 ## Deploy steps
 
 Run from your local machine.
