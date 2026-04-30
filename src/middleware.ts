@@ -11,6 +11,12 @@ const PUBLIC_ROUTES = [
   "/api/docs/",
   "/security",
   "/.well-known/",
+  // External-callback routes — these are auth-gated by their own caller-supplied
+  // secret tokens (Telegram's X-Telegram-Bot-Api-Secret-Token, Inngest's signed
+  // requests), so the admin cookie middleware here would just block legitimate
+  // platform calls.
+  "/api/webhooks/",
+  "/api/inngest",
 ]
 
 const VA_ROUTES = ["/va", "/va-queue", "/api/team", "/api/businesses", "/api/leads", "/api/activity", "/api/lead-activity", "/api/proxy-groups", "/api/dashboard", "/api/warmup"]
