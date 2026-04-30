@@ -115,10 +115,20 @@ export async function triggerWorkflowBySlug(
     throw new Error(`Failed to insert workflow_run: ${error?.message || "unknown"}`)
   }
 
-  await inngest.send({
-    name: EVENT_RUN_QUEUED,
-    data: { run_id: run.id, workflow_id: workflow.id, input: runInput },
-  })
+  // Inngest cloud may not be configured in this environment (no
+  // INNGEST_EVENT_KEY). Don't let a missing-key throw kill the caller — the
+  // webhook's synchronous executor will still run the workflow.
+  try {
+    await inngest.send({
+      name: EVENT_RUN_QUEUED,
+      data: { run_id: run.id, workflow_id: workflow.id, input: runInput },
+    })
+  } catch (e) {
+    console.warn(
+      "[run-helper] inngest.send failed (continuing — sync executor will run the workflow):",
+      (e as Error).message,
+    )
+  }
 
   return { run_id: run.id, workflow_id: workflow.id }
 }

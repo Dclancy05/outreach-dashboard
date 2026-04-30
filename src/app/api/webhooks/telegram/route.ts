@@ -59,6 +59,11 @@ import {
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+// Allow up to 2 minutes per request — the synchronous workflow executor calls
+// the agent-runner which can take 30-60s for a single Claude reply. Without
+// this, the function defaults to 10s (Hobby) / 60s (Pro) and gets killed
+// mid-flight, leaving runs stuck in `running` and Dylan with no reply.
+export const maxDuration = 120
 
 const QUICK_ASK_SLUG = "quick-ask"
 const SECRET_HEADER = "x-telegram-bot-api-secret-token"
