@@ -19,12 +19,13 @@
  * unmount the xterm.js instance to keep RAM bounded.
  */
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Plus, Loader2, Square, LayoutGrid, Maximize2 } from "lucide-react"
+import { Plus, Loader2, Square, LayoutGrid, Maximize2, PanelRightClose, PanelRightOpen } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { SessionList, type SessionRow } from "@/components/terminals/session-list"
+import { ActivityFeed } from "@/components/terminals/activity-feed"
 import { TerminalPane } from "@/components/terminals/terminal-pane"
 
 interface CreateResponse {
@@ -70,6 +71,12 @@ export function TerminalsWorkspace() {
    *  computes a soft cap; we surface "x of y" + disable + Newterminal when
    *  full. Falls back to the hard cap if the VPS doesn't return capacity. */
   const [capacity, setCapacity] = useState<{ active: number; hard_max: number; soft_max: number } | null>(null)
+  /** Right rail Activity Feed visibility. Saved to localStorage so it stays
+   *  open across reloads. */
+  const [activityOpen, setActivityOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true
+    return window.localStorage.getItem("terminals.activityOpen") !== "false"
+  })
 
   // ─── Data fetch ────────────────────────────────────────────────────
 
@@ -314,10 +321,25 @@ export function TerminalsWorkspace() {
             <Square className="w-3.5 h-3.5 mr-1.5" />
             Stop all
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setActivityOpen((v) => {
+                const next = !v
+                try { window.localStorage.setItem("terminals.activityOpen", String(next)) } catch { /* */ }
+                return next
+              })
+            }}
+            className="hidden lg:inline-flex text-zinc-400 hover:text-amber-100 hover:bg-amber-500/10"
+            title={activityOpen ? "Hide activity feed" : "Show activity feed"}
+          >
+            {activityOpen ? <PanelRightClose className="w-3.5 h-3.5" /> : <PanelRightOpen className="w-3.5 h-3.5" />}
+          </Button>
         </div>
       </div>
 
-      {/* Body: sidebar + grid */}
+      {/* Body: sidebar + grid + activity feed */}
       <div className="flex-1 flex min-h-0">
         {/* Sidebar */}
         <div className="w-[260px] sm:w-[300px] shrink-0 border-r border-zinc-800/60 overflow-hidden flex flex-col">
@@ -330,6 +352,15 @@ export function TerminalsWorkspace() {
             onStop={stopSession}
           />
         </div>
+
+        {/* Right rail: Activity Feed (collapsible) */}
+        {activityOpen && (
+          <div className="hidden lg:flex w-[300px] xl:w-[340px] shrink-0 border-l border-zinc-800/60 overflow-hidden flex-col order-last">
+            <ActivityFeed
+              sessionTitles={Object.fromEntries(sessions.map((s) => [s.id, s.title]))}
+            />
+          </div>
+        )}
 
         {/* Grid */}
         <div className="flex-1 min-w-0 p-2">

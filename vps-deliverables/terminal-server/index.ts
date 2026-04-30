@@ -296,6 +296,11 @@ interface CreateInput {
   title?: string
   command?: string
   initial_prompt?: string
+  /** When true, prepend a one-paragraph sibling-awareness prompt to
+   *  initial_prompt so claude knows where to read /dev/shm/terminal-siblings/<id>.md.
+   *  Default false — the dashboard opts in for spawn flows that explicitly
+   *  want coordinated work; default-spawned terminals stay clean. */
+  inject_sibling_prompt?: boolean
 }
 
 function createSession(input: CreateInput): Session {
@@ -345,9 +350,14 @@ function createSession(input: CreateInput): Session {
       throw new Error(`tmux new-session failed: ${r.stderr || r.stdout}`)
     }
 
-    if (input.initial_prompt) {
+    let firstMessage = input.initial_prompt || ""
+    if (input.inject_sibling_prompt) {
+      const sibling = defaultSiblingPrompt(id)
+      firstMessage = firstMessage ? `${sibling}\n\n---\n\n${firstMessage}` : sibling
+    }
+    if (firstMessage) {
       // -l = literal, so meta-characters in the prompt aren't interpreted.
-      spawnSync("tmux", ["-f", TMUX_CONF_PATH, "send-keys", "-t", name, "-l", input.initial_prompt])
+      spawnSync("tmux", ["-f", TMUX_CONF_PATH, "send-keys", "-t", name, "-l", firstMessage])
       spawnSync("tmux", ["-f", TMUX_CONF_PATH, "send-keys", "-t", name, "Enter"])
     }
 
@@ -363,6 +373,7 @@ function createSession(input: CreateInput): Session {
     }
     sessions.set(id, session)
     void dbInsert(session)
+    void emitEvent(id, "created", { title: session.title, branch: session.branch })
     console.log("[terminal-server] session created", { id: safe(id), branch: safe(worktree.branch) })
     return session
   } catch (e) {
@@ -392,6 +403,7 @@ function killSession(id: string): boolean {
   removeWorktree(s.worktreePath, s.branch, false)
   sessions.delete(id)
   void dbUpdate(id, { status: "stopped", finished_at: new Date().toISOString() })
+  void emitEvent(id, "stopped", { branch: s.branch })
   console.log("[terminal-server] session killed", { id: safe(id) })
   return true
 }
@@ -489,7 +501,7 @@ const server = createServer(async (req, res) => {
       for (const row of (data || []) as DbRow[]) dbMeta.set(row.id, row)
     }
     const out = Array.from(sessions.values()).map((s) => {
-      const m = dbMeta.get(s.id) || {}
+      const m: Partial<DbRow> = dbMeta.get(s.id) || {}
       return {
         id: s.id,
         title: s.title,
@@ -828,6 +840,7 @@ async function costTickOne(s: Session): Promise<void> {
     spawnSync("tmux", ["-f", TMUX_CONF_PATH, "send-keys", "-t", s.tmuxName, "C-c"])
     spawnSync("tmux", ["-f", TMUX_CONF_PATH, "send-keys", "-t", s.tmuxName, "C-c"])
     await dbUpdate(s.id, { status: "paused", paused_reason: `cost cap $${cap_usd} reached ($${newCost.toFixed(2)})` })
+    await emitEvent(s.id, "cost_cap_tripped", { cost_usd: newCost, cap_usd })
     void notifyTelegram(
       `⛔ *Terminal paused — cost cap*\n` +
         `Session: \`${safe(s.title)}\`\n` +
@@ -865,6 +878,7 @@ async function wallclockWatcherTick(): Promise<void> {
     const ageMin = (Date.now() - new Date(r.created_at).getTime()) / 60_000
     if (ageMin < capMin) continue
     await dbUpdate(r.id, { wallclock_warned_at: new Date().toISOString() })
+    await emitEvent(r.id, "wallclock_warning", { age_min: Math.round(ageMin), cap_min: capMin })
     void notifyTelegram(
       `⏰ *Terminal still running*\n` +
         `Session: \`${safe(r.title)}\`\n` +
@@ -895,6 +909,7 @@ async function crashWatcherTick(): Promise<void> {
     const cmd = (data?.command as string | null) || s.command
     if (prevCrashes >= 1) {
       await dbUpdate(id, { status: "crashed", crashes: prevCrashes + 1, finished_at: new Date().toISOString() })
+      await emitEvent(id, "crashed", { crashes: prevCrashes + 1, will_respawn: false })
       void notifyTelegram(
         `💥 *Terminal crashed twice — staying down*\n` +
           `Session: \`${safe(s.title)}\`\n` +
@@ -935,6 +950,7 @@ async function crashWatcherTick(): Promise<void> {
     s.pendingKill = false
     sessions.set(id, s)
     await dbUpdate(id, { status: "running", crashes: prevCrashes + 1 })
+    await emitEvent(id, "respawned", { crashes: prevCrashes + 1 })
     void notifyTelegram(
       `🔁 *Terminal crashed — respawned with \`--continue\`*\n` +
         `Session: \`${safe(s.title)}\`\n` +
@@ -944,11 +960,129 @@ async function crashWatcherTick(): Promise<void> {
   }
 }
 
+// ─── Event log + sibling awareness ────────────────────────────────────────
+//
+// terminal_events is an append-only log feeding the dashboard's right-rail
+// activity feed. Each watcher inserts when it does something interesting.
+// Best-effort: failures log and move on, never block the watcher.
+
+async function emitEvent(sessionId: string, kind: string, payload: Record<string, unknown> = {}): Promise<void> {
+  if (!supa) return
+  await supa.from("terminal_events").insert({
+    session_id: sessionId,
+    kind,
+    payload,
+  }).then(({ error }) => {
+    if (error) console.warn("[terminal-server] event insert failed", { kind: safe(kind), err: error.message })
+  })
+}
+
+// Sibling-awareness state is written to /dev/shm/terminal-siblings/<id>.md
+// (tmpfs, not in any worktree). The dashboard tells each spawned `claude`
+// to read this file periodically via the initial_prompt convention. Why
+// /dev/shm instead of <worktree>/SIBLINGS.md? — writing into the worktree
+// would create a tracked file change git status surfaces, polluting every
+// session's `git diff`. /dev/shm is fast and per-boot ephemeral.
+
+const SIBLING_DIR = "/dev/shm/terminal-siblings"
+
+function buildSiblingMarkdown(forSession: Session, others: Session[]): string {
+  const lines: string[] = []
+  lines.push(`# Sibling agents (auto-updated every 30s)`)
+  lines.push("")
+  lines.push(`You are session \`${forSession.id.slice(0, 8)}\` working in branch \`${forSession.branch}\`.`)
+  lines.push("")
+  if (others.length === 0) {
+    lines.push("_No other sessions are running right now — you're the only one._")
+    return lines.join("\n")
+  }
+  lines.push(`There are ${others.length} other terminal session(s) active. Avoid editing files they are touching unless you coordinate (commit your work first, ask them to commit, etc.).`)
+  lines.push("")
+  for (const o of others) {
+    lines.push(`## \`${o.title}\` — branch \`${o.branch}\``)
+    lines.push("")
+    const ageMin = Math.round((Date.now() - o.lastActivityAt) / 60_000)
+    lines.push(`- Last activity: ${ageMin} min ago`)
+    lines.push("")
+  }
+  return lines.join("\n")
+}
+
+async function siblingWriterTick(): Promise<void> {
+  const list = Array.from(sessions.values())
+  if (list.length === 0) return
+  try {
+    if (!existsSync(SIBLING_DIR)) mkdirSync(SIBLING_DIR, { recursive: true })
+  } catch (e) {
+    console.warn("[terminal-server] sibling dir unavailable:", (e as Error).message)
+    return
+  }
+
+  // Track each session's files_touched by running git status in its worktree.
+  // We update the DB row and emit `file_touched` events for any new entries.
+  const filesByPort = new Map<string, string[]>()
+  for (const s of list) {
+    try {
+      const r = spawnSync("git", ["-C", s.worktreePath, "status", "--porcelain"], { encoding: "utf8" })
+      if (r.status !== 0) continue
+      const files = r.stdout.split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        // Drop the 2-char status prefix tmux git status emits.
+        .map((line) => line.length > 3 ? line.slice(3).trim() : line)
+        .filter((f) => !!f)
+      filesByPort.set(s.id, files)
+    } catch { /* git missing or worktree gone — best effort */ }
+  }
+  // Write the per-session markdown.
+  const { writeFileSync } = await import("node:fs")
+  for (const s of list) {
+    const others = list.filter((o) => o.id !== s.id)
+    const md = buildSiblingMarkdown(s, others)
+    try {
+      writeFileSync(join(SIBLING_DIR, `${s.id}.md`), md, "utf8")
+    } catch { /* */ }
+  }
+  // Diff files_touched against last DB value, insert events for new files.
+  if (supa) {
+    for (const [id, files] of filesByPort) {
+      const { data } = await supa.from("terminal_sessions").select("files_touched").eq("id", id).maybeSingle()
+      const prev = (data?.files_touched as string[] | null) || []
+      const added = files.filter((f) => !prev.includes(f))
+      if (added.length > 0) {
+        await dbUpdate(id, { files_touched: files })
+        for (const f of added.slice(0, 5)) {
+          await emitEvent(id, "file_changed", { path: f })
+        }
+      } else if (prev.length !== files.length) {
+        // Removed (committed/discarded) files — just sync, no event.
+        await dbUpdate(id, { files_touched: files })
+      }
+    }
+  }
+}
+
+// Initial prompt template for new sessions — tells the agent where its
+// sibling-state file is and to check it. Ships to claude as the first user
+// message via tmux send-keys. Imperfect (uses up the first turn) but the
+// only way to instrument an interactive `claude` session without modifying
+// the worktree's CLAUDE.md.
+function defaultSiblingPrompt(id: string): string {
+  return [
+    `You are running in a multi-terminal workspace. Other sibling agents may be working on different features in parallel branches.`,
+    ``,
+    `Before any significant edit, read \`/dev/shm/terminal-siblings/${id}.md\` to see what your siblings are doing. If a sibling is editing the same file, commit your work first or coordinate via the user.`,
+    ``,
+    `Your worktree is checked out on its own branch — your edits don't conflict with main until merge time.`,
+  ].join("\n")
+}
+
 function startWatchers(): void {
   setInterval(() => { void costWatcherTick() }, 60_000).unref()
   setInterval(() => { void wallclockWatcherTick() }, 5 * 60_000).unref()
   setInterval(() => { void crashWatcherTick() }, 30_000).unref()
-  console.log("[terminal-server] watchers started: cost(60s) wallclock(5m) crash(30s)")
+  setInterval(() => { void siblingWriterTick() }, 30_000).unref()
+  console.log("[terminal-server] watchers started: cost(60s) wallclock(5m) crash(30s) siblings(30s)")
 }
 
 // ─── Boot ──────────────────────────────────────────────────────────────────
