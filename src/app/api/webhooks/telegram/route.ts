@@ -161,7 +161,7 @@ function parseCommand(rawText: string): ParsedCommand {
         "🛑 */kill <id>*",
         "Stop a terminal. ID = first 8 chars from `/terminals`.",
         "",
-        "*Web compose page:* outreach-github.vercel.app/agency/send",
+        "*Web workspace:* outreach-github.vercel.app/agency/terminals",
       ].join("\n"),
     }
   }

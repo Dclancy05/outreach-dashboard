@@ -19,7 +19,8 @@
  * unmount the xterm.js instance to keep RAM bounded.
  */
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Plus, Loader2, Square, LayoutGrid, Maximize2, PanelRightClose, PanelRightOpen } from "lucide-react"
+import { Plus, Loader2, Square, Maximize2, PanelRightClose, PanelRightOpen, TerminalSquare, Zap, Server, KeyRound, AlertTriangle } from "lucide-react"
+import Link from "next/link"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -256,13 +257,11 @@ export function TerminalsWorkspace() {
   return (
     <div className="flex flex-col h-full bg-zinc-950">
       {/* Top bar */}
-      <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-zinc-800/60 shrink-0 bg-zinc-950/90 backdrop-blur">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-zinc-800/60 shrink-0 bg-zinc-950/90 backdrop-blur">
         <div className="flex items-center gap-2">
-          <span className="text-zinc-400 text-sm">🖥️</span>
-          <span className="text-sm font-semibold text-zinc-100">Terminals</span>
-          <span className="text-[11px] text-zinc-500">
-            {sessions.length} active
-          </span>
+          <TerminalSquare className="w-5 h-5 text-cyan-400" />
+          <h1 className="text-lg font-semibold text-zinc-100">Terminals</h1>
+          <span className="text-xs text-zinc-500 hidden sm:inline">— parallel claudes that survive your laptop close</span>
         </div>
         <div className="flex items-center gap-1">
           {/* Layout selector */}
@@ -274,7 +273,7 @@ export function TerminalsWorkspace() {
                 className={cn(
                   "px-2 py-1 text-[11px] rounded transition-colors",
                   layout === l.n
-                    ? "bg-amber-500/20 text-amber-100"
+                    ? "bg-cyan-500/20 text-cyan-100"
                     : "text-zinc-400 hover:text-zinc-100",
                 )}
                 title={l.label}
@@ -289,14 +288,14 @@ export function TerminalsWorkspace() {
             </span>
           )}
           <Button
-            variant="ghost"
             size="sm"
             onClick={createSession}
             disabled={
               creating ||
-              (capacity ? sessions.length >= capacity.soft_max : sessions.length >= 8)
+              (capacity ? sessions.length >= capacity.soft_max : sessions.length >= 8) ||
+              !!error
             }
-            className="text-zinc-300 hover:text-amber-100 hover:bg-amber-500/10"
+            className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-100 border border-cyan-500/30 disabled:opacity-50"
             title={
               capacity && sessions.length >= capacity.soft_max
                 ? `VPS at capacity (${capacity.active}/${capacity.soft_max}) — stop a session first`
@@ -331,7 +330,7 @@ export function TerminalsWorkspace() {
                 return next
               })
             }}
-            className="hidden lg:inline-flex text-zinc-400 hover:text-amber-100 hover:bg-amber-500/10"
+            className="hidden lg:inline-flex text-zinc-400 hover:text-cyan-100 hover:bg-cyan-500/10"
             title={activityOpen ? "Hide activity feed" : "Show activity feed"}
           >
             {activityOpen ? <PanelRightClose className="w-3.5 h-3.5" /> : <PanelRightOpen className="w-3.5 h-3.5" />}
@@ -363,36 +362,46 @@ export function TerminalsWorkspace() {
         )}
 
         {/* Grid */}
-        <div className="flex-1 min-w-0 p-2">
-          {error && (
-            <Card className="p-4 m-2 border-red-900/50 bg-red-950/20 text-red-300 text-sm">
-              <div className="font-medium mb-1">Couldn&apos;t reach the terminal-server</div>
-              <div className="text-xs text-zinc-400 break-all">{error}</div>
-              <div className="text-xs text-zinc-500 mt-2">
-                Set <code className="bg-zinc-800/60 px-1 rounded">TERMINAL_RUNNER_URL</code> and{" "}
-                <code className="bg-zinc-800/60 px-1 rounded">TERMINAL_RUNNER_TOKEN</code> in the API Keys tab.
-              </div>
-            </Card>
-          )}
+        <div className="flex-1 min-w-0 p-3">
+          {error && <SetupOrErrorCard error={error} />}
 
           {!error && visibleSessions.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-sm text-center px-6">
-              <LayoutGrid className="w-8 h-8 mb-3 text-zinc-700" />
-              <div className="text-base font-medium text-zinc-300 mb-1">
+            <div className="flex flex-col items-center justify-center h-full text-center px-6">
+              <div className="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center mb-5">
+                <TerminalSquare className="w-7 h-7 text-cyan-400" />
+              </div>
+              <div className="text-xl font-semibold text-zinc-100 mb-2">
                 {sessions.length === 0
-                  ? "No terminals yet"
+                  ? "Your parallel-claude workspace"
                   : "Pick a terminal from the sidebar"}
               </div>
-              <div className="text-xs text-zinc-500 max-w-md">
-                {sessions.length === 0
-                  ? "Each terminal runs in its own git branch on the VPS. Close your laptop — they keep going. Reopen — they're still there."
-                  : "Or change the layout to show multiple at once."}
+              <div className="text-sm text-zinc-400 max-w-lg leading-relaxed">
+                {sessions.length === 0 ? (
+                  <>
+                    Spawn a Claude session per task. Each one runs on its own git branch on the VPS,
+                    aware of what its siblings are working on, with a $5 cost cap baked in.
+                    Close your laptop — they keep going.
+                  </>
+                ) : (
+                  "Or change the layout to show 4 / 9 / 16 panes at once."
+                )}
               </div>
               {sessions.length === 0 && (
-                <Button onClick={createSession} disabled={creating} size="sm" className="mt-4">
-                  {creating ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
-                  Start your first terminal
-                </Button>
+                <>
+                  <div className="flex items-center gap-6 mt-6 mb-6 text-xs text-zinc-500">
+                    <FeatureChip icon={Zap} label="Persistent across laptop close" />
+                    <FeatureChip icon={Server} label="Isolated git worktrees" />
+                  </div>
+                  <Button
+                    onClick={createSession}
+                    disabled={creating}
+                    size="sm"
+                    className="bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-100 border border-cyan-500/30"
+                  >
+                    {creating ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+                    Start your first terminal
+                  </Button>
+                </>
               )}
             </div>
           )}
@@ -406,7 +415,7 @@ export function TerminalsWorkspace() {
                     key={s.id}
                     className={cn(
                       "overflow-hidden p-0 flex flex-col bg-zinc-950 border-zinc-800/80",
-                      focusedId === s.id && "ring-1 ring-amber-500/40",
+                      focusedId === s.id && "ring-1 ring-cyan-500/40",
                     )}
                     onClick={() => setFocusedId(s.id)}
                   >
@@ -451,6 +460,90 @@ export function TerminalsWorkspace() {
         </div>
       </div>
     </div>
+  )
+}
+
+function FeatureChip({ icon: Icon, label }: { icon: typeof TerminalSquare; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-zinc-400">
+      <Icon className="w-3.5 h-3.5 text-cyan-400/70" />
+      {label}
+    </span>
+  )
+}
+
+function SetupOrErrorCard({ error }: { error: string }) {
+  // Two distinct error shapes from /api/terminals:
+  //   1. 503 — TERMINAL_RUNNER_URL/TOKEN not configured. First-time setup.
+  //   2. 502 — service unreachable. VPS down or Funnel path missing.
+  const needsSetup = /not configured|TERMINAL_RUNNER/.test(error)
+  if (needsSetup) {
+    return (
+      <div className="max-w-2xl mx-auto mt-12">
+        <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-6">
+          <div className="flex items-start gap-3 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-cyan-500/15 flex items-center justify-center shrink-0">
+              <KeyRound className="w-5 h-5 text-cyan-400" />
+            </div>
+            <div>
+              <div className="text-base font-semibold text-zinc-100 mb-0.5">One-time setup</div>
+              <div className="text-xs text-zinc-400">
+                Connect this page to the VPS that runs your terminals.
+              </div>
+            </div>
+          </div>
+          <ol className="space-y-3 text-sm text-zinc-300 mb-5">
+            <SetupStep n={1}>
+              Deploy <code className="px-1.5 py-0.5 rounded bg-zinc-800/80 text-cyan-300 text-xs">terminal-server</code> on srv1197943 — full walkthrough at <code className="text-xs text-zinc-400">DEPLOY_VPS_TERMINAL_SERVER.md</code> in the repo
+            </SetupStep>
+            <SetupStep n={2}>
+              Apply the 3 SQL migrations under <code className="text-xs text-zinc-400">supabase/migrations/20260430_terminal_sessions*.sql</code>
+            </SetupStep>
+            <SetupStep n={3}>
+              Add <code className="px-1.5 py-0.5 rounded bg-zinc-800/80 text-cyan-300 text-xs">TERMINAL_RUNNER_URL</code> + <code className="px-1.5 py-0.5 rounded bg-zinc-800/80 text-cyan-300 text-xs">TERMINAL_RUNNER_TOKEN</code> in the API Keys tab
+            </SetupStep>
+          </ol>
+          <Link
+            href="/agency/memory#api-keys"
+            className="inline-flex items-center gap-1.5 text-xs text-cyan-300 hover:text-cyan-100 underline-offset-4 hover:underline"
+          >
+            <KeyRound className="w-3.5 h-3.5" />
+            Open the API Keys tab →
+          </Link>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="max-w-2xl mx-auto mt-12">
+      <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-lg bg-amber-500/15 flex items-center justify-center shrink-0">
+            <AlertTriangle className="w-5 h-5 text-amber-400" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-base font-semibold text-zinc-100 mb-1">VPS service is down</div>
+            <div className="text-xs text-zinc-400 break-all mb-3">{error}</div>
+            <div className="text-xs text-zinc-500 leading-relaxed">
+              On the VPS, run <code className="px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-300">systemctl status terminal-server</code>.
+              Or check Tailscale Funnel exposes <code className="px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-300">:8443/terminals</code> with{" "}
+              <code className="px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-300">tailscale funnel status</code>.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SetupStep({ n, children }: { n: number; children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-3">
+      <span className="w-6 h-6 rounded-full bg-cyan-500/20 text-cyan-200 text-xs font-semibold flex items-center justify-center shrink-0 mt-0.5">
+        {n}
+      </span>
+      <span className="leading-relaxed">{children}</span>
+    </li>
   )
 }
 
