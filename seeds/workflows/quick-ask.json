@@ -26,7 +26,7 @@
         "position": { "x": 280, "y": 160 },
         "data": {
           "label": "Reply",
-          "agent_slug": "studio-coach",
+          "agent_slug": "jarvis-quick-ask",
           "prompt": "{{message}}",
           "output_var": "reply"
         }
