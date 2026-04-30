@@ -246,15 +246,17 @@ export async function getWebhookInfo(): Promise<unknown> {
 
 /**
  * Constant-time compare the request's `X-Telegram-Bot-Api-Secret-Token` header
- * against env TELEGRAM_WEBHOOK_SECRET. Returns false on any length mismatch
+ * against TELEGRAM_WEBHOOK_SECRET. Returns false on any length mismatch
  * (timingSafeEqual would throw on differing buffer sizes).
  *
- * NOTE: this reads process.env synchronously rather than getSecret() because
- * webhook validation is hot-path on every Telegram update and can't await a DB
- * round-trip. Make sure TELEGRAM_WEBHOOK_SECRET is set as a Vercel env var.
+ * Reads via getSecret() (api_keys table → process.env fallback). The
+ * 5-min in-memory cache in secrets.ts keeps this fast — no per-request DB
+ * roundtrip in the steady state.
  */
-export function validateWebhookSecret(headerValue: string | null | undefined): boolean {
-  const expected = process.env.TELEGRAM_WEBHOOK_SECRET || ""
+export async function validateWebhookSecret(
+  headerValue: string | null | undefined,
+): Promise<boolean> {
+  const expected = (await getEnv("TELEGRAM_WEBHOOK_SECRET")) || ""
   if (!expected) {
     console.error("[telegram] validateWebhookSecret: TELEGRAM_WEBHOOK_SECRET not set")
     return false
@@ -273,21 +275,21 @@ export function validateWebhookSecret(headerValue: string | null | undefined): b
 
 /**
  * Allowlist check for incoming webhook updates. Returns true if `chatId`:
- *  - equals env TELEGRAM_CHAT_ID, OR
- *  - is a member of comma-separated env TELEGRAM_ALLOWED_CHAT_IDS.
+ *  - equals TELEGRAM_CHAT_ID, OR
+ *  - is a member of comma-separated TELEGRAM_ALLOWED_CHAT_IDS.
  *
  * Both are coerced to strings for comparison so numeric vs string IDs work.
- * Reads process.env synchronously (hot path — see validateWebhookSecret note).
+ * Reads via getSecret() (api_keys → process.env fallback, 5-min cache).
  */
-export function isAuthorizedChatId(chatId: number | string): boolean {
+export async function isAuthorizedChatId(chatId: number | string): Promise<boolean> {
   const target = String(chatId).trim()
   if (!target) return false
 
   const allowed = new Set<string>()
-  const single = (process.env.TELEGRAM_CHAT_ID || "").trim()
+  const single = ((await getEnv("TELEGRAM_CHAT_ID")) || "").trim()
   if (single) allowed.add(single)
 
-  const list = process.env.TELEGRAM_ALLOWED_CHAT_IDS || ""
+  const list = (await getEnv("TELEGRAM_ALLOWED_CHAT_IDS")) || ""
   for (const raw of list.split(",")) {
     const v = raw.trim()
     if (v) allowed.add(v)
