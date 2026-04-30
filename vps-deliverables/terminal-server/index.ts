@@ -301,6 +301,10 @@ interface CreateInput {
    *  Default false — the dashboard opts in for spawn flows that explicitly
    *  want coordinated work; default-spawned terminals stay clean. */
   inject_sibling_prompt?: boolean
+  /** Phase D: when /spawn comes from Telegram, record the chat id so future
+   *  watcher pings (cost cap, crash, completion) thread back to the same
+   *  conversation instead of the global TELEGRAM_CHAT_ID. */
+  telegram_chat_id?: string
 }
 
 function createSession(input: CreateInput): Session {
@@ -373,6 +377,9 @@ function createSession(input: CreateInput): Session {
     }
     sessions.set(id, session)
     void dbInsert(session)
+    if (input.telegram_chat_id) {
+      void dbUpdate(id, { telegram_chat_id: input.telegram_chat_id })
+    }
     void emitEvent(id, "created", { title: session.title, branch: session.branch })
     console.log("[terminal-server] session created", { id: safe(id), branch: safe(worktree.branch) })
     return session
