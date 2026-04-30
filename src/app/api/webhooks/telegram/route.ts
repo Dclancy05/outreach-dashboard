@@ -46,6 +46,7 @@ import {
   triggerWorkflowBySlug,
   WorkflowNotFoundError,
 } from "@/lib/workflows/run-helper"
+import { runWorkflowSync } from "@/lib/workflows/run-sync"
 import { BudgetExceededError } from "@/lib/workflow/cost-guards"
 import { getSecret } from "@/lib/secrets"
 import {
@@ -330,22 +331,23 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      const { run_id } = await triggerWorkflowBySlug(
+      const meta = {
+        source: "telegram" as const,
+        telegram_chat_id: chatId,
+        telegram_message_id: message.message_id,
+        telegram_username: message.from?.username || null,
+        received_at: new Date().toISOString(),
+      }
+      const { run_id, workflow_id } = await triggerWorkflowBySlug(
         QUICK_ASK_SLUG,
         { message: text },
-        {
-          source: "telegram",
-          telegram_chat_id: chatId,
-          telegram_message_id: message.message_id,
-          telegram_username: message.from?.username || null,
-          received_at: new Date().toISOString(),
-        },
+        meta,
       )
 
       // Reply confirmation — keep it short and threaded to the original msg so
       // the chat reads naturally on phone.
       await sendTelegram(
-        `🤖 Got it — running. I'll reply when done.\n\n_Run #${run_id}_`,
+        `🤖 Got it — running. I'll reply when done.\n\n_Run #${run_id.slice(0, 8)}_`,
         {
           chatId,
           parseMode: "Markdown",
@@ -353,6 +355,20 @@ export async function POST(req: NextRequest) {
           disableWebPagePreview: true,
         },
       )
+
+      // Synchronous execution path — Inngest cloud isn't wired, so we walk
+      // the workflow graph in-process. Single-agent workflows (Quick Ask)
+      // complete inside Vercel's request budget; multi-step ones still need
+      // Inngest to be configured via INNGEST_EVENT_KEY + INNGEST_SIGNING_KEY.
+      try {
+        await runWorkflowSync({
+          run_id,
+          workflow_id,
+          input: { message: text, _meta: meta },
+        })
+      } catch (e) {
+        console.error("[telegram-webhook] sync run threw:", (e as Error).message)
+      }
 
       return NextResponse.json({ ok: true, run_id })
     } catch (err) {
