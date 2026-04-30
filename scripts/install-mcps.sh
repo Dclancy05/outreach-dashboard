@@ -229,44 +229,128 @@ for service in playwright devtools postgres; do
   fi
 done
 
-# ─── Step 3: Local Mac — claude mcp add ─────────────────────────────────
-step "3/7 — Register MCPs in Claude Code"
+# ─── Step 3: Register MCPs in Claude Code (Mac AND VPS) ─────────────────
+step "3/7 — Register MCPs in Claude Code (Mac + VPS)"
 
-add_mcp() {
-  local name="$1"; shift
-  if claude mcp list 2>/dev/null | grep -q "^$name "; then
-    ok "$name already registered"
+# Two registration paths:
+#   - Mac: stdio for things that should run locally (npm packages), HTTP via
+#     Tailscale Funnel for the VPS-hosted Docker containers.
+#   - VPS: same MCPs registered there too, so subagents spawned by
+#     agent-runner (via Telegram-driven workflows when the Mac is asleep)
+#     can use them. VPS uses localhost URLs for the Docker containers
+#     (faster, no funnel hop) and stdio packages run as VPS subprocesses.
+#
+# Why register on both: Dylan uses Telegram-from-phone to drive workflows
+# on the VPS even when the Mac is off. Without VPS-side registration, those
+# spawned agents would have no browser/devtools/postgres/github/sentry.
+
+add_http_mcp() {
+  # $1=name  $2=mac_url  $3=vps_url  $4=bearer_token
+  local name="$1" mac_url="$2" vps_url="$3" tok="$4"
+
+  # Mac side
+  if claude mcp list 2>/dev/null | grep -q "^${name} "; then
+    ok "Mac: ${name} already registered"
   else
-    if claude mcp add "$name" "$@" 2>&1 | grep -qE "added|registered|configured"; then
-      ok "$name added"
+    claude mcp add --scope user --transport http "$name" "$mac_url" \
+      --header "Authorization: Bearer $tok" >/dev/null 2>&1 \
+      && ok "Mac: ${name} added" \
+      || warn "Mac: ${name} add failed"
+  fi
+
+  # VPS side
+  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^${name} '"; then
+    ok "VPS: ${name} already registered"
+  else
+    ssh "$VPS_HOST" "claude mcp add --scope user --transport http '${name}' '${vps_url}' --header 'Authorization: Bearer ${tok}'" >/dev/null 2>&1 \
+      && ok "VPS: ${name} added" \
+      || warn "VPS: ${name} add failed"
+  fi
+}
+
+add_stdio_mcp() {
+  # $1=name  $2=env-string-or-empty  $3+=command and args
+  local name="$1"; shift
+  local envstr="$1"; shift
+  local cmd_str="$*"
+
+  # Mac side
+  if claude mcp list 2>/dev/null | grep -q "^${name} "; then
+    ok "Mac: ${name} already registered"
+  else
+    if [[ -n "$envstr" ]]; then
+      eval "claude mcp add --scope user $envstr ${name} -- $cmd_str" >/dev/null 2>&1 \
+        && ok "Mac: ${name} added" \
+        || warn "Mac: ${name} add failed"
     else
-      warn "$name add returned non-zero — re-run if it doesn't appear in 'claude mcp list'"
+      eval "claude mcp add --scope user ${name} -- $cmd_str" >/dev/null 2>&1 \
+        && ok "Mac: ${name} added" \
+        || warn "Mac: ${name} add failed"
+    fi
+  fi
+
+  # VPS side
+  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^${name} '"; then
+    ok "VPS: ${name} already registered"
+  else
+    if [[ -n "$envstr" ]]; then
+      ssh "$VPS_HOST" "claude mcp add --scope user $envstr ${name} -- $cmd_str" >/dev/null 2>&1 \
+        && ok "VPS: ${name} added" \
+        || warn "VPS: ${name} add failed"
+    else
+      ssh "$VPS_HOST" "claude mcp add --scope user ${name} -- $cmd_str" >/dev/null 2>&1 \
+        && ok "VPS: ${name} added" \
+        || warn "VPS: ${name} add failed"
     fi
   fi
 }
 
-# HTTP MCPs (point at the VPS Tailscale Funnel)
-add_mcp playwright    --transport http --url "$TS_FUNNEL_BASE/mcp/playwright"  --header "Authorization: Bearer $PLAYWRIGHT_MCP_TOKEN"
-add_mcp devtools      --transport http --url "$TS_FUNNEL_BASE/mcp/devtools"    --header "Authorization: Bearer $DEVTOOLS_MCP_TOKEN"
-add_mcp postgres      --transport http --url "$TS_FUNNEL_BASE/mcp/postgres"    --header "Authorization: Bearer $POSTGRES_MCP_TOKEN"
+# HTTP MCPs — Mac calls via Tailscale Funnel (public HTTPS), VPS calls
+# the same Docker containers at localhost (no funnel hop).
+add_http_mcp playwright "$TS_FUNNEL_BASE/mcp/playwright" "http://127.0.0.1:8010" "$PLAYWRIGHT_MCP_TOKEN"
+add_http_mcp devtools   "$TS_FUNNEL_BASE/mcp/devtools"   "http://127.0.0.1:8011" "$DEVTOOLS_MCP_TOKEN"
+add_http_mcp postgres   "$TS_FUNNEL_BASE/mcp/postgres"   "http://127.0.0.1:8012" "$POSTGRES_MCP_TOKEN"
 
-# Stdio MCPs (run locally on the Mac)
+# Stdio MCPs — same package installed via npx on both Mac and VPS
 [[ -n "$GITHUB_TOKEN_VAL" ]] && \
-  add_mcp github --env GITHUB_PERSONAL_ACCESS_TOKEN="$GITHUB_TOKEN_VAL" -- npx -y @modelcontextprotocol/server-github
+  add_stdio_mcp github "--env GITHUB_PERSONAL_ACCESS_TOKEN=$GITHUB_TOKEN_VAL" npx -y @modelcontextprotocol/server-github
 
-add_mcp sentry --env SENTRY_AUTH_TOKEN="" -- npx -y @sentry/mcp-server  # device-code OAuth on first call
+# Sentry — first call triggers device-code OAuth. Skipping VPS-side
+# registration here because device-code can't complete on a headless VPS.
+# Add manually if you want it on VPS too: requires SENTRY_AUTH_TOKEN.
+if claude mcp list 2>/dev/null | grep -q "^sentry "; then
+  ok "Mac: sentry already registered"
+else
+  claude mcp add --scope user sentry -- npx -y @sentry/mcp-server >/dev/null 2>&1 \
+    && ok "Mac: sentry added (device-code OAuth on first call)" \
+    || warn "Mac: sentry add failed"
+fi
 
-[[ -n "$CONTEXT7_API_KEY_VAL" ]] && \
-  add_mcp context7 --transport http --url "https://mcp.context7.com" --header "X-API-Key: $CONTEXT7_API_KEY_VAL"
+if [[ -n "$CONTEXT7_API_KEY_VAL" ]]; then
+  # Context7 uses X-API-Key header, not Bearer — separate from add_http_mcp
+  if claude mcp list 2>/dev/null | grep -q "^context7 "; then
+    ok "Mac: context7 already registered"
+  else
+    claude mcp add --scope user --transport http context7 "https://mcp.context7.com" \
+      --header "X-API-Key: $CONTEXT7_API_KEY_VAL" >/dev/null 2>&1 \
+      && ok "Mac: context7 added" || warn "Mac: context7 add failed"
+  fi
+  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^context7 '"; then
+    ok "VPS: context7 already registered"
+  else
+    ssh "$VPS_HOST" "claude mcp add --scope user --transport http context7 'https://mcp.context7.com' --header 'X-API-Key: $CONTEXT7_API_KEY_VAL'" >/dev/null 2>&1 \
+      && ok "VPS: context7 added" || warn "VPS: context7 add failed"
+  fi
+fi
 
 [[ -n "$BRAVE_SEARCH_API_KEY_VAL" ]] && \
-  add_mcp brave-search --env BRAVE_API_KEY="$BRAVE_SEARCH_API_KEY_VAL" -- npx -y @modelcontextprotocol/server-brave-search
+  add_stdio_mcp brave-search "--env BRAVE_API_KEY=$BRAVE_SEARCH_API_KEY_VAL" npx -y @modelcontextprotocol/server-brave-search
 
 [[ -n "$TWILIO_SID" && -n "$TWILIO_AUTH" ]] && \
-  add_mcp twilio --env TWILIO_ACCOUNT_SID="$TWILIO_SID" --env TWILIO_AUTH_TOKEN="$TWILIO_AUTH" -- npx -y @twilio-alpha/mcp
+  add_stdio_mcp twilio "--env TWILIO_ACCOUNT_SID=$TWILIO_SID --env TWILIO_AUTH_TOKEN=$TWILIO_AUTH" npx -y @twilio-alpha/mcp
 
 [[ -n "$APIFY_TOKEN_VAL" ]] && \
-  add_mcp apify --transport http --url "https://mcp.apify.com" --header "Authorization: Bearer $APIFY_TOKEN_VAL"
+  add_http_mcp apify "https://mcp.apify.com" "https://mcp.apify.com" "$APIFY_TOKEN_VAL"
 
 # ─── Step 4: OAuth flows for already-installed MCPs ────────────────────
 step "4/7 — OAuth re-auth (3 clicks)"
