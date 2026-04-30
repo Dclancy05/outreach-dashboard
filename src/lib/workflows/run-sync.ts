@@ -16,7 +16,7 @@
  * Inngest cloud must be configured (INNGEST_EVENT_KEY + INNGEST_SIGNING_KEY).
  */
 
-import { createClient } from "@supabase/supabase-js"
+import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 import { getSecret } from "@/lib/secrets"
 import { dispatchNotification } from "@/lib/notifications/dispatch"
 
@@ -185,7 +185,7 @@ export async function runWorkflowSync(args: {
 }
 
 async function failRun(
-  sb: ReturnType<typeof createClient>,
+  sb: SupabaseClient,
   run_id: string,
   errorMsg: string,
   meta: ReturnType<typeof extractMeta>,
