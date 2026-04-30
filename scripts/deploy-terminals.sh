@@ -44,14 +44,26 @@ command -v jq    >/dev/null || fail "jq not installed (brew install jq)"
 command -v curl  >/dev/null || fail "curl not installed"
 command -v ssh   >/dev/null || fail "ssh not installed"
 gh auth status >/dev/null 2>&1 || fail "Run 'gh auth login' first"
-[[ -f .env.vercel.prod ]] || fail ".env.vercel.prod not found — pull from Vercel: 'vercel env pull .env.vercel.prod'"
 ok "All tools present"
 
-# Source the prod env (Supabase service role key + URL)
-SUPABASE_URL=$(grep '^NEXT_PUBLIC_SUPABASE_URL=' .env.vercel.prod | head -1 | sed 's/^[^=]*=//' | tr -d '"' | sed 's/\\n//g')
-SUPABASE_SR_KEY=$(grep '^SUPABASE_SERVICE_ROLE_KEY=' .env.vercel.prod | head -1 | sed 's/^[^=]*=//' | tr -d '"' | sed 's/\\n//g')
-[[ -n "$SUPABASE_URL" && -n "$SUPABASE_SR_KEY" ]] || fail "Couldn't read Supabase URL/key from .env.vercel.prod"
-ok "Supabase creds loaded"
+# Source the prod env (Supabase service role key + URL). Optional — without
+# it we still merge the PR + deploy the VPS service; you'd just need to
+# apply migrations and set api_keys manually via the Supabase web UI.
+SUPABASE_URL=""
+SUPABASE_SR_KEY=""
+HAVE_SUPA=0
+if [[ -f .env.vercel.prod ]]; then
+  SUPABASE_URL=$(grep '^NEXT_PUBLIC_SUPABASE_URL=' .env.vercel.prod | head -1 | sed 's/^[^=]*=//' | tr -d '"' | sed 's/\\n//g')
+  SUPABASE_SR_KEY=$(grep '^SUPABASE_SERVICE_ROLE_KEY=' .env.vercel.prod | head -1 | sed 's/^[^=]*=//' | tr -d '"' | sed 's/\\n//g')
+  if [[ -n "$SUPABASE_URL" && -n "$SUPABASE_SR_KEY" ]]; then
+    HAVE_SUPA=1
+    ok "Supabase creds loaded from .env.vercel.prod"
+  fi
+fi
+if [[ $HAVE_SUPA -eq 0 ]]; then
+  warn "No .env.vercel.prod — steps 2 (migrations) and 4 (api_keys) will be skipped"
+  echo "   To unlock them, run: vercel env pull .env.vercel.prod"
+fi
 
 # ─── Step 1: Merge PR #41 ─────────────────────────────────────────────
 step "1/4 — Merge PR #${PR_NUMBER}"
@@ -78,6 +90,13 @@ fi
 
 # ─── Step 2: Apply Supabase migrations ────────────────────────────────
 step "2/4 — Apply 3 Supabase migrations"
+if [[ $HAVE_SUPA -eq 0 ]]; then
+  warn "Skipping — no .env.vercel.prod. Apply manually in Supabase SQL editor:"
+  echo "    • supabase/migrations/20260430_terminal_sessions.sql"
+  echo "    • supabase/migrations/20260430_terminal_sessions_phase_b.sql"
+  echo "    • supabase/migrations/20260430_terminal_sessions_phase_c.sql"
+fi
+if [[ $HAVE_SUPA -eq 1 ]]; then
 # Supabase REST API doesn't run raw DDL. We use the management API's pg endpoint.
 # Easier path: surface the CLI command. But we can use the supabase-cli via psql
 # IF the user has DATABASE_URL. Otherwise fall back to instructions.
@@ -104,6 +123,7 @@ else
   echo "     • supabase/migrations/20260430_terminal_sessions_phase_b.sql"
   echo "     • supabase/migrations/20260430_terminal_sessions_phase_c.sql"
   ask "Continue without migrations? (you'll need to do this manually for the page to work)" || exit 0
+fi
 fi
 
 # ─── Step 3: Deploy terminal-server on the VPS ────────────────────────
@@ -192,7 +212,16 @@ fi
 
 # ─── Step 4: Set TERMINAL_RUNNER_URL + TOKEN in api_keys ──────────────
 step "4/4 — Configure dashboard secrets"
-if [[ -f "$TOKEN_FILE" ]]; then
+if [[ $HAVE_SUPA -eq 0 ]]; then
+  warn "Skipping — no .env.vercel.prod. Set these manually in $DASHBOARD_URL/agency/memory#api-keys:"
+  if [[ -f "${TOKEN_FILE:-}" ]]; then
+    echo "    TERMINAL_RUNNER_URL = $TS_FUNNEL_URL"
+    echo "    TERMINAL_RUNNER_TOKEN = $(cat "$TOKEN_FILE")"
+  else
+    echo "    TERMINAL_RUNNER_URL = $TS_FUNNEL_URL"
+    echo "    TERMINAL_RUNNER_TOKEN = (generate any 32+ char random string)"
+  fi
+elif [[ -f "${TOKEN_FILE:-}" ]]; then
   TOKEN=$(cat "$TOKEN_FILE")
   if ask "Insert TERMINAL_RUNNER_URL/TOKEN into api_keys table?"; then
     # Detect the api_keys schema (slug or env_var). Try slug first.
