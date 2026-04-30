@@ -310,26 +310,35 @@ elif [[ -f "${TOKEN_FILE:-}" ]]; then
     fi
     if [[ -n "$KEY_FIELD" ]]; then
       for entry in \
-        "TERMINAL_RUNNER_URL|$TS_FUNNEL_URL" \
-        "TERMINAL_RUNNER_TOKEN|$TOKEN"; do
-        env_var=${entry%|*}
-        value=${entry#*|}
-        slug=$(echo "$env_var" | tr '[:upper:]' '[:lower:]')
-        case "$KEY_FIELD" in
-          slug)
-            curl -s -X POST "$SUPABASE_URL/rest/v1/api_keys" \
-              -H "apikey: $SUPABASE_SR_KEY" -H "Authorization: Bearer $SUPABASE_SR_KEY" \
-              -H "Content-Type: application/json" -H "Prefer: resolution=merge-duplicates" \
-              -d "{\"slug\":\"$slug\",\"value\":\"$value\"}" >/dev/null
-            ;;
-          env_var)
-            curl -s -X POST "$SUPABASE_URL/rest/v1/api_keys" \
-              -H "apikey: $SUPABASE_SR_KEY" -H "Authorization: Bearer $SUPABASE_SR_KEY" \
-              -H "Content-Type: application/json" -H "Prefer: resolution=merge-duplicates" \
-              -d "{\"env_var\":\"$env_var\",\"value\":\"$value\"}" >/dev/null
-            ;;
-        esac
-        ok "Set $env_var"
+        "Terminal Runner URL|terminal_runner|TERMINAL_RUNNER_URL|$TS_FUNNEL_URL" \
+        "Terminal Runner Token|terminal_runner|TERMINAL_RUNNER_TOKEN|$TOKEN"; do
+        IFS='|' read -r name provider env_var value <<< "$entry"
+        # Two-step upsert: try to UPDATE first (where env_var matches), then
+        # INSERT only if no rows updated. This handles the case where the row
+        # exists but with stale value, and avoids unique-constraint violations.
+        upd=$(curl -s -X PATCH "$SUPABASE_URL/rest/v1/api_keys?env_var=eq.$env_var" \
+          -H "apikey: $SUPABASE_SR_KEY" -H "Authorization: Bearer $SUPABASE_SR_KEY" \
+          -H "Content-Type: application/json" -H "Prefer: return=representation" \
+          -d "$(jq -nc --arg v "$value" '{value: $v}')")
+        if echo "$upd" | grep -q '^\['; then
+          # PATCH returns array of updated rows — anything non-empty means hit
+          if [[ "$upd" != "[]" ]]; then
+            ok "Updated $env_var"
+            continue
+          fi
+        fi
+        # No existing row → insert with all required NOT NULL columns
+        ins=$(curl -s -w "\n%{http_code}" -X POST "$SUPABASE_URL/rest/v1/api_keys" \
+          -H "apikey: $SUPABASE_SR_KEY" -H "Authorization: Bearer $SUPABASE_SR_KEY" \
+          -H "Content-Type: application/json" -H "Prefer: return=representation" \
+          -d "$(jq -nc --arg n "$name" --arg p "$provider" --arg e "$env_var" --arg v "$value" \
+                '{name: $n, provider: $p, env_var: $e, value: $v}')")
+        code=$(echo "$ins" | tail -1)
+        if [[ "$code" == "201" || "$code" == "200" ]]; then
+          ok "Inserted $env_var"
+        else
+          warn "Couldn't set $env_var (HTTP $code): $(echo "$ins" | head -n -1 | head -c 200)"
+        fi
       done
     else
       warn "Skipped — set them manually at $DASHBOARD_URL/agency/memory#api-keys"

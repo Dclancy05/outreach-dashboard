@@ -17,6 +17,10 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 import { BOOTSTRAP_ENV_VARS } from "@/lib/secrets-catalog"
 
 const TTL_MS = 5 * 60 * 1000
+// When the DB returns "no row found" we cache the negative result for a much
+// shorter window so first-time setup (admin adds the key, page refreshes)
+// recovers fast — without thrashing the DB if the key is genuinely never set.
+const NEGATIVE_TTL_MS = 30 * 1000
 type CacheEntry = { value: string | null; expiresAt: number }
 const cache = new Map<string, CacheEntry>()
 
@@ -84,8 +88,11 @@ export async function getSecret(envVar: string): Promise<string | null> {
   }
 
   // Only cache when DB was reachable; the env fallback is stable until redeploy.
+  // Negative results (no row, no env) get a much shorter TTL so first-time
+  // setup recovers within ~30s of the admin adding the key.
   if (dbReadOk) {
-    cache.set(envVar, { value, expiresAt: Date.now() + TTL_MS })
+    const ttl = value ? TTL_MS : NEGATIVE_TTL_MS
+    cache.set(envVar, { value, expiresAt: Date.now() + ttl })
   }
   return value
 }
