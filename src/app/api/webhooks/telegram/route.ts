@@ -658,10 +658,55 @@ export async function POST(req: NextRequest) {
       throw err
     }
   } catch (e) {
-    // Last-resort safety net. Log + 200 so Telegram doesn't infinite-retry.
-    // Deliberately do NOT send a reply here — replying on every error risks
-    // a feedback loop if the reply itself triggers another update.
-    console.error("[telegram-webhook] unhandled error:", (e as Error).message, e)
+    // Last-resort safety net. Log, attempt a single chat reply (best-effort,
+    // outside its own try so a Telegram outage can't re-throw), then return
+    // 200 so Telegram doesn't infinite-retry.
+    //
+    // Why we DO reply now (vs the original silent-200 design):
+    //   The original concern was a feedback loop — but that only fires if the
+    //   reply ITSELF triggers an update with a chat id we authorized. Since
+    //   sendTelegram doesn't echo the bot's own messages back as updates
+    //   (Telegram never sends bot-authored messages to the bot's webhook),
+    //   that loop can't form. The cost of silence has been Dylan messaging
+    //   the bot, getting nothing, and not knowing if he should retry.
+    const err = e as Error
+    console.error("[telegram-webhook] unhandled error:", err.message, e)
+
+    // Try to recover the chat id we already validated, so we can reply.
+    // If we never made it past the auth gate, chatId is undefined — fine,
+    // sendTelegram will fall back to TELEGRAM_CHAT_ID.
+    let chatId: number | string | undefined
+    let replyToMessageId: number | undefined
+    try {
+      // We may not have parsed `update` yet if this caught from JSON parsing
+      // earlier. The locals from the try block aren't in scope here, so we
+      // best-effort re-read from req — if that also throws, we just send to
+      // TELEGRAM_CHAT_ID with no reply target.
+      const cloned = req.clone()
+      const update = (await cloned.json().catch(() => null)) as TelegramUpdate | null
+      chatId =
+        update?.message?.chat?.id ??
+        update?.callback_query?.message?.chat?.id ??
+        undefined
+      replyToMessageId = update?.message?.message_id
+    } catch {
+      // ignore — we'll fall back to default chat id
+    }
+
+    try {
+      await sendTelegram(
+        `⚠️ Jarvis hit an unexpected error.\n\n\`${err.message.slice(0, 250)}\`\n\nThis is logged on Vercel. If it keeps happening, check /agency/jarvis.`,
+        {
+          chatId,
+          parseMode: "Markdown",
+          replyToMessageId,
+          disableWebPagePreview: true,
+        },
+      )
+    } catch (notifyErr) {
+      console.error("[telegram-webhook] error-reply itself failed:", (notifyErr as Error).message)
+    }
+
     return NextResponse.json({ ok: true, error: "internal" })
   }
 }

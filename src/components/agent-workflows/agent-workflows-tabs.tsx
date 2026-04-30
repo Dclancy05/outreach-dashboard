@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Agent Workflows — the 4-subtab container that lives inside the
+ * Agent Workflows — the 5-subtab container that lives inside the
  * "Agent Workflows" top-level tab on /agency/memory.
  *
  * Subtab state syncs to the URL hash as `#agent-workflows/<sub>`. The parent
@@ -9,16 +9,17 @@
  */
 
 import { useEffect, useState } from "react"
-import { Bot, Workflow, CalendarClock, Activity } from "lucide-react"
+import { Bot, Workflow, CalendarClock, Activity, HeartPulse } from "lucide-react"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Card } from "@/components/ui/card"
 import { AgentsView } from "@/components/agent-workflows/agents/agents-view"
 import { WorkflowsView } from "@/components/agent-workflows/workflows/workflows-view"
 import { SchedulesView } from "@/components/agent-workflows/schedules/schedules-view"
 import { RunsView } from "@/components/agent-workflows/runs/runs-view"
+import { HealthView } from "@/components/agent-workflows/health/health-view"
 
-export type AgentSubTab = "agents" | "workflows" | "schedules" | "runs"
-const VALID: AgentSubTab[] = ["agents", "workflows", "schedules", "runs"]
+export type AgentSubTab = "agents" | "workflows" | "schedules" | "runs" | "health"
+const VALID: AgentSubTab[] = ["agents", "workflows", "schedules", "runs", "health"]
 
 function readSubFromHash(): AgentSubTab {
   if (typeof window === "undefined") return "agents"
@@ -60,6 +61,9 @@ export function AgentWorkflowsTabs() {
         <TabsTrigger value="runs" className="gap-2">
           <Activity className="w-4 h-4" /> Runs
         </TabsTrigger>
+        <TabsTrigger value="health" className="gap-2">
+          <HeartPulse className="w-4 h-4" /> Health
+        </TabsTrigger>
       </TabsList>
 
       <TabsContent value="agents" className="flex-1 mt-3 min-h-0">
@@ -83,6 +87,12 @@ export function AgentWorkflowsTabs() {
       <TabsContent value="runs" className="flex-1 mt-3 min-h-0">
         <div className="px-4 pb-4 h-full">
           <Card className="h-full overflow-hidden p-0"><RunsView /></Card>
+        </div>
+      </TabsContent>
+
+      <TabsContent value="health" className="flex-1 mt-3 min-h-0">
+        <div className="px-4 pb-4 h-full">
+          <Card className="h-full overflow-hidden p-0"><HealthView /></Card>
         </div>
       </TabsContent>
     </Tabs>
