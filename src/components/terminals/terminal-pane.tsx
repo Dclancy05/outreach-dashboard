@@ -100,8 +100,12 @@ export function TerminalPane({ sessionId, wsUrl, token, onResize }: Props) {
       if (cancelled) return
       setState("connecting")
       setError(null)
-      const url = `${wsUrl}?token=${encodeURIComponent(token)}`
-      const ws = new WebSocket(url)
+      // Token rides in Sec-WebSocket-Protocol (subprotocol) instead of the URL
+      // query string. Browsers can't set custom WS headers, but they CAN set
+      // subprotocols — and unlike query params, subprotocol headers don't get
+      // logged by Tailscale Funnel / reverse proxies. The server validates
+      // and echoes the chosen `bearer.<token>` back via handleProtocols.
+      const ws = new WebSocket(wsUrl, [`bearer.${token}`])
       ws.binaryType = "arraybuffer"
       wsRef.current = ws
 

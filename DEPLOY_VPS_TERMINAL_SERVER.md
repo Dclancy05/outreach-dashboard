@@ -13,8 +13,13 @@ done.
 
 - VPS already has Node 18+ and `git` installed (it does — agent-runner uses both).
 - `tmux` installed: `apt install -y tmux`. Without this the service refuses to start.
+- Build toolchain for `node-pty`'s native module: `apt install -y make g++ python3`.
+  (Hostinger's Ubuntu image usually has these but it's not guaranteed.)
 - The dashboard repo cloned at `/root/projects/outreach-dashboard` (used as the
   base for git worktrees the service creates per session).
+- `claude` CLI installed somewhere on the VPS. Run `which claude` — typical
+  locations are `/root/.local/bin/claude` or `/usr/local/bin/claude`. Whatever
+  you find, set `DEFAULT_TERMINAL_COMMAND` in the systemd unit below.
 
 ## Deploy steps
 
@@ -27,9 +32,13 @@ scp -r vps-deliverables/terminal-server \
 
 # 2. SSH in and install
 ssh root@srv1197943.hstgr.cloud
-apt install -y tmux
+apt install -y tmux make g++ python3
 cd /opt/terminal-server
-npm install
+chmod +x agent-bootstrap.sh
+npm install      # compiles node-pty native module — takes ~30s
+
+# Verify claude path; remember it for the systemd unit below
+which claude
 
 # 3. Generate a bearer token (any 32+ char random string)
 TOKEN=$(openssl rand -hex 24)
@@ -51,7 +60,12 @@ Environment=TERMINAL_RUNNER_TOKEN=$TOKEN
 Environment=REPO_ROOT=/root/projects/outreach-dashboard
 Environment=WORKTREE_ROOT=/root/projects/wt
 Environment=DEFAULT_TERMINAL_COMMAND=/root/.local/bin/claude
-Environment=MAX_SESSIONS=16
+Environment=MAX_SESSIONS=8
+# Per-session resource caps (the bootstrap script enforces these via
+# systemd-run --scope on cgroup v2). 1G RAM + 2 cores is enough for
+# claude with reasonable thinking budgets.
+Environment=TERMINAL_MEM_LIMIT=1G
+Environment=TERMINAL_CPU_QUOTA=200%
 # Optional — same Supabase creds the agent-runner already uses
 EnvironmentFile=-/etc/terminal-server.env
 ExecStart=/usr/bin/npx tsx index.ts
@@ -138,9 +152,12 @@ psql "$DATABASE_URL" -f supabase/migrations/20260430_terminal_sessions.sql
 | Page shows "TERMINAL_RUNNER_URL not configured" | env vars not in `api_keys` table | Add via API Keys tab, refresh |
 | Page shows "terminal-server unreachable" | service down, or Funnel path wrong | `systemctl status terminal-server`, `tailscale funnel status` |
 | New terminal shows "Connecting…" forever | WebSocket can't reach VPS | Check Funnel exposes the path, browser console for WS error |
-| New terminal connects but `claude` errors | OAuth not set up for systemd-run claude | Run `claude` once interactively as root to seed the OAuth, then restart the service |
-| Sessions disappear after VPS reboot | tmux doesn't auto-resurrect by default | Optional: install tmux-resurrect; otherwise sessions need to be re-spawned |
-| `git worktree add` fails | uncommitted changes block worktree branch creation, or branch already exists | Service generates fresh uuid branches so this should not happen — open an issue |
+| Browser console shows "WebSocket subprotocol mismatch" | Token wrong or service running old build | Verify `TERMINAL_RUNNER_TOKEN` matches in dashboard + systemd unit |
+| `npm install` fails with "node-pty build failed" | Missing `make`/`g++`/`python3` | `apt install -y make g++ python3`, retry |
+| New terminal connects but `claude` errors | OAuth not set up for that command | Run `claude` once interactively as root to seed the OAuth, then restart the service |
+| Sessions disappear after `systemctl restart` | Pre-fix bug — should NOT happen now | Service rehydrates from `tmux ls` on boot. Check journalctl for "rehydrate: adopted N sessions". |
+| Memory pressure / sibling OOM-kills | Running >8 sessions on the 16 GB box | Stop a session, dashboard's `MAX_SESSIONS=8` cap should prevent this |
+| `git worktree add` fails | branch already exists from a failed previous spawn | Service rolls back branch on failure now; if you see lingering `sess/<uuid>` branches, `git branch -D` them |
 
 ## Quick command reference (on the VPS)
 
