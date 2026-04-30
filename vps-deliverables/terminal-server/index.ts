@@ -181,14 +181,14 @@ async function dbInsert(s: Session): Promise<void> {
     created_at: new Date(s.createdAt).toISOString(),
     last_activity_at: new Date(s.lastActivityAt).toISOString(),
   }).then(({ error }) => {
-    if (error) console.warn(`[terminal-server] db insert ${safe(s.id)} failed:`, error.message)
+    if (error) console.warn("[terminal-server] db insert failed", { id: safe(s.id), err: error.message })
   })
 }
 
 async function dbUpdate(id: string, patch: Record<string, unknown>): Promise<void> {
   if (!supa) return
   await supa.from("terminal_sessions").update(patch).eq("id", id).then(({ error }) => {
-    if (error) console.warn(`[terminal-server] db update ${safe(id)} failed:`, error.message)
+    if (error) console.warn("[terminal-server] db update failed", { id: safe(id), err: error.message })
   })
 }
 
@@ -251,7 +251,7 @@ function createSession(input: CreateInput): Session {
   }
   sessions.set(id, session)
   void dbInsert(session)
-  console.log(`[terminal-server] session ${safe(id)} created: branch=${safe(branch)}`)
+  console.log("[terminal-server] session created", { id: safe(id), branch: safe(branch) })
   return session
 }
 
@@ -262,7 +262,7 @@ function killSession(id: string): boolean {
   removeWorktree(s.worktreePath, s.branch)
   sessions.delete(id)
   void dbUpdate(id, { status: "stopped", finished_at: new Date().toISOString() })
-  console.log(`[terminal-server] session ${safe(id)} killed`)
+  console.log("[terminal-server] session killed", { id: safe(id) })
   return true
 }
 
@@ -469,7 +469,7 @@ function attachToSession(ws: WebSocket, s: Session): void {
   })
 
   ws.on("error", (err) => {
-    console.warn(`[terminal-server] ws error on ${safe(s.id)}:`, err.message)
+    console.warn("[terminal-server] ws error", { id: safe(s.id), err: err.message })
   })
 }
 
