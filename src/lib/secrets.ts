@@ -63,19 +63,30 @@ export async function getSecret(envVar: string): Promise<string | null> {
   const hit = cache.get(envVar)
   if (hit && hit.expiresAt > Date.now()) return hit.value
 
-  // DB first
+  // DB first. If the DB call THROWS (transient outage, RLS hiccup), don't
+  // cache the resulting null — otherwise we lock in a 5-min "secret missing"
+  // for what was a momentary blip and downstream code (telegram webhook,
+  // agent-runner caller) silently no-ops with no obvious failure mode.
   let value: string | null = null
+  let dbReadOk = true
   try {
     value = await readFromDb(envVar)
-  } catch {
-    /* swallow — fall back to env */
+  } catch (e) {
+    dbReadOk = false
+    console.warn(
+      `[secrets] readFromDb('${envVar}') threw — falling back to env, NOT caching:`,
+      (e as Error).message,
+    )
   }
   if (!value) {
     const v = process.env[envVar]
     value = typeof v === "string" && v ? v : null
   }
 
-  cache.set(envVar, { value, expiresAt: Date.now() + TTL_MS })
+  // Only cache when DB was reachable; the env fallback is stable until redeploy.
+  if (dbReadOk) {
+    cache.set(envVar, { value, expiresAt: Date.now() + TTL_MS })
+  }
   return value
 }
 

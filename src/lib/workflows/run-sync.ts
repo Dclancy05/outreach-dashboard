@@ -140,14 +140,21 @@ export async function runWorkflowSync(args: {
       const body = await res.text().catch(() => "")
       throw new Error(`agent-runner ${res.status}: ${body.slice(0, 300)}`)
     }
+    // Agent-runner currently returns { result, total_cost_usd, usage } —
+    // accept both that shape and the `output / cost_usd / tokens` shape so a
+    // future runner refactor doesn't break us.
     const data = (await res.json()) as {
       output?: unknown
+      result?: unknown
       cost_usd?: number
+      total_cost_usd?: number
       tokens?: number
+      usage?: { total_tokens?: number; tokens?: number }
     }
-    output = data.output ?? null
-    cost_usd = Number(data.cost_usd) || 0
-    tokens = Number(data.tokens) || 0
+    output = data.output ?? data.result ?? null
+    cost_usd = Number(data.cost_usd ?? data.total_cost_usd) || 0
+    tokens =
+      Number(data.tokens ?? data.usage?.total_tokens ?? data.usage?.tokens) || 0
   } catch (e) {
     await failRun(sb, run_id, `agent-runner call failed: ${(e as Error).message}`, meta)
     return
