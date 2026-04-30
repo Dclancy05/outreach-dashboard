@@ -305,25 +305,78 @@ add_stdio_mcp() {
   fi
 }
 
-# HTTP MCPs — Mac calls via Tailscale Funnel (public HTTPS), VPS calls
-# the same Docker containers at localhost (no funnel hop).
-add_http_mcp playwright "$TS_FUNNEL_BASE/mcp/playwright" "http://127.0.0.1:8010" "$PLAYWRIGHT_MCP_TOKEN"
-add_http_mcp devtools   "$TS_FUNNEL_BASE/mcp/devtools"   "http://127.0.0.1:8011" "$DEVTOOLS_MCP_TOKEN"
-add_http_mcp postgres   "$TS_FUNNEL_BASE/mcp/postgres"   "http://127.0.0.1:8012" "$POSTGRES_MCP_TOKEN"
+# ─── Cleanup any broken HTTP entries from prior runs ──────────────────
+# The earlier docker-compose approach 502'd because the container start
+# scripts had wrong syntax for @playwright/mcp / supergateway. Replacing
+# with stdio packages — same proven pattern as Dylan's existing
+# playwright-global MCP. Faster, no Docker, no bearer tokens to keep
+# in sync. Cleanup runs first so re-runs heal the stale state.
+echo "  Cleaning up broken HTTP entries (if present)..."
+for name in playwright devtools postgres; do
+  claude mcp remove "$name" --scope user >/dev/null 2>&1 || true
+  ssh "$VPS_HOST" "claude mcp remove '$name' --scope user >/dev/null 2>&1 || true" 2>/dev/null || true
+done
 
-# Stdio MCPs — same package installed via npx on both Mac and VPS
-[[ -n "$GITHUB_TOKEN_VAL" ]] && \
-  add_stdio_mcp github "--env GITHUB_PERSONAL_ACCESS_TOKEN=$GITHUB_TOKEN_VAL" npx -y @modelcontextprotocol/server-github
+# ─── Stdio MCPs (replace HTTP) ──────────────────────────────────────────
+# Playwright with --caps devtools = browser AND devtools in one MCP.
+# On Mac: launches local Chrome (Dylan's existing playwright-global
+# already does this — we use a different name to avoid collision).
+# On VPS: connects to existing Chrome+CDP at localhost:9222 — uses the
+# host's running Chrome, no Docker needed.
 
-# Sentry — first call triggers device-code OAuth. Skipping VPS-side
-# registration here because device-code can't complete on a headless VPS.
-# Add manually if you want it on VPS too: requires SENTRY_AUTH_TOKEN.
+# Mac: skip if playwright-global already covers it
+if claude mcp list 2>/dev/null | grep -qE "^(playwright|playwright-global) "; then
+  ok "Mac: playwright (have playwright-global already)"
+else
+  claude mcp add --scope user playwright -- npx -y @playwright/mcp --caps devtools 2>&1 | head -1 \
+    && ok "Mac: playwright added" || warn "Mac: playwright add failed"
+fi
+
+# VPS: connect to existing Chrome+CDP
+if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^playwright '"; then
+  ok "VPS: playwright already registered"
+else
+  ssh "$VPS_HOST" "claude mcp add --scope user playwright -- npx -y @playwright/mcp --caps devtools --cdp-endpoint http://127.0.0.1:9222" 2>&1 | head -1 \
+    && ok "VPS: playwright added (uses host Chrome+CDP)" || warn "VPS: playwright add failed"
+fi
+
+# Postgres MCP (stdio with conn string as first arg)
+if claude mcp list 2>/dev/null | grep -q "^postgres "; then
+  ok "Mac: postgres already registered"
+else
+  claude mcp add --scope user postgres -- npx -y @modelcontextprotocol/server-postgres "$POSTGRES_CONNECTION_STRING" 2>&1 | head -1 \
+    && ok "Mac: postgres added" || warn "Mac: postgres add failed"
+fi
+if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^postgres '"; then
+  ok "VPS: postgres already registered"
+else
+  ssh "$VPS_HOST" "claude mcp add --scope user postgres -- npx -y @modelcontextprotocol/server-postgres '$POSTGRES_CONNECTION_STRING'" 2>&1 | head -1 \
+    && ok "VPS: postgres added" || warn "VPS: postgres add failed"
+fi
+
+# GitHub MCP — `-e KEY=VAL` is the actual Claude Code env-flag syntax
+# (the `--env` form silently fails on some versions). Switching here.
+if [[ -n "$GITHUB_TOKEN_VAL" ]]; then
+  if claude mcp list 2>/dev/null | grep -q "^github "; then
+    ok "Mac: github already registered"
+  else
+    claude mcp add --scope user -e "GITHUB_PERSONAL_ACCESS_TOKEN=$GITHUB_TOKEN_VAL" github -- npx -y @modelcontextprotocol/server-github 2>&1 | head -1 \
+      && ok "Mac: github added" || warn "Mac: github add failed"
+  fi
+  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^github '"; then
+    ok "VPS: github already registered"
+  else
+    ssh "$VPS_HOST" "claude mcp add --scope user -e 'GITHUB_PERSONAL_ACCESS_TOKEN=$GITHUB_TOKEN_VAL' github -- npx -y @modelcontextprotocol/server-github" 2>&1 | head -1 \
+      && ok "VPS: github added" || warn "VPS: github add failed"
+  fi
+fi
+
+# Sentry — Mac only (device-code OAuth can't complete on headless VPS).
 if claude mcp list 2>/dev/null | grep -q "^sentry "; then
   ok "Mac: sentry already registered"
 else
-  claude mcp add --scope user sentry -- npx -y @sentry/mcp-server >/dev/null 2>&1 \
-    && ok "Mac: sentry added (device-code OAuth on first call)" \
-    || warn "Mac: sentry add failed"
+  claude mcp add --scope user sentry -- npx -y @sentry/mcp-server 2>&1 | head -1 \
+    && ok "Mac: sentry added (device-code OAuth on first call)" || warn "Mac: sentry add failed"
 fi
 
 if [[ -n "$CONTEXT7_API_KEY_VAL" ]]; then
@@ -343,11 +396,29 @@ if [[ -n "$CONTEXT7_API_KEY_VAL" ]]; then
   fi
 fi
 
-[[ -n "$BRAVE_SEARCH_API_KEY_VAL" ]] && \
-  add_stdio_mcp brave-search "--env BRAVE_API_KEY=$BRAVE_SEARCH_API_KEY_VAL" npx -y @modelcontextprotocol/server-brave-search
+if [[ -n "$BRAVE_SEARCH_API_KEY_VAL" ]]; then
+  if claude mcp list 2>/dev/null | grep -q "^brave-search "; then
+    ok "Mac: brave-search already registered"
+  else
+    claude mcp add --scope user -e "BRAVE_API_KEY=$BRAVE_SEARCH_API_KEY_VAL" brave-search -- npx -y @modelcontextprotocol/server-brave-search 2>&1 | head -1 \
+      && ok "Mac: brave-search added" || warn "Mac: brave-search add failed"
+  fi
+  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^brave-search '"; then
+    ok "VPS: brave-search already registered"
+  else
+    ssh "$VPS_HOST" "claude mcp add --scope user -e 'BRAVE_API_KEY=$BRAVE_SEARCH_API_KEY_VAL' brave-search -- npx -y @modelcontextprotocol/server-brave-search" 2>&1 | head -1 \
+      && ok "VPS: brave-search added" || warn "VPS: brave-search add failed"
+  fi
+fi
 
-[[ -n "$TWILIO_SID" && -n "$TWILIO_AUTH" ]] && \
-  add_stdio_mcp twilio "--env TWILIO_ACCOUNT_SID=$TWILIO_SID --env TWILIO_AUTH_TOKEN=$TWILIO_AUTH" npx -y @twilio-alpha/mcp
+if [[ -n "$TWILIO_SID" && -n "$TWILIO_AUTH" ]]; then
+  if claude mcp list 2>/dev/null | grep -q "^twilio "; then
+    ok "Mac: twilio already registered"
+  else
+    claude mcp add --scope user -e "TWILIO_ACCOUNT_SID=$TWILIO_SID" -e "TWILIO_AUTH_TOKEN=$TWILIO_AUTH" twilio -- npx -y @twilio-alpha/mcp 2>&1 | head -1 \
+      && ok "Mac: twilio added" || warn "Mac: twilio add failed"
+  fi
+fi
 
 [[ -n "$APIFY_TOKEN_VAL" ]] && \
   add_http_mcp apify "https://mcp.apify.com" "https://mcp.apify.com" "$APIFY_TOKEN_VAL"
