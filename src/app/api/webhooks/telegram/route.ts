@@ -224,7 +224,7 @@ export async function POST(req: NextRequest) {
   try {
     // 1. Validate secret (constant-time inside the lib).
     const secretHeader = req.headers.get(SECRET_HEADER)
-    if (!validateWebhookSecret(secretHeader)) {
+    if (!(await validateWebhookSecret(secretHeader))) {
       console.error("[telegram-webhook] rejected: bad secret token")
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 })
     }
@@ -253,7 +253,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, ignored: "no-chat-id" })
     }
 
-    if (!isAuthorizedChatId(chatId)) {
+    if (!(await isAuthorizedChatId(chatId))) {
       console.warn("[telegram-webhook] rejected: chat_id not in allowlist", {
         chat_id: chatId,
         update_id: update.update_id,

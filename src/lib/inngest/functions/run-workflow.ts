@@ -44,14 +44,22 @@ import {
   type NotifyPayload,
   type NotifyOptions,
 } from "@/lib/notifications/dispatch"
+import { getSecret } from "@/lib/secrets"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-const AGENT_RUNNER_URL   = process.env.AGENT_RUNNER_URL   || "http://localhost:10001"
-const AGENT_RUNNER_TOKEN = process.env.AGENT_RUNNER_TOKEN || ""
+// Read at call-time via getSecret() so values can live in the api_keys table
+// (live-rotatable from /agency/keys without a redeploy) and fall back to
+// process.env. The 5-min cache in secrets.ts keeps per-step latency negligible.
+async function getRunnerUrl(): Promise<string> {
+  return (await getSecret("AGENT_RUNNER_URL")) || "http://localhost:10001"
+}
+async function getRunnerToken(): Promise<string> {
+  return (await getSecret("AGENT_RUNNER_TOKEN")) || ""
+}
 
 // ─── Per-step helpers ──────────────────────────────────────────────────────
 
@@ -175,11 +183,13 @@ async function callAgentRunner(
       tokens: 250,
     }
   }
-  const res = await fetch(`${AGENT_RUNNER_URL}/agents/run`, {
+  const runnerUrl = await getRunnerUrl()
+  const runnerToken = await getRunnerToken()
+  const res = await fetch(`${runnerUrl}/agents/run`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(AGENT_RUNNER_TOKEN ? { Authorization: `Bearer ${AGENT_RUNNER_TOKEN}` } : {}),
+      ...(runnerToken ? { Authorization: `Bearer ${runnerToken}` } : {}),
     },
     body: JSON.stringify({ agent_slug, prompt, vars, parent_run_id }),
     signal: AbortSignal.timeout(300_000),
