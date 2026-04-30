@@ -381,6 +381,23 @@ export const PROVIDERS: ProviderEntry[] = [
     help: "Auth token for the agent-runner service.",
   },
   {
+    slug: "terminal_runner_url",
+    category: "Infrastructure",
+    label: "Terminal Runner URL",
+    emoji: "🖥️",
+    envVars: ["TERMINAL_RUNNER_URL"],
+    help: "Endpoint for the VPS terminal-server that spawns persistent tmux sessions for /agency/terminals. Must be HTTPS and reachable from the browser (Tailscale Funnel).",
+    placeholder: "https://srv1197943.taild42583.ts.net:.../terminals",
+  },
+  {
+    slug: "terminal_runner_token",
+    category: "Infrastructure",
+    label: "Terminal Runner Token",
+    emoji: "🔐",
+    envVars: ["TERMINAL_RUNNER_TOKEN"],
+    help: "Bearer token for the terminal-server. Generate any 32+ char random string.",
+  },
+  {
     slug: "custom",
     category: "Other",
     label: "Custom (type your own env var name)",

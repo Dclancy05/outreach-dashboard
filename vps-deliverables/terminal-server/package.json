@@ -1,0 +1,21 @@
+{
+  "name": "terminal-server",
+  "version": "0.1.0",
+  "description": "HTTP+WebSocket service that spawns persistent tmux sessions on the VPS. Each session runs `claude` (or any shell) in a git worktree. Sessions survive client disconnects, MacBook lid close, and Vercel deploys. Streams pseudo-TTY bytes to xterm.js in the dashboard.",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.21.0",
+    "typescript": "^5.3.3"
+  }
+}

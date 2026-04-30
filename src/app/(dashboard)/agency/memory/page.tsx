@@ -9,7 +9,8 @@
  * users can still tweak token budgets, MCP keys, default personas, etc.
  */
 import { useEffect, useState } from "react"
-import { Brain, Bot, Code2, FolderTree, KeyRound, MessageSquare, Settings as SettingsIcon } from "lucide-react"
+import { Brain, Bot, Code2, FolderTree, KeyRound, MessageSquare, Settings as SettingsIcon, TerminalSquare } from "lucide-react"
+import Link from "next/link"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -153,6 +154,16 @@ export default function MemoryPage() {
         <div className="flex items-center gap-2">
           <VpsStatusBadge />
           {tab === "project-tree" && <GitHubStatusBadge />}
+          <Link href="/agency/terminals">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-zinc-400 hover:text-amber-100 hover:bg-amber-500/10"
+              title="Open Terminals — run multiple persistent Claude sessions in parallel"
+            >
+              <TerminalSquare className="w-4 h-4" />
+            </Button>
+          </Link>
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
               <Button variant="ghost" size="sm" className="text-zinc-400 hover:text-zinc-100" title="Memory settings (token budget, MCP keys, default persona)">

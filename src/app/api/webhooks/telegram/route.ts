@@ -86,6 +86,9 @@ type ParsedCommand =
       label: string // for the ack message ("Quick Ask", "Build Feature", …)
       emoji: string
     }
+  | { kind: "terminal_list" }
+  | { kind: "terminal_spawn"; task: string }
+  | { kind: "terminal_kill"; id: string }
 
 function parseCommand(rawText: string): ParsedCommand {
   const text = rawText.trim()
@@ -105,6 +108,9 @@ function parseCommand(rawText: string): ParsedCommand {
         "/test — run a page's Testing Plan and report",
         "/health — fire the daily health check now",
         "/runs — link to recent runs in the dashboard",
+        "/terminals — list active VPS terminals",
+        "/spawn <task> — spawn a new persistent terminal",
+        "/kill <id> — stop a terminal",
         "/help — full command list",
         "",
         "*Or just talk to me:*",
@@ -145,7 +151,17 @@ function parseCommand(rawText: string): ParsedCommand {
         "📋 */runs*",
         "Link to your recent runs in the dashboard.",
         "",
-        "*Web compose page:* outreach-github.vercel.app/agency/send",
+        "🖥️ */terminals*",
+        "List active VPS terminals (persistent claude sessions).",
+        "",
+        "🚀 */spawn <task>*",
+        "Spawn a new persistent terminal working on the task.",
+        "_Example:_ `/spawn add a regex tester component to /agency/tools`",
+        "",
+        "🛑 */kill <id>*",
+        "Stop a terminal. ID = first 8 chars from `/terminals`.",
+        "",
+        "*Web workspace:* outreach-github.vercel.app/agency/terminals",
       ].join("\n"),
     }
   }
@@ -226,6 +242,38 @@ function parseCommand(rawText: string): ParsedCommand {
     }
   }
 
+  // /terminals — list active terminals
+  if (/^\/terminals(?:\s|$|@)/i.test(text)) {
+    return { kind: "terminal_list" }
+  }
+
+  // /spawn <task description> — spawn a new terminal with the task
+  const spawnMatch = text.match(/^\/spawn(?:@\w+)?(?:\s+([\s\S]+))?$/i)
+  if (spawnMatch) {
+    const arg = (spawnMatch[1] || "").trim()
+    if (!arg) {
+      return {
+        kind: "static",
+        text:
+          "Usage: `/spawn <task>`\n\n_Example:_ `/spawn write a regex tester component`\n\nSpawns a new persistent terminal on the VPS, claude starts working on the task. Sibling-aware so it won't fight other terminals.",
+      }
+    }
+    return { kind: "terminal_spawn", task: arg }
+  }
+
+  // /kill <id> — stop a terminal by 8-char id prefix or full uuid
+  const killMatch = text.match(/^\/kill(?:@\w+)?(?:\s+([\s\S]+))?$/i)
+  if (killMatch) {
+    const arg = (killMatch[1] || "").trim()
+    if (!arg) {
+      return {
+        kind: "static",
+        text: "Usage: `/kill <id>`\n\nID is the first 8 chars shown in `/terminals` — e.g. `/kill a1b2c3d4`.",
+      }
+    }
+    return { kind: "terminal_kill", id: arg }
+  }
+
   // Unknown slash command
   if (text.startsWith("/")) {
     const tried = text.split(/\s/)[0]
@@ -243,6 +291,65 @@ function parseCommand(rawText: string): ParsedCommand {
     label: "Quick Ask",
     emoji: "💬",
   }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Terminal-server proxy (used by /terminals, /spawn, /kill commands)
+// ──────────────────────────────────────────────────────────────────────────
+
+interface TerminalSession {
+  id: string
+  title: string
+  branch?: string
+  status?: string
+  created_at: string
+  last_activity_at?: string
+  cost_usd?: number
+  cost_cap_usd?: number
+  paused_reason?: string | null
+}
+
+async function callTerminalServer<T>(
+  method: "GET" | "POST" | "DELETE",
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  const url = ((await getSecret("TERMINAL_RUNNER_URL")) || "").replace(/\/+$/, "")
+  const token = (await getSecret("TERMINAL_RUNNER_TOKEN")) || ""
+  if (!url) return { ok: false, error: "TERMINAL_RUNNER_URL not configured" }
+  if (!token) return { ok: false, error: "TERMINAL_RUNNER_TOKEN not configured" }
+  try {
+    const res = await fetch(`${url}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(15_000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      return { ok: false, error: (data as { error?: string }).error || `HTTP ${res.status}` }
+    }
+    return { ok: true, data: data as T }
+  } catch (e) {
+    return { ok: false, error: `terminal-server unreachable: ${(e as Error).message}` }
+  }
+}
+
+function formatTerminalsList(sessions: TerminalSession[], cap?: { active: number; soft_max: number }): string {
+  if (sessions.length === 0) {
+    return "🖥️ *No terminals running.*\n\nStart one with `/spawn <task>` or open the dashboard at outreach-github.vercel.app/agency/terminals."
+  }
+  const cap_line = cap ? `${cap.active} of ${cap.soft_max} (VPS-aware cap)\n\n` : ""
+  const lines = sessions.map((s) => {
+    const id8 = s.id.slice(0, 8)
+    const status = s.status === "paused" ? "⏸" : s.status === "crashed" ? "💥" : "🟢"
+    const cost = s.cost_usd ? ` · $${Number(s.cost_usd).toFixed(2)}` : ""
+    return `${status} \`${id8}\` *${s.title}*${cost}\n  └ ${s.branch || ""}`
+  })
+  return `🖥️ *${sessions.length} terminal${sessions.length === 1 ? "" : "s"}*${cap ? ` — ${cap_line}` : "\n\n"}${lines.join("\n")}\n\n_Stop one with_ \`/kill <id>\``
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -557,6 +664,75 @@ export async function POST(req: NextRequest) {
         disableWebPagePreview: true,
       })
       return NextResponse.json({ ok: true, kind: "static" })
+    }
+
+    // /terminals — list active sessions on the VPS
+    if (cmd.kind === "terminal_list") {
+      const r = await callTerminalServer<{
+        sessions: TerminalSession[]
+        capacity?: { active: number; hard_max: number; soft_max: number }
+      }>("GET", "/sessions")
+      const text = r.ok
+        ? formatTerminalsList(r.data.sessions || [], r.data.capacity)
+        : `❌ Couldn't reach the VPS terminal-server.\n\n\`${r.error}\``
+      await sendTelegram(text, {
+        chatId,
+        parseMode: "Markdown",
+        replyToMessageId: message.message_id,
+        disableWebPagePreview: true,
+      })
+      return NextResponse.json({ ok: true, kind: "terminal_list" })
+    }
+
+    // /spawn — create a new terminal with the task as the initial prompt
+    if (cmd.kind === "terminal_spawn") {
+      const r = await callTerminalServer<{ id: string; title: string; branch: string }>("POST", "/sessions", {
+        title: cmd.task.slice(0, 50),
+        initial_prompt: cmd.task,
+        inject_sibling_prompt: true,
+        telegram_chat_id: String(chatId),
+      })
+      const text = r.ok
+        ? `🚀 *Terminal spawned* \`${r.data.id.slice(0, 8)}\`\n\n_${cmd.task.slice(0, 200)}_\n\nBranch: \`${r.data.branch}\`\nWatch live: outreach-github.vercel.app/agency/terminals\n\nI'll ping you on cost cap, wallclock cap, or crash.`
+        : `❌ Couldn't spawn a terminal.\n\n\`${r.error}\``
+      await sendTelegram(text, {
+        chatId,
+        parseMode: "Markdown",
+        replyToMessageId: message.message_id,
+        disableWebPagePreview: true,
+      })
+      return NextResponse.json({ ok: true, kind: "terminal_spawn" })
+    }
+
+    // /kill <id> — stop a terminal by id prefix
+    if (cmd.kind === "terminal_kill") {
+      // Accept 8-char prefix. Resolve to full id by listing.
+      let fullId = cmd.id
+      if (cmd.id.length < 36) {
+        const list = await callTerminalServer<{ sessions: TerminalSession[] }>("GET", "/sessions")
+        if (list.ok) {
+          const match = (list.data.sessions || []).find((s) => s.id.startsWith(cmd.id))
+          if (!match) {
+            await sendTelegram(`No terminal matches \`${cmd.id}\`. Run /terminals to see active ones.`, {
+              chatId,
+              parseMode: "Markdown",
+              replyToMessageId: message.message_id,
+            })
+            return NextResponse.json({ ok: true, kind: "terminal_kill", err: "not_found" })
+          }
+          fullId = match.id
+        }
+      }
+      const r = await callTerminalServer<{ ok: boolean }>("DELETE", `/sessions/${fullId}`)
+      const text = r.ok
+        ? `🛑 Terminal \`${fullId.slice(0, 8)}\` stopped. Branch preserved; transcript saved to Memory Vault.`
+        : `❌ Couldn't stop terminal.\n\n\`${r.error}\``
+      await sendTelegram(text, {
+        chatId,
+        parseMode: "Markdown",
+        replyToMessageId: message.message_id,
+      })
+      return NextResponse.json({ ok: true, kind: "terminal_kill" })
     }
 
     // Workflow execution.
