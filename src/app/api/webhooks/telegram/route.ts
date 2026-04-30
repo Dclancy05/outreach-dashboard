@@ -68,6 +68,217 @@ export const maxDuration = 120
 const QUICK_ASK_SLUG = "quick-ask"
 const SECRET_HEADER = "x-telegram-bot-api-secret-token"
 
+// Workflows that are SAFE to run inside Vercel's request budget (single agent
+// node, finishes in <60s). Anything else fire-and-forgets to the VPS workflow
+// executor at /workflows/run on the agent-runner.
+const SYNC_SAFE_SLUGS = new Set(["quick-ask", "Quick Ask"])
+
+// ──────────────────────────────────────────────────────────────────────────
+// Slash-command parser
+// ──────────────────────────────────────────────────────────────────────────
+
+type ParsedCommand =
+  | { kind: "static"; text: string }
+  | {
+      kind: "workflow"
+      slug: string // matches `name` in the workflows table (fuzzy-matched downstream)
+      message: string
+      label: string // for the ack message ("Quick Ask", "Build Feature", …)
+      emoji: string
+    }
+
+function parseCommand(rawText: string): ParsedCommand {
+  const text = rawText.trim()
+
+  // /start — friendly welcome
+  if (/^\/start(?:\s|$|@)/i.test(text)) {
+    return {
+      kind: "static",
+      text: [
+        "🤖 *Hey, I'm Jarvis.*",
+        "",
+        "I run on your VPS using your Claude Code subscription. Talk to me anytime — phone off your computer, I keep working.",
+        "",
+        "*Slash commands:*",
+        "/build — build a feature end-to-end (plan → build → test → PR)",
+        "/fix — investigate + propose a fix for a bug",
+        "/test — run a page's Testing Plan and report",
+        "/health — fire the daily health check now",
+        "/runs — link to recent runs in the dashboard",
+        "/help — full command list",
+        "",
+        "*Or just talk to me:*",
+        "• \"what's the latest commit on main?\"",
+        "• \"summarize my open PRs\"",
+        "• \"what does the deadman cron do?\"",
+        "",
+        "_Quick replies: 10-30s. Long workflows ping you on stage transitions._ ✅",
+      ].join("\n"),
+    }
+  }
+
+  // /help — full command list
+  if (/^\/help(?:\s|$|@)/i.test(text)) {
+    return {
+      kind: "static",
+      text: [
+        "*Jarvis commands*",
+        "",
+        "💬 *Quick Ask* (default — just text me, no prefix)",
+        "Single-shot Claude reply. Reads code, runs git, looks things up.",
+        "",
+        "🏗️ */build <description>*",
+        "Plan → structure → build → test → open PR. Multi-step.",
+        "_Example:_ `/build inbox watcher for IG replies`",
+        "",
+        "🔍 */fix <bug description>*",
+        "Read repo → reproduce → root cause → propose fix → PR.",
+        "_Example:_ `/fix lead pipeline isn't moving on reply`",
+        "",
+        "🧪 */test <page path>*",
+        "Run the page's Testing Plan and report regressions.",
+        "_Example:_ `/test /agency/leads`",
+        "",
+        "🏥 */health*",
+        "Manually fire the Daily Health Check.",
+        "",
+        "📋 */runs*",
+        "Link to your recent runs in the dashboard.",
+        "",
+        "*Web compose page:* outreach-github.vercel.app/agency/send",
+      ].join("\n"),
+    }
+  }
+
+  // /runs — link to dashboard
+  if (/^\/runs(?:\s|$|@)/i.test(text)) {
+    return {
+      kind: "static",
+      text:
+        "📋 *Recent runs:* https://outreach-github.vercel.app/agency/memory#agent-workflows" +
+        "\n\nClick any run to see the live trace + cost + agent reply.",
+    }
+  }
+
+  // Workflow commands
+  const buildMatch = text.match(/^\/build(?:@\w+)?(?:\s+([\s\S]+))?$/i)
+  if (buildMatch) {
+    const arg = (buildMatch[1] || "").trim()
+    if (!arg) {
+      return {
+        kind: "static",
+        text:
+          "Usage: `/build <description of the feature>`\n\n_Example:_ `/build a /agency/inbox-watcher page that polls IG every 15 min`",
+      }
+    }
+    return {
+      kind: "workflow",
+      slug: "Build Feature End-to-End",
+      message: arg,
+      label: "Build Feature",
+      emoji: "🏗️",
+    }
+  }
+
+  const fixMatch = text.match(/^\/(?:fix|investigate)(?:@\w+)?(?:\s+([\s\S]+))?$/i)
+  if (fixMatch) {
+    const arg = (fixMatch[1] || "").trim()
+    if (!arg) {
+      return {
+        kind: "static",
+        text: "Usage: `/fix <bug description>`\n\n_Example:_ `/fix lead pipeline isn't moving when reply comes in`",
+      }
+    }
+    return {
+      kind: "workflow",
+      slug: "Investigate Bug",
+      message: arg,
+      label: "Investigate Bug",
+      emoji: "🔍",
+    }
+  }
+
+  const testMatch = text.match(/^\/test(?:@\w+)?(?:\s+([\s\S]+))?$/i)
+  if (testMatch) {
+    const arg = (testMatch[1] || "").trim()
+    if (!arg) {
+      return {
+        kind: "static",
+        text: "Usage: `/test <page path>`\n\n_Example:_ `/test /agency/leads`",
+      }
+    }
+    return {
+      kind: "workflow",
+      slug: "Test This Page",
+      message: arg,
+      label: "Test Page",
+      emoji: "🧪",
+    }
+  }
+
+  if (/^\/health(?:\s|$|@)/i.test(text)) {
+    return {
+      kind: "workflow",
+      slug: "Daily Health Check",
+      message: "Run the daily health check now and report.",
+      label: "Health Check",
+      emoji: "🏥",
+    }
+  }
+
+  // Unknown slash command
+  if (text.startsWith("/")) {
+    const tried = text.split(/\s/)[0]
+    return {
+      kind: "static",
+      text: `Unknown command \`${tried}\`. Send /help for the list.`,
+    }
+  }
+
+  // Default: free-text Quick Ask
+  return {
+    kind: "workflow",
+    slug: QUICK_ASK_SLUG,
+    message: text,
+    label: "Quick Ask",
+    emoji: "💬",
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Multi-step fire-and-forget to the VPS workflow executor
+// ──────────────────────────────────────────────────────────────────────────
+
+async function fireMultiStepToVps(args: {
+  run_id: string
+  workflow_id: string
+  input: Record<string, unknown>
+}): Promise<{ ok: boolean; error?: string }> {
+  const url = await getSecret("AGENT_RUNNER_URL")
+  const token = await getSecret("AGENT_RUNNER_TOKEN")
+  if (!url) return { ok: false, error: "AGENT_RUNNER_URL not configured" }
+  try {
+    const res = await fetch(`${url}/workflows/run`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(args),
+      // Short timeout — the VPS responds 202 ACCEPTED immediately and runs in
+      // background, so we only need to confirm the request was queued.
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!res.ok) {
+      const body = await res.text().catch(() => "")
+      return { ok: false, error: `VPS returned ${res.status}: ${body.slice(0, 200)}` }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: (e as Error).message }
+  }
+}
+
 // Module-level Supabase client — same pattern as /api/runs/[id]/control so
 // callbacks here update workflow_runs the exact same way that route does.
 // Routes are `dynamic = "force-dynamic"` so this is constructed per cold-start
@@ -324,17 +535,31 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 4b. Text message → queue Quick Ask.
+    // 4b. Text message → parse slash command, route to workflow.
     const message = update.message
     const text = message?.text?.trim()
     if (!message || !text) {
-      // Non-text messages (stickers, photos, etc.) — nothing to do for Phase 1.
+      // Non-text messages (stickers, photos, etc.).
       console.log("[telegram-webhook] non-text message ignored", {
         update_id: update.update_id,
       })
       return NextResponse.json({ ok: true, ignored: "non-text" })
     }
 
+    const cmd = parseCommand(text)
+
+    // Static replies — /start, /help, /runs, unknown command, "usage:" hints.
+    if (cmd.kind === "static") {
+      await sendTelegram(cmd.text, {
+        chatId,
+        parseMode: "Markdown",
+        replyToMessageId: message.message_id,
+        disableWebPagePreview: true,
+      })
+      return NextResponse.json({ ok: true, kind: "static" })
+    }
+
+    // Workflow execution.
     try {
       const meta = {
         source: "telegram" as const,
@@ -344,38 +569,61 @@ export async function POST(req: NextRequest) {
         received_at: new Date().toISOString(),
       }
       const { run_id, workflow_id } = await triggerWorkflowBySlug(
-        QUICK_ASK_SLUG,
-        { message: text },
+        cmd.slug,
+        { message: cmd.message },
         meta,
       )
 
-      // Reply confirmation — keep it short and threaded to the original msg so
-      // the chat reads naturally on phone.
-      await sendTelegram(
-        `🤖 Got it — running. I'll reply when done.\n\n_Run #${run_id.slice(0, 8)}_`,
-        {
-          chatId,
-          parseMode: "Markdown",
-          replyToMessageId: message.message_id,
-          disableWebPagePreview: true,
-        },
-      )
+      // Pick sync vs VPS based on the workflow's complexity.
+      const isSyncSafe = SYNC_SAFE_SLUGS.has(cmd.slug.toLowerCase()) ||
+        SYNC_SAFE_SLUGS.has(cmd.slug)
 
-      // Synchronous execution path — Inngest cloud isn't wired, so we walk
-      // the workflow graph in-process. Single-agent workflows (Quick Ask)
-      // complete inside Vercel's request budget; multi-step ones still need
-      // Inngest to be configured via INNGEST_EVENT_KEY + INNGEST_SIGNING_KEY.
-      try {
-        await runWorkflowSync({
+      // ack message — different shape for quick vs multi-step so Dylan knows
+      // what to expect.
+      const ackText = isSyncSafe
+        ? `${cmd.emoji} *${cmd.label}* — running. I'll reply when done.\n\n_Run #${run_id.slice(0, 8)}_`
+        : `${cmd.emoji} *${cmd.label}* — running on the VPS. I'll ping you on stage transitions and when it's done. Multi-step flows take a few minutes.\n\n_Run #${run_id.slice(0, 8)}_`
+
+      await sendTelegram(ackText, {
+        chatId,
+        parseMode: "Markdown",
+        replyToMessageId: message.message_id,
+        disableWebPagePreview: true,
+      })
+
+      if (isSyncSafe) {
+        // In-process sync executor — works for single-agent workflows.
+        try {
+          await runWorkflowSync({
+            run_id,
+            workflow_id,
+            input: { message: cmd.message, _meta: meta },
+          })
+        } catch (e) {
+          console.error("[telegram-webhook] sync run threw:", (e as Error).message)
+        }
+      } else {
+        // Multi-step — fire-and-forget to the VPS executor. Vercel's
+        // serverless function lifetime can't cover 5-30 min builds.
+        const vpsResult = await fireMultiStepToVps({
           run_id,
           workflow_id,
-          input: { message: text, _meta: meta },
+          input: { message: cmd.message, _meta: meta },
         })
-      } catch (e) {
-        console.error("[telegram-webhook] sync run threw:", (e as Error).message)
+        if (!vpsResult.ok) {
+          console.error("[telegram-webhook] VPS dispatch failed:", vpsResult.error)
+          await sendTelegram(
+            `❌ Couldn't start the workflow on the VPS: ${vpsResult.error || "unknown error"}.\n\n_Run #${run_id.slice(0, 8)} marked failed._`,
+            { chatId, parseMode: "Markdown", replyToMessageId: message.message_id },
+          )
+          await supabase
+            .from("workflow_runs")
+            .update({ status: "failed", error: `VPS dispatch failed: ${vpsResult.error}`, finished_at: new Date().toISOString() })
+            .eq("id", run_id)
+        }
       }
 
-      return NextResponse.json({ ok: true, run_id })
+      return NextResponse.json({ ok: true, run_id, slug: cmd.slug })
     } catch (err) {
       if (err instanceof WorkflowNotFoundError) {
         console.error("[telegram-webhook] quick-ask workflow not seeded", { slug: err.slug })
