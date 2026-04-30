@@ -66,6 +66,10 @@ export function TerminalsWorkspace() {
    *  from list-on-mount we hydrate this lazily from a fresh POST… (Phase 2:
    *  add a GET that returns connection info without creating). */
   const [connections, setConnections] = useState<Record<string, Connection>>({})
+  /** VPS-aware concurrency state. The terminal-server reads /proc/meminfo and
+   *  computes a soft cap; we surface "x of y" + disable + Newterminal when
+   *  full. Falls back to the hard cap if the VPS doesn't return capacity. */
+  const [capacity, setCapacity] = useState<{ active: number; hard_max: number; soft_max: number } | null>(null)
 
   // ─── Data fetch ────────────────────────────────────────────────────
 
@@ -78,12 +82,15 @@ export function TerminalsWorkspace() {
       }
       const data = (await res.json()) as {
         sessions: Array<SessionRow & { ws_url?: string; token?: string }>
+        capacity?: { active: number; hard_max: number; soft_max: number }
       }
       const list = data.sessions || []
       setSessions(list.map((s) => ({
         id: s.id, title: s.title, branch: s.branch,
         status: s.status, created_at: s.created_at, last_activity_at: s.last_activity_at,
+        cost_usd: s.cost_usd, cost_cap_usd: s.cost_cap_usd, paused_reason: s.paused_reason,
       })))
+      if (data.capacity) setCapacity(data.capacity)
       // Hydrate connection details for each existing session so reload-attach
       // works without a fresh POST.
       setConnections((cur) => {
@@ -269,12 +276,25 @@ export function TerminalsWorkspace() {
               </button>
             ))}
           </div>
+          {capacity && (
+            <span className="hidden md:inline text-[11px] text-zinc-500 mr-2" title="VPS-aware soft cap (RAM headroom)">
+              {capacity.active} / {capacity.soft_max}
+            </span>
+          )}
           <Button
             variant="ghost"
             size="sm"
             onClick={createSession}
-            disabled={creating || sessions.length >= 16}
+            disabled={
+              creating ||
+              (capacity ? sessions.length >= capacity.soft_max : sessions.length >= 8)
+            }
             className="text-zinc-300 hover:text-amber-100 hover:bg-amber-500/10"
+            title={
+              capacity && sessions.length >= capacity.soft_max
+                ? `VPS at capacity (${capacity.active}/${capacity.soft_max}) — stop a session first`
+                : "Spawn a new terminal"
+            }
           >
             {creating ? (
               <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />

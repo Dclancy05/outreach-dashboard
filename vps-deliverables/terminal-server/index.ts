@@ -299,7 +299,19 @@ interface CreateInput {
 }
 
 function createSession(input: CreateInput): Session {
-  if (sessions.size >= MAX_SESSIONS) {
+  // Two-layer cap: absolute hard limit (MAX_SESSIONS env) AND a VPS-aware
+  // soft limit (computed from /proc/meminfo). The dynamic limit prevents
+  // us from spawning a 9th session that would push the box past safe RAM
+  // headroom — caller gets a clear "VPS at capacity" message.
+  const dynamicCap = vpsConcurrencyCap()
+  const cap = Math.min(MAX_SESSIONS, dynamicCap)
+  if (sessions.size >= cap) {
+    if (dynamicCap < MAX_SESSIONS) {
+      throw new Error(
+        `VPS at capacity — ${sessions.size} sessions running, ` +
+        `headroom for ${dynamicCap}. Stop one or upgrade the box.`,
+      )
+    }
     throw new Error(`Max ${MAX_SESSIONS} concurrent sessions reached`)
   }
   const id = randomUUID()
@@ -367,6 +379,14 @@ function killSession(id: string): boolean {
   const s = sessions.get(id)
   if (!s) return false
   s.pendingKill = true
+  // Save transcript BEFORE killing tmux — capture-pane needs the session alive.
+  // Fire-and-forget; we don't want a slow Memory Vault disk to block the kill.
+  void saveTranscript(s).then((p) => {
+    if (p) {
+      void dbUpdate(id, { transcript_path: p })
+      console.log("[terminal-server] transcript saved", { id: safe(id), path: safe(p) })
+    }
+  })
   spawnSync("tmux", ["-f", TMUX_CONF_PATH, "kill-session", "-t", s.tmuxName])
   // Keep the branch — Dylan can still merge committed work.
   removeWorktree(s.worktreePath, s.branch, false)
@@ -447,17 +467,55 @@ const server = createServer(async (req, res) => {
         void dbUpdate(id, { status: "stopped", finished_at: new Date().toISOString() })
       }
     }
-    const out = Array.from(sessions.values()).map((s) => ({
-      id: s.id,
-      title: s.title,
-      branch: s.branch,
-      worktree_path: s.worktreePath,
-      command: s.command,
-      created_at: new Date(s.createdAt).toISOString(),
-      last_activity_at: new Date(s.lastActivityAt).toISOString(),
-      tmux_attached: tmuxHas(s.tmuxName),
-    }))
-    sendJson(res, 200, { sessions: out })
+    // Merge in Supabase-tracked metadata: cost, paused_reason, status.
+    // tmux is the source of truth for liveness; Supabase holds everything else.
+    type DbRow = {
+      id: string
+      cost_usd?: number
+      cost_cap_usd?: number
+      total_tokens?: number
+      paused_reason?: string | null
+      status?: string
+      crashes?: number
+      transcript_path?: string | null
+    }
+    const dbMeta = new Map<string, DbRow>()
+    if (supa && sessions.size > 0) {
+      const ids = Array.from(sessions.keys())
+      const { data } = await supa
+        .from("terminal_sessions")
+        .select("id, cost_usd, cost_cap_usd, total_tokens, paused_reason, status, crashes, transcript_path")
+        .in("id", ids)
+      for (const row of (data || []) as DbRow[]) dbMeta.set(row.id, row)
+    }
+    const out = Array.from(sessions.values()).map((s) => {
+      const m = dbMeta.get(s.id) || {}
+      return {
+        id: s.id,
+        title: s.title,
+        branch: s.branch,
+        worktree_path: s.worktreePath,
+        command: s.command,
+        created_at: new Date(s.createdAt).toISOString(),
+        last_activity_at: new Date(s.lastActivityAt).toISOString(),
+        tmux_attached: tmuxHas(s.tmuxName),
+        status: m.status || "running",
+        cost_usd: m.cost_usd ?? 0,
+        cost_cap_usd: m.cost_cap_usd ?? 5,
+        total_tokens: m.total_tokens ?? 0,
+        paused_reason: m.paused_reason ?? null,
+        crashes: m.crashes ?? 0,
+        transcript_path: m.transcript_path ?? null,
+      }
+    })
+    sendJson(res, 200, {
+      sessions: out,
+      capacity: {
+        active: sessions.size,
+        hard_max: MAX_SESSIONS,
+        soft_max: vpsConcurrencyCap(),
+      },
+    })
     return
   }
 
@@ -633,21 +691,284 @@ function attachToSession(ws: WebSocket, s: Session): void {
   })
 }
 
+// ─── Telegram (best-effort, direct Bot API) ────────────────────────────────
+//
+// The dashboard has a full notification dispatcher with channel inference
+// and threading. The VPS doesn't have access to that; it just makes a
+// direct HTTPS call to the Telegram Bot API with whatever env vars are set.
+// If TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID aren't present, this no-ops —
+// watchers degrade to log-only without crashing.
+
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || ""
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || ""
+
+async function notifyTelegram(text: string): Promise<void> {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text,
+        parse_mode: "Markdown",
+        disable_web_page_preview: true,
+      }),
+      signal: AbortSignal.timeout(5_000),
+    })
+  } catch (e) {
+    console.warn("[terminal-server] telegram send failed:", (e as Error).message)
+  }
+}
+
+// ─── Memory Vault transcript save ─────────────────────────────────────────
+
+const MEMORY_VAULT_DIR = process.env.MEMORY_VAULT_DIR || "/root/memory-vault"
+
+async function saveTranscript(s: Session): Promise<string | null> {
+  const dir = join(MEMORY_VAULT_DIR, "Conversations")
+  try {
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  } catch {
+    return null
+  }
+  const date = new Date().toISOString().slice(0, 10)
+  const fname = `terminal-${safe(s.id).slice(0, 8)}-${date}.md`
+  const path = join(dir, fname)
+  // 50,000 lines should cover even multi-day sessions. -J joins wrapped lines.
+  const cap = spawnSync("tmux", ["-f", TMUX_CONF_PATH, "capture-pane", "-p", "-J", "-S", "-50000", "-t", s.tmuxName], {
+    encoding: "utf8",
+  })
+  if (cap.status !== 0) return null
+  try {
+    const { writeFileSync } = await import("node:fs")
+    const header = [
+      `# Terminal session ${s.title}`,
+      ``,
+      `- **id**: \`${s.id}\``,
+      `- **branch**: \`${s.branch}\``,
+      `- **started**: ${new Date(s.createdAt).toISOString()}`,
+      `- **ended**: ${new Date().toISOString()}`,
+      ``,
+      `---`,
+      ``,
+      "```",
+    ].join("\n")
+    writeFileSync(path, `${header}\n${cap.stdout || ""}\n\`\`\`\n`, "utf8")
+    return path
+  } catch {
+    return null
+  }
+}
+
+// ─── VPS-aware concurrency cap ─────────────────────────────────────────────
+//
+// Reads /proc/meminfo MemAvailable. With the existing services on the box
+// (~5 GB used by OpenClaw, Memory Vault, Graphiti, Ollama) and ~600 MB per
+// active claude session, we can safely run (Available - 2 GB safety) / 600 MB
+// concurrent terminals. This is a SOFT cap surfaced to the dashboard; the
+// MAX_SESSIONS env var is the absolute hard cap.
+
+function vpsConcurrencyCap(): number {
+  try {
+    const { readFileSync } = require("node:fs") as typeof import("node:fs")
+    const meminfo = readFileSync("/proc/meminfo", "utf8")
+    const m = meminfo.match(/MemAvailable:\s+(\d+)\s+kB/)
+    if (!m) return MAX_SESSIONS
+    const availMB = parseInt(m[1], 10) / 1024
+    const safety = 2048 // 2 GB safety
+    const perSession = 600 // MB
+    const safe = Math.floor(Math.max(0, availMB - safety) / perSession)
+    return Math.min(MAX_SESSIONS, Math.max(1, safe))
+  } catch {
+    return MAX_SESSIONS
+  }
+}
+
+// ─── Cost watcher ─────────────────────────────────────────────────────────
+//
+// Best-effort cost tracking from tmux scrollback. Claude Code emits cost in
+// its terminal output sporadically (e.g. "Total cost: $0.05" on /cost or at
+// session end with --output-format=json). We grep for `$<number>` near the
+// word "cost" and take the latest value as the running cumulative cost.
+// Imperfect — misses sessions that never print cost — but the wallclock
+// watcher catches those.
+
+const COST_RE = /(?:cost[^\n]*?\$|\$)([0-9]+(?:\.[0-9]+)?)/gi
+
+async function costTickOne(s: Session): Promise<void> {
+  if (!supa) return
+  const cap = spawnSync("tmux", ["-f", TMUX_CONF_PATH, "capture-pane", "-p", "-J", "-S", "-500", "-t", s.tmuxName], {
+    encoding: "utf8",
+  })
+  if (cap.status !== 0) return
+  const text = cap.stdout || ""
+  let max = 0
+  for (const m of text.matchAll(COST_RE)) {
+    const v = parseFloat(m[1])
+    if (Number.isFinite(v) && v > max && v < 1000) max = v
+  }
+  if (max <= 0) return
+  // Read the row's current cost_cap_usd to compare against. We could cache
+  // this but the polling loop is slow (60s) so a fresh read is fine.
+  const { data } = await supa
+    .from("terminal_sessions")
+    .select("cost_usd, cost_cap_usd, status")
+    .eq("id", s.id)
+    .maybeSingle()
+  const cap_usd = (data?.cost_cap_usd as number | null) ?? 5
+  const prevCost = (data?.cost_usd as number | null) ?? 0
+  const status = data?.status as string | null
+  // Don't update if the new reading is lower than what we have (claude
+  // output rotated out of scrollback). Monotonic only.
+  const newCost = Math.max(max, prevCost)
+  await dbUpdate(s.id, { cost_usd: newCost })
+  if (newCost >= cap_usd && status !== "paused") {
+    // Send Ctrl-C twice to interrupt any in-progress claude turn.
+    spawnSync("tmux", ["-f", TMUX_CONF_PATH, "send-keys", "-t", s.tmuxName, "C-c"])
+    spawnSync("tmux", ["-f", TMUX_CONF_PATH, "send-keys", "-t", s.tmuxName, "C-c"])
+    await dbUpdate(s.id, { status: "paused", paused_reason: `cost cap $${cap_usd} reached ($${newCost.toFixed(2)})` })
+    void notifyTelegram(
+      `⛔ *Terminal paused — cost cap*\n` +
+        `Session: \`${safe(s.title)}\`\n` +
+        `Spent: $${newCost.toFixed(2)} of $${cap_usd.toFixed(2)} cap\n` +
+        `Branch: \`${safe(s.branch)}\``,
+    )
+    console.log("[terminal-server] cost cap tripped", { id: safe(s.id), cost_usd: newCost, cap_usd })
+  }
+}
+
+async function costWatcherTick(): Promise<void> {
+  const list = Array.from(sessions.values())
+  for (const s of list) {
+    try { await costTickOne(s) } catch (e) {
+      console.warn("[terminal-server] cost tick failed", { id: safe(s.id), err: (e as Error).message })
+    }
+  }
+}
+
+// ─── Wallclock watcher ────────────────────────────────────────────────────
+//
+// One ping per session when it crosses the wallclock cap (default 4h since
+// created_at). Sets wallclock_warned_at to avoid re-pinging every tick.
+
+async function wallclockWatcherTick(): Promise<void> {
+  if (!supa) return
+  const { data } = await supa
+    .from("terminal_sessions")
+    .select("id, title, branch, created_at, wallclock_cap_minutes, wallclock_warned_at, status")
+    .in("status", ["running", "idle"])
+  for (const row of data || []) {
+    const r = row as { id: string; title: string; branch: string; created_at: string; wallclock_cap_minutes: number | null; wallclock_warned_at: string | null }
+    if (r.wallclock_warned_at) continue
+    const capMin = r.wallclock_cap_minutes ?? 240
+    const ageMin = (Date.now() - new Date(r.created_at).getTime()) / 60_000
+    if (ageMin < capMin) continue
+    await dbUpdate(r.id, { wallclock_warned_at: new Date().toISOString() })
+    void notifyTelegram(
+      `⏰ *Terminal still running*\n` +
+        `Session: \`${safe(r.title)}\`\n` +
+        `Age: ${Math.round(ageMin / 60 * 10) / 10}h (cap ${capMin / 60}h)\n` +
+        `Branch: \`${safe(r.branch)}\``,
+    )
+    console.log("[terminal-server] wallclock cap tripped", { id: safe(r.id), age_min: Math.round(ageMin) })
+  }
+}
+
+// ─── Crash watcher ────────────────────────────────────────────────────────
+//
+// Detects sessions whose tmux process vanished without a graceful kill
+// (s.pendingKill). On first crash: respawn with `claude --continue` so
+// Claude resumes the prior conversation. On second crash: don't respawn,
+// ping Telegram, leave it stopped.
+
+async function crashWatcherTick(): Promise<void> {
+  for (const [id, s] of Array.from(sessions.entries())) {
+    if (s.pendingKill) continue
+    if (tmuxHas(s.tmuxName)) continue
+    // It's gone. Decide whether to respawn.
+    sessions.delete(id)
+    const { data } = supa
+      ? await supa.from("terminal_sessions").select("crashes, command").eq("id", id).maybeSingle()
+      : { data: null }
+    const prevCrashes = (data?.crashes as number | null) ?? 0
+    const cmd = (data?.command as string | null) || s.command
+    if (prevCrashes >= 1) {
+      await dbUpdate(id, { status: "crashed", crashes: prevCrashes + 1, finished_at: new Date().toISOString() })
+      void notifyTelegram(
+        `💥 *Terminal crashed twice — staying down*\n` +
+          `Session: \`${safe(s.title)}\`\n` +
+          `Branch: \`${safe(s.branch)}\``,
+      )
+      // Worktree stays for inspection.
+      console.log("[terminal-server] crash terminal — not respawning", { id: safe(id) })
+      continue
+    }
+    // First crash — respawn with --continue. Worktree still exists, so we
+    // just relaunch tmux with the same name.
+    const continueCmd = cmd.includes(" ") ? `${cmd}` : `${cmd} --continue`
+    const tmuxArgs = [
+      "-f", TMUX_CONF_PATH,
+      "new-session",
+      "-d",
+      "-s", s.tmuxName,
+      "-x", "120",
+      "-y", "30",
+      "-c", s.worktreePath,
+    ]
+    if (existsSync(BOOTSTRAP_SCRIPT)) {
+      tmuxArgs.push(BOOTSTRAP_SCRIPT, continueCmd)
+    } else {
+      tmuxArgs.push(continueCmd)
+    }
+    const r = spawnSync("tmux", tmuxArgs, { encoding: "utf8" })
+    if (r.status !== 0) {
+      await dbUpdate(id, { status: "crashed", crashes: prevCrashes + 1, finished_at: new Date().toISOString() })
+      void notifyTelegram(
+        `💥 *Terminal crashed and respawn failed*\n` +
+          `Session: \`${safe(s.title)}\`\n` +
+          `Error: \`${r.stderr || r.stdout}\``,
+      )
+      continue
+    }
+    s.lastActivityAt = Date.now()
+    s.pendingKill = false
+    sessions.set(id, s)
+    await dbUpdate(id, { status: "running", crashes: prevCrashes + 1 })
+    void notifyTelegram(
+      `🔁 *Terminal crashed — respawned with \`--continue\`*\n` +
+        `Session: \`${safe(s.title)}\`\n` +
+        `Branch: \`${safe(s.branch)}\``,
+    )
+    console.log("[terminal-server] respawned crashed terminal", { id: safe(id) })
+  }
+}
+
+function startWatchers(): void {
+  setInterval(() => { void costWatcherTick() }, 60_000).unref()
+  setInterval(() => { void wallclockWatcherTick() }, 5 * 60_000).unref()
+  setInterval(() => { void crashWatcherTick() }, 30_000).unref()
+  console.log("[terminal-server] watchers started: cost(60s) wallclock(5m) crash(30s)")
+}
+
 // ─── Boot ──────────────────────────────────────────────────────────────────
 
 server.listen(PORT, HOST, async () => {
   console.log(`[terminal-server] listening on ${HOST}:${PORT}`)
   console.log(`  worktrees: ${WORKTREE_ROOT}`)
   console.log(`  default cmd: ${DEFAULT_COMMAND}`)
-  console.log(`  max sessions: ${MAX_SESSIONS}`)
+  console.log(`  max sessions: ${MAX_SESSIONS} (vps-aware soft cap: ${vpsConcurrencyCap()})`)
   console.log(`  tmux conf: ${TMUX_CONF_PATH}`)
   console.log(`  bootstrap: ${BOOTSTRAP_SCRIPT}`)
+  console.log(`  memory vault: ${MEMORY_VAULT_DIR}`)
+  console.log(`  telegram: ${TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID ? "configured" : "missing (notifications log-only)"}`)
   console.log(`  supabase: ${supa ? "configured" : "missing (stateless)"}`)
   try {
     await rehydrateOnBoot()
   } catch (e) {
     console.warn("[terminal-server] rehydrate failed:", (e as Error).message)
   }
+  startWatchers()
 })
 
 // Graceful shutdown — DON'T kill tmux sessions. The whole point of this

@@ -5,7 +5,7 @@
  * for rename/stop. Idle/stopped/crashed states get distinct colored dots so
  * Dylan can scan all sessions at a glance.
  */
-import { Loader2, X, MoreHorizontal } from "lucide-react"
+import { Loader2, X, MoreHorizontal, Pause } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu"
@@ -14,9 +14,12 @@ export interface SessionRow {
   id: string
   title: string
   branch?: string
-  status?: "starting" | "running" | "idle" | "stopped" | "crashed"
+  status?: "starting" | "running" | "idle" | "stopped" | "crashed" | "paused"
   created_at: string
   last_activity_at?: string
+  cost_usd?: number
+  cost_cap_usd?: number
+  paused_reason?: string | null
 }
 
 const STATUS_COLOR: Record<NonNullable<SessionRow["status"]>, string> = {
@@ -25,6 +28,7 @@ const STATUS_COLOR: Record<NonNullable<SessionRow["status"]>, string> = {
   idle: "bg-zinc-500",
   stopped: "bg-zinc-700",
   crashed: "bg-red-500",
+  paused: "bg-orange-400",
 }
 
 interface Props {
@@ -76,9 +80,16 @@ export function SessionList({ sessions, focusedId, loading, onFocus, onRename, o
                     {s.branch}
                   </div>
                 )}
-                <div className="text-[10px] text-zinc-600 mt-0.5">
-                  {timeAgo(s.last_activity_at || s.created_at)}
+                <div className="text-[10px] text-zinc-600 mt-0.5 flex items-center gap-2">
+                  <span>{timeAgo(s.last_activity_at || s.created_at)}</span>
+                  <CostBadge cost={s.cost_usd || 0} cap={s.cost_cap_usd || 5} />
                 </div>
+                {status === "paused" && s.paused_reason && (
+                  <div className="text-[10px] text-orange-300 mt-1 flex items-center gap-1">
+                    <Pause className="w-2.5 h-2.5" />
+                    <span className="truncate">{s.paused_reason}</span>
+                  </div>
+                )}
               </button>
 
               <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
@@ -128,6 +139,17 @@ export function SessionList({ sessions, focusedId, loading, onFocus, onRename, o
         })}
       </div>
     </div>
+  )
+}
+
+function CostBadge({ cost, cap }: { cost: number; cap: number }) {
+  const pct = cap > 0 ? cost / cap : 0
+  const color =
+    pct >= 0.8 ? "text-red-300" : pct >= 0.5 ? "text-amber-300" : "text-zinc-500"
+  return (
+    <span className={color} title={`${cost.toFixed(2)} of $${cap.toFixed(2)} cap`}>
+      ${cost.toFixed(2)}
+    </span>
   )
 }
 
