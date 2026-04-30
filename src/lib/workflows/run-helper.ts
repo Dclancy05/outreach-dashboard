@@ -66,16 +66,26 @@ export async function triggerWorkflowBySlug(
   if (slugAttempt.data) {
     workflow = slugAttempt.data
   } else {
-    const nameAttempt = await supabase
-      .from("workflows")
-      .select("id")
-      .ilike("name", slug)
-      .eq("is_template", false)
-      .neq("status", "archived")
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    if (nameAttempt.data) workflow = nameAttempt.data
+    // Fall back to name match. Try exact case-insensitive first, then
+    // de-slugified ("quick-ask" → "quick ask") so callers can pass either
+    // form. Pre-loads candidates and matches in JS to handle both directions
+    // without burning multiple round-trips.
+    const candidates = [slug, slug.replace(/[-_]+/g, " ")]
+    for (const candidate of candidates) {
+      const nameAttempt = await supabase
+        .from("workflows")
+        .select("id")
+        .ilike("name", candidate)
+        .eq("is_template", false)
+        .neq("status", "archived")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (nameAttempt.data) {
+        workflow = nameAttempt.data
+        break
+      }
+    }
   }
 
   if (!workflow) throw new WorkflowNotFoundError(slug)
