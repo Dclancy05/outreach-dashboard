@@ -251,6 +251,7 @@ Environment=MAX_SESSIONS=8
 Environment=TERMINAL_MEM_LIMIT=1G
 Environment=TERMINAL_CPU_QUOTA=200%
 Environment=ALLOWED_ORIGINS=$DASHBOARD_URL
+Environment=TERMINAL_RUNNER_PUBLIC_URL=$TS_FUNNEL_URL
 EnvironmentFile=-/etc/terminal-server.env
 ExecStart=/usr/bin/npx tsx index.ts
 Restart=always

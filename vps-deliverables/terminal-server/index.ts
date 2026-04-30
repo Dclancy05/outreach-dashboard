@@ -231,6 +231,67 @@ async function dbHeartbeat(id: string): Promise<void> {
   await dbUpdate(id, { last_activity_at: new Date().toISOString() })
 }
 
+// ─── api_keys self-bootstrap ──────────────────────────────────────────────
+//
+// Removes the "set 2 secrets via the dashboard UI" step from first-time
+// setup. The VPS already knows BOTH values it needs to register:
+//   - TERMINAL_RUNNER_URL  → process.env.TERMINAL_RUNNER_PUBLIC_URL
+//                            (the public Tailscale Funnel URL, set by the
+//                            systemd unit)
+//   - TERMINAL_RUNNER_TOKEN → process.env.TERMINAL_RUNNER_TOKEN
+//                             (the bearer this service authenticates with)
+// On boot, if those rows aren't already present in api_keys, write them.
+// The Supabase service-role key authorizes the write (no RLS on api_keys).
+//
+// Idempotent: if rows exist with any value, leaves them alone (operator may
+// have rotated them on purpose). Operators can force-rewrite by deleting
+// the rows and restarting the service.
+
+async function bootstrapApiKeys(): Promise<void> {
+  if (!supa) return
+  const publicUrl = process.env.TERMINAL_RUNNER_PUBLIC_URL || ""
+  if (!publicUrl) {
+    console.log("[terminal-server] bootstrap api_keys skipped — TERMINAL_RUNNER_PUBLIC_URL not set")
+    return
+  }
+  const { data, error: readErr } = await supa
+    .from("api_keys")
+    .select("env_var")
+    .in("env_var", ["TERMINAL_RUNNER_URL", "TERMINAL_RUNNER_TOKEN"])
+  if (readErr) {
+    console.warn("[terminal-server] bootstrap api_keys read failed:", readErr.message)
+    return
+  }
+  const have = new Set((data || []).map((r: { env_var: string }) => r.env_var))
+  const inserts: Array<Record<string, string>> = []
+  if (!have.has("TERMINAL_RUNNER_URL")) {
+    inserts.push({
+      name: "Terminal Runner URL",
+      provider: "terminal_runner",
+      env_var: "TERMINAL_RUNNER_URL",
+      value: publicUrl,
+    })
+  }
+  if (!have.has("TERMINAL_RUNNER_TOKEN")) {
+    inserts.push({
+      name: "Terminal Runner Token",
+      provider: "terminal_runner",
+      env_var: "TERMINAL_RUNNER_TOKEN",
+      value: TOKEN,
+    })
+  }
+  if (inserts.length === 0) {
+    console.log("[terminal-server] bootstrap api_keys: already configured")
+    return
+  }
+  const { error: insErr } = await supa.from("api_keys").insert(inserts)
+  if (insErr) {
+    console.warn("[terminal-server] bootstrap api_keys insert failed:", insErr.message)
+    return
+  }
+  console.log(`[terminal-server] bootstrap api_keys: inserted ${inserts.length} row(s) (dashboard auto-configured)`)
+}
+
 // ─── Boot rehydrate ────────────────────────────────────────────────────────
 //
 // The in-memory `sessions` Map is volatile — it dies with the Node process.
@@ -1108,6 +1169,11 @@ server.listen(PORT, HOST, async () => {
     await rehydrateOnBoot()
   } catch (e) {
     console.warn("[terminal-server] rehydrate failed:", (e as Error).message)
+  }
+  try {
+    await bootstrapApiKeys()
+  } catch (e) {
+    console.warn("[terminal-server] bootstrap api_keys threw:", (e as Error).message)
   }
   startWatchers()
 })
