@@ -8,15 +8,15 @@
 import { useState } from "react"
 import useSWR from "swr"
 import { toast } from "sonner"
-import { Plus, Workflow as WorkflowIcon, ArrowLeft, FileBox } from "lucide-react"
+import { Plus, Workflow as WorkflowIcon, ArrowLeft, FileBox, Trash2 } from "lucide-react"
 import { formatDistanceToNow } from "date-fns"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { listWorkflows, createWorkflow, type Workflow } from "@/lib/api/workflows"
+import { listWorkflows, createWorkflow, deleteWorkflow, type Workflow } from "@/lib/api/workflows"
 import { WorkflowBuilder } from "@/components/agent-workflows/workflows/workflow-builder"
 import { ScheduleFromFileModal } from "@/components/agent-workflows/workflows/schedule-from-file-modal"
 
@@ -93,11 +93,15 @@ export function WorkflowsView() {
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center justify-end mt-2 pt-2 border-t border-zinc-800/40 opacity-70 group-hover:opacity-100 transition-opacity">
+                <div className="flex items-center justify-end gap-1 mt-2 pt-2 border-t border-zinc-800/40 opacity-70 group-hover:opacity-100 transition-opacity">
                   <ScheduleFromFileModal
                     workflowId={w.id}
                     workflowName={w.name}
                     workflowEmoji={w.emoji}
+                  />
+                  <DeleteWorkflowButton
+                    workflow={w}
+                    onDeleted={() => mutate()}
                   />
                 </div>
               </Card>
@@ -187,6 +191,58 @@ function NewWorkflowDialog({ templates, onCreated }: { templates: Workflow[]; on
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)} disabled={submitting}>Cancel</Button>
           <Button onClick={submit} disabled={submitting || !name.trim()}>{submitting ? "Creating..." : "Create + open"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+
+function DeleteWorkflowButton({ workflow, onDeleted }: { workflow: Workflow; onDeleted: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  async function confirm() {
+    setDeleting(true)
+    try {
+      await deleteWorkflow(workflow.id)
+      toast.success(`Deleted "${workflow.name}"`)
+      onDeleted()
+      setOpen(false)
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="text-[10px] h-6 px-2 text-zinc-500 hover:text-red-400 hover:bg-red-500/10"
+        onClick={(e) => { e.stopPropagation(); setOpen(true) }}
+      >
+        <Trash2 className="w-3 h-3 mr-1" /> Delete
+      </Button>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Delete this workflow?</DialogTitle>
+          <DialogDescription className="pt-2 space-y-2">
+            <span className="block text-zinc-300">
+              {workflow.emoji} <span className="font-medium">{workflow.name}</span>
+            </span>
+            <span className="block text-xs">
+              This removes the workflow and any future schedules tied to it. Past run history stays — those rows aren&apos;t deleted.
+            </span>
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setOpen(false)} disabled={deleting}>Cancel</Button>
+          <Button variant="destructive" onClick={confirm} disabled={deleting}>
+            {deleting ? "Deleting…" : "Delete"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
