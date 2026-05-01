@@ -598,7 +598,7 @@ function MicrosoftEmailTab() {
             <li>Go to <a href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline inline-flex items-center gap-0.5">Azure App Registrations <ExternalLink className="h-3 w-3" /></a></li>
             <li>Click &quot;New registration&quot; → name it &quot;Outreach Email&quot;</li>
             <li>Under &quot;Supported account types&quot; select &quot;Accounts in any organizational directory and personal Microsoft accounts&quot;</li>
-            <li>Add a <strong>Web</strong> Redirect URI: <code className="px-1 py-0.5 rounded bg-muted font-mono text-[10px]">https://outreach-dashboard-five.vercel.app/api/email/oauth/callback</code></li>
+            <li>Add a <strong>Web</strong> Redirect URI: <code className="px-1 py-0.5 rounded bg-muted font-mono text-[10px]">https://outreach-github.vercel.app/api/email/oauth/callback</code></li>
             <li>Under &quot;Authentication&quot; → enable &quot;Allow public client flows&quot; → Yes</li>
             <li>Under &quot;API Permissions&quot; → Add: <code className="font-mono text-[10px]">IMAP.AccessAsUser.All</code>, <code className="font-mono text-[10px]">offline_access</code>, <code className="font-mono text-[10px]">openid</code>, <code className="font-mono text-[10px]">email</code></li>
             <li>Copy the Application (client) ID and paste it above, or set it as <code className="font-mono text-[10px]">MICROSOFT_CLIENT_ID</code> env var in Vercel</li>

@@ -6,7 +6,7 @@ export async function GET(req: NextRequest) {
   const state = req.nextUrl.searchParams.get("state") // email address
   const error = req.nextUrl.searchParams.get("error")
 
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://outreach-dashboard-five.vercel.app"
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://outreach-github.vercel.app"
   const redirectUri = `${baseUrl}/api/email/oauth/callback`
   const clientId = (await getSecret("MICROSOFT_CLIENT_ID")) || ""
   const clientSecret = (await getSecret("MICROSOFT_CLIENT_SECRET")) || ""

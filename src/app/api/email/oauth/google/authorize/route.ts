@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "GOOGLE_CLIENT_ID not configured" }, { status: 500 })
   }
 
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://outreach-dashboard-five.vercel.app"
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://outreach-github.vercel.app"
   const redirectUri = `${baseUrl}/api/email/oauth/google/callback`
 
   const params = new URLSearchParams({
