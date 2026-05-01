@@ -26,15 +26,14 @@ type State = "idle" | "connecting" | "connected" | "disconnected" | "error"
 
 interface Props {
   sessionId: string
-  /** Full wss:// URL the terminal-server exposes (no token in URL — we add it). */
+  /** Full wss:// URL the terminal-server exposes — the bearer token is embedded
+   *  as `?token=` (the dashboard's /api/terminals route does that). */
   wsUrl: string
-  /** Bearer token for the terminal-server, used as `?token=` query param. */
-  token: string
   /** Called whenever the local viewport changes — caller pushes resize to VPS. */
   onResize?: (cols: number, rows: number) => void
 }
 
-export function TerminalPane({ sessionId, wsUrl, token, onResize }: Props) {
+export function TerminalPane({ sessionId, wsUrl, onResize }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -93,19 +92,19 @@ export function TerminalPane({ sessionId, wsUrl, token, onResize }: Props) {
   // Connect WS + wire bidirectional bytes. Reconnects with exponential backoff
   // capped at 30s, infinite retries — closing tab is the only way to give up.
   useEffect(() => {
-    if (!wsUrl || !token) return
+    if (!wsUrl) return
     let cancelled = false
 
     const connect = () => {
       if (cancelled) return
       setState("connecting")
       setError(null)
-      // Token rides in Sec-WebSocket-Protocol (subprotocol) instead of the URL
-      // query string. Browsers can't set custom WS headers, but they CAN set
-      // subprotocols — and unlike query params, subprotocol headers don't get
-      // logged by Tailscale Funnel / reverse proxies. The server validates
-      // and echoes the chosen `bearer.<token>` back via handleProtocols.
-      const ws = new WebSocket(wsUrl, [`bearer.${token}`])
+      // Token rides as `?token=` in the WS URL (set by /api/terminals on the
+      // dashboard). Tailscale Funnel's --set-path proxy drops the
+      // Sec-WebSocket-Protocol header during the upgrade, so subprotocol auth
+      // doesn't survive the round-trip. URL query is preserved by every proxy
+      // and stays inside TLS — same threat model as the noVNC password.
+      const ws = new WebSocket(wsUrl)
       ws.binaryType = "arraybuffer"
       wsRef.current = ws
 
@@ -174,7 +173,7 @@ export function TerminalPane({ sessionId, wsUrl, token, onResize }: Props) {
       try { wsRef.current?.close(1000, "unmount") } catch { /* */ }
       wsRef.current = null
     }
-  }, [wsUrl, token, sessionId])
+  }, [wsUrl, sessionId])
 
   return (
     <div className="relative h-full w-full bg-zinc-950">

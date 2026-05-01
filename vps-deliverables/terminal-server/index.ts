@@ -615,16 +615,23 @@ server.on("upgrade", (req, socket, head) => {
   const m = url.pathname.match(/^\/sessions\/([^/]+)\/stream$/)
   if (!m) { socket.destroy(); return }
   const id = m[1]
-  // Pre-flight the bearer check before allocating ws state. handleProtocols
-  // also enforces this, but rejecting earlier means a bad token gets a clean
-  // 401 instead of an opaque handshake failure.
-  const raw = req.headers["sec-websocket-protocol"]
+  // Two auth paths, either is sufficient:
+  //   1. ?token=<TOKEN> in the URL — preferred, since proxies (Tailscale Funnel
+  //      with --set-path in particular) drop / rewrite Sec-WebSocket-Protocol
+  //      during the upgrade and the dashboard always reaches us through one.
+  //   2. Sec-WebSocket-Protocol: bearer.<TOKEN> — legacy direct-call path.
+  // Constant-time compare on each.
   let okAuth = false
-  if (typeof raw === "string") {
-    for (const p of raw.split(",").map((s) => s.trim())) {
-      if (p.startsWith("bearer.") && constantTimeEq(p.slice("bearer.".length), TOKEN)) {
-        okAuth = true
-        break
+  const queryTok = url.searchParams.get("token")
+  if (queryTok && constantTimeEq(queryTok, TOKEN)) okAuth = true
+  if (!okAuth) {
+    const raw = req.headers["sec-websocket-protocol"]
+    if (typeof raw === "string") {
+      for (const p of raw.split(",").map((s) => s.trim())) {
+        if (p.startsWith("bearer.") && constantTimeEq(p.slice("bearer.".length), TOKEN)) {
+          okAuth = true
+          break
+        }
       }
     }
   }

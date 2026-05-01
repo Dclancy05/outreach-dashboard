@@ -34,8 +34,8 @@ interface CreateResponse {
   title: string
   branch: string
   worktree_path: string
+  /** wss:// URL with `?token=` already embedded by /api/terminals. */
   ws_url: string
-  token: string
   created_at: string
 }
 
@@ -50,9 +50,9 @@ const LAYOUTS: { n: Layout; label: string; cols: string }[] = [
 
 // Per-session connection details we got back from POST /api/terminals.
 // Cached so reopening an existing session doesn't require another create call.
+// Token is now embedded in ws_url as `?token=` — see /api/terminals route.
 interface Connection {
   ws_url: string
-  token: string
 }
 
 export function TerminalsWorkspace() {
@@ -89,7 +89,7 @@ export function TerminalsWorkspace() {
         throw new Error(body.error || `HTTP ${res.status}`)
       }
       const data = (await res.json()) as {
-        sessions: Array<SessionRow & { ws_url?: string; token?: string }>
+        sessions: Array<SessionRow & { ws_url?: string }>
         capacity?: { active: number; hard_max: number; soft_max: number }
       }
       const list = data.sessions || []
@@ -104,8 +104,8 @@ export function TerminalsWorkspace() {
       setConnections((cur) => {
         const next = { ...cur }
         for (const s of list) {
-          if (s.ws_url && s.token && !next[s.id]) {
-            next[s.id] = { ws_url: s.ws_url, token: s.token }
+          if (s.ws_url && !next[s.id]) {
+            next[s.id] = { ws_url: s.ws_url }
           }
         }
         return next
@@ -176,7 +176,7 @@ export function TerminalsWorkspace() {
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`)
       const data = body as CreateResponse
       // Cache the connection details for this new session.
-      setConnections((c) => ({ ...c, [data.id]: { ws_url: data.ws_url, token: data.token } }))
+      setConnections((c) => ({ ...c, [data.id]: { ws_url: data.ws_url } }))
       toast.success("Terminal started", { description: data.title })
       await refresh()
       focusSession(data.id)
@@ -442,7 +442,6 @@ export function TerminalsWorkspace() {
                         <TerminalPane
                           sessionId={s.id}
                           wsUrl={conn.ws_url}
-                          token={conn.token}
                           onResize={(cols, rows) => handleResize(s.id, cols, rows)}
                         />
                       ) : (
