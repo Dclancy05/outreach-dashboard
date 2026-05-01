@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { listWorkflows, createWorkflow, type Workflow } from "@/lib/api/workflows"
 import { WorkflowBuilder } from "@/components/agent-workflows/workflows/workflow-builder"
+import { ScheduleFromFileModal } from "@/components/agent-workflows/workflows/schedule-from-file-modal"
 
 export function WorkflowsView() {
   const { data: workflows = [], mutate } = useSWR<Workflow[]>("workflows", () => listWorkflows({}))
@@ -76,8 +77,8 @@ export function WorkflowsView() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {workflows.map(w => (
-              <Card key={w.id} className="p-3 hover:border-amber-500/40 cursor-pointer transition-colors" onClick={() => setOpenId(w.id)}>
-                <div className="flex items-start gap-2">
+              <Card key={w.id} className="p-3 hover:border-amber-500/40 transition-colors group">
+                <div className="flex items-start gap-2 cursor-pointer" onClick={() => setOpenId(w.id)}>
                   <span className="text-2xl">{w.emoji || "⚙️"}</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-zinc-100 truncate">{w.name}</div>
@@ -91,6 +92,13 @@ export function WorkflowsView() {
                       {w.last_run_at && <><span>·</span><span>last {formatDistanceToNow(new Date(w.last_run_at), { addSuffix: true })}</span></>}
                     </div>
                   </div>
+                </div>
+                <div className="flex items-center justify-end mt-2 pt-2 border-t border-zinc-800/40 opacity-70 group-hover:opacity-100 transition-opacity">
+                  <ScheduleFromFileModal
+                    workflowId={w.id}
+                    workflowName={w.name}
+                    workflowEmoji={w.emoji}
+                  />
                 </div>
               </Card>
             ))}
