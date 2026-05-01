@@ -18,7 +18,14 @@ export async function GET(req: NextRequest) {
   const templatesOnly = sp.get("templates_only") === "true"
 
   let q = supabase.from("workflows").select("*").order("updated_at", { ascending: false })
-  if (status) q = q.eq("status", status)
+  if (status) {
+    q = q.eq("status", status)
+  } else {
+    // Default: hide archived rows. /api/workflows/[id] DELETE is a soft-delete
+    // that flips status to "archived"; without this filter every "deleted"
+    // workflow still showed up on the cards. Pass ?status=archived to see them.
+    q = q.neq("status", "archived")
+  }
   if (templatesOnly) q = q.eq("is_template", true)
   else q = q.eq("is_template", false)
 
