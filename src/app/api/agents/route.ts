@@ -32,6 +32,23 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Auto-bootstrap: if the agents table is empty but the vault has agent
+  // skills on disk, sync them once. Covers the case where the vault file
+  // watcher missed initial files (or a new install runs before any watcher
+  // event has fired). After the table has any row, this branch never runs.
+  if ((data || []).length === 0 && !q) {
+    const synced = await bulkSyncFromVault()
+    if (synced > 0) {
+      const reread = await supabase
+        .from("agents")
+        .select("*")
+        .eq("archived", false)
+        .order("name", { ascending: true })
+      return NextResponse.json({ data: reread.data || [], bootstrapped: synced })
+    }
+  }
+
   return NextResponse.json({ data: data || [] })
 }
 
@@ -114,6 +131,99 @@ function renderAgentMarkdown(input: CreateAgentInput): string {
 function escapeYaml(s: string): string {
   if (/[:#\n"]/.test(s)) return JSON.stringify(s)
   return s
+}
+
+// One-time bootstrap: list the vault's agent-skills folder and upsert one
+// row per .md file (skipping `_*.md` capability matrices). Returns the number
+// of rows synced. Idempotent — safe to call again on a non-empty table.
+async function bulkSyncFromVault(): Promise<number> {
+  const API_URL = ((await getSecret("MEMORY_VAULT_API_URL")) || "").replace(/\/+$/, "")
+  const TOKEN = (await getSecret("MEMORY_VAULT_TOKEN")) || ""
+  if (!API_URL || !TOKEN) return 0
+
+  // List the agent-skills directory
+  let entries: Array<{ name: string; kind: string }> = []
+  try {
+    const treeRes = await fetch(`${API_URL}/tree?path=${encodeURIComponent(AGENT_DIR)}&depth=1`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!treeRes.ok) return 0
+    const json = await treeRes.json().catch(() => null) as { tree?: Array<{ name: string; kind: string; path?: string }> } | null
+    entries = json?.tree || []
+  } catch { return 0 }
+
+  let count = 0
+  for (const e of entries) {
+    if (e.kind !== "file") continue
+    if (!e.name.endsWith(".md")) continue
+    if (e.name.startsWith("_")) continue // capability matrices, not agents
+    const slug = e.name.replace(/\.md$/, "")
+    const fileText = await readVaultFile(`${AGENT_DIR}/${e.name}`)
+    if (!fileText) continue
+    const fm = parseFrontmatter(fileText).frontmatter
+    const row = {
+      name: typeof fm.name === "string" ? fm.name : slug,
+      slug,
+      emoji: typeof fm.emoji === "string" ? fm.emoji : null,
+      description: typeof fm.description === "string" ? fm.description : null,
+      file_path: `${AGENT_DIR}/${e.name}`,
+      parent_agent_id: typeof fm.parent === "string" ? fm.parent : null,
+      persona_id: typeof fm.persona === "string" ? fm.persona : null,
+      model: ["opus", "sonnet", "haiku"].includes(fm.model as string) ? fm.model as string : "sonnet",
+      tools: Array.isArray(fm.tools) ? fm.tools.filter((t): t is string => typeof t === "string") : [],
+      max_tokens: typeof fm.max_tokens === "number" ? fm.max_tokens : 8000,
+      is_orchestrator: fm.is_orchestrator === true,
+      archived: false,
+    }
+    const { error } = await supabase.from("agents").upsert(row, { onConflict: "slug" })
+    if (!error) count += 1
+  }
+  return count
+}
+
+async function readVaultFile(path: string): Promise<string | null> {
+  const API_URL = ((await getSecret("MEMORY_VAULT_API_URL")) || "").replace(/\/+$/, "")
+  const TOKEN = (await getSecret("MEMORY_VAULT_TOKEN")) || ""
+  if (!API_URL || !TOKEN) return null
+  const res = await fetch(`${API_URL}/file?path=${encodeURIComponent(path)}`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  })
+  if (!res.ok) return null
+  const json = await res.json().catch(() => null) as { content?: string } | null
+  return json?.content ?? null
+}
+
+// Tiny YAML frontmatter parser — same subset as sync-from-vault/route.ts.
+function parseFrontmatter(text: string): { frontmatter: Record<string, unknown>; body: string } {
+  const m = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/.exec(text)
+  if (!m) return { frontmatter: {}, body: text }
+  const fmText = m[1]
+  const body = m[2] || ""
+  const fm: Record<string, unknown> = {}
+  for (const line of fmText.split(/\r?\n/)) {
+    const kv = /^([\w_]+)\s*:\s*(.*)$/.exec(line.trim())
+    if (!kv) continue
+    fm[kv[1]] = parseYamlScalar(kv[2].trim())
+  }
+  return { frontmatter: fm, body }
+}
+
+function parseYamlScalar(raw: string): unknown {
+  if (raw === "" || raw === "null" || raw === "~") return null
+  if (raw === "true") return true
+  if (raw === "false") return false
+  if (/^-?\d+$/.test(raw)) return parseInt(raw, 10)
+  if (/^-?\d+\.\d+$/.test(raw)) return parseFloat(raw)
+  if (raw.startsWith("[") && raw.endsWith("]")) {
+    const inner = raw.slice(1, -1).trim()
+    if (!inner) return []
+    return inner.split(",").map(p => parseYamlScalar(p.trim()))
+  }
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    try { return JSON.parse(raw.replace(/^'/, '"').replace(/'$/, '"')) } catch { return raw.slice(1, -1) }
+  }
+  return raw
 }
 
 async function writeVaultFile(path: string, content: string): Promise<{ ok: true } | { ok: false; error: string }> {

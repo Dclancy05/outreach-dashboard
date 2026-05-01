@@ -36,6 +36,23 @@ async function handle(req: NextRequest) {
   }
 
   const now = new Date().toISOString()
+
+  // Defensive: any enabled schedule with NULL next_fire_at can't fire. Compute
+  // it now (don't fire on the same tick — let the next compare pick it up).
+  // This catches rows created before the POST handler computed next_fire_at,
+  // and rows manually inserted into the table without going through the API.
+  const { data: nullRows } = await supabase
+    .from("schedules")
+    .select("id, cron, timezone")
+    .eq("enabled", true)
+    .is("next_fire_at", null)
+  for (const s of nullRows || []) {
+    try {
+      const next = parseCronExpression(s.cron, { tz: s.timezone || "America/New_York" }).next().toDate().toISOString()
+      await supabase.from("schedules").update({ next_fire_at: next }).eq("id", s.id)
+    } catch { /* invalid cron — skip; the dashboard surfaces this in the schedules view */ }
+  }
+
   const { data: due, error } = await supabase
     .from("schedules")
     .select("id, workflow_id, cron, timezone, payload, fire_count")
