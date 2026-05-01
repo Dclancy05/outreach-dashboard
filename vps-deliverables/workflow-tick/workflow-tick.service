@@ -1,0 +1,12 @@
+[Unit]
+Description=Workflow tick — hits dashboard cron endpoint to drain due schedules
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/workflow-tick.env
+ExecStart=/opt/workflow-tick/workflow-tick.sh
+StandardOutput=journal
+StandardError=journal
+# No Restart= — the timer drives invocation cadence, not the unit itself
