@@ -1,0 +1,108 @@
+# MCP stack for srv1197943.
+#
+# Three HTTP MCP servers exposed via Tailscale Funnel paths so both the local
+# Mac, the dashboard's Vercel functions, and any agent-runner subagent can
+# share them. All bind to 127.0.0.1 only — Tailscale is the trust boundary,
+# bearer tokens are the authn layer.
+#
+# Mapped Tailscale Funnel paths (added by scripts/install-mcps.sh):
+#   :8443/mcp/playwright    → 127.0.0.1:8010
+#   :8443/mcp/devtools      → 127.0.0.1:8011
+#   :8443/mcp/postgres      → 127.0.0.1:8012
+#
+# Image notes:
+#   - microsoft/playwright:v1.49 includes Chromium + Firefox + WebKit baked in
+#     and the @playwright/mcp server. We override the entrypoint to start the
+#     MCP HTTP transport.
+#   - chrome-devtools-mcp is a community image that bridges to a Chrome
+#     instance via CDP. We point it at the existing Chrome+CDP socket the VPS
+#     already runs (CHROME_CDP_URL env var).
+#   - postgres MCP uses the official @modelcontextprotocol/server-postgres
+#     wrapped in a tiny HTTP transport via supergateway (npm package that
+#     adapts stdio MCPs to HTTP).
+
+services:
+  playwright-mcp:
+    image: mcr.microsoft.com/playwright:v1.49.0-jammy
+    container_name: mcp-playwright
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - "127.0.0.1:8010:8010"
+    environment:
+      MCP_BEARER_TOKEN: ${PLAYWRIGHT_MCP_TOKEN}
+      MCP_PORT: "8010"
+      # Use the accessibility-tree mode (4× more token-efficient than
+      # screenshot mode per the April 2026 Playwright benchmarks).
+      MCP_MODE: "accessibility"
+    volumes:
+      # Persist browser cache + auth state across restarts so agent sessions
+      # don't re-download Chromium every container start.
+      - playwright-cache:/ms-playwright/cache
+    command: >
+      sh -c "npm install --silent --global @playwright/mcp@latest &&
+             npx @playwright/mcp --port 8010 --bearer-token-env MCP_BEARER_TOKEN"
+    mem_limit: 1.5g
+    cpus: 1.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  devtools-mcp:
+    image: node:22-alpine
+    container_name: mcp-devtools
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      MCP_BEARER_TOKEN: ${DEVTOOLS_MCP_TOKEN}
+      MCP_PORT: "8011"
+      # Connect to the host's existing Chrome+CDP. The systemd Chrome service
+      # exposes CDP at localhost:9222 by default; we use host networking so
+      # this container can reach it.
+      CHROME_CDP_URL: ${CHROME_CDP_URL:-http://127.0.0.1:9222}
+    command: >
+      sh -c "npm install --silent --global chrome-devtools-mcp supergateway &&
+             supergateway
+               --stdio 'npx chrome-devtools-mcp --browser-url $${CHROME_CDP_URL}'
+               --port 8011
+               --bearer $${MCP_BEARER_TOKEN}"
+    mem_limit: 512m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres-mcp:
+    image: node:22-alpine
+    container_name: mcp-postgres
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - "127.0.0.1:8012:8012"
+    environment:
+      MCP_BEARER_TOKEN: ${POSTGRES_MCP_TOKEN}
+      MCP_PORT: "8012"
+      # Connection string for the project's Supabase Postgres. Pulled from
+      # /etc/mcp-stack.env which the install script writes.
+      POSTGRES_CONNECTION_STRING: ${POSTGRES_CONNECTION_STRING}
+    command: >
+      sh -c "npm install --silent --global @modelcontextprotocol/server-postgres supergateway &&
+             supergateway
+               --stdio 'npx -y @modelcontextprotocol/server-postgres $${POSTGRES_CONNECTION_STRING}'
+               --port 8012
+               --bearer $${MCP_BEARER_TOKEN}"
+    mem_limit: 384m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  playwright-cache:
+    name: mcp-playwright-cache
