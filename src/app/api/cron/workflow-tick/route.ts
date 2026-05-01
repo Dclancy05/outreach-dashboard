@@ -1,14 +1,24 @@
-// Vercel cron — runs every minute. Drains due schedules into the queue and
-// fires Inngest events. Inngest then runs the workflows asynchronously, so
-// this handler returns in milliseconds even when many schedules are due.
+// Drains due schedules into the queue and fires Inngest events. Inngest then
+// runs the workflows asynchronously, so this handler returns in milliseconds
+// even when many schedules are due.
 //
-// Auth: Bearer ${CRON_SECRET} — same pattern as /api/cron/automations-maintenance.
+// Two callers:
+//   1. Vercel cron — runs at the time configured in vercel.json (Hobby is
+//      daily-only, which is too coarse for "schedule a 3am job"). Uses the
+//      CRON_SECRET Vercel env var.
+//   2. VPS systemd timer — runs every minute on srv1197943, gives us
+//      minute-level scheduling resolution. Uses the WORKFLOW_TICK_VPS_TOKEN
+//      stored in the api_keys table (read via getSecret).
+//
+// Either auth path is sufficient. Token compare is constant-time.
 
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { parseExpression as parseCronExpression } from "cron-parser"
+import crypto from "crypto"
 import { inngest, EVENT_RUN_QUEUED } from "@/lib/inngest/client"
 import { checkGlobalDailyBudget, BudgetExceededError } from "@/lib/workflow/cost-guards"
+import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -19,11 +29,26 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
+function constantTimeEq(a: string, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false
+  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b))
+}
+
 async function handle(req: NextRequest) {
   const auth = req.headers.get("authorization") || ""
-  const expected = process.env.CRON_SECRET || ""
-  if (!expected) return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 })
-  if (auth !== `Bearer ${expected}`) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+  const presented = auth.startsWith("Bearer ") ? auth.slice(7) : ""
+
+  const cronSecret = process.env.CRON_SECRET || ""
+  const vpsToken = (await getSecret("WORKFLOW_TICK_VPS_TOKEN")) || ""
+
+  const ok =
+    (cronSecret && constantTimeEq(presented, cronSecret)) ||
+    (vpsToken && constantTimeEq(presented, vpsToken))
+
+  if (!cronSecret && !vpsToken) {
+    return NextResponse.json({ error: "no auth configured (CRON_SECRET or WORKFLOW_TICK_VPS_TOKEN)" }, { status: 500 })
+  }
+  if (!ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
 
   // Refuse to queue anything if today's spend has already hit the global cap.
   try {

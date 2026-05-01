@@ -1,0 +1,13 @@
+[Unit]
+Description=Run workflow-tick every minute (beats Vercel Hobby's daily-only cron)
+
+[Timer]
+# Fire 30s after boot, then every minute on the wall clock.
+OnBootSec=30s
+OnCalendar=*:0/1
+AccuracySec=5s
+Persistent=true
+Unit=workflow-tick.service
+
+[Install]
+WantedBy=timers.target
