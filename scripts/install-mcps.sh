@@ -85,18 +85,44 @@ step "Required values you must paste once"
 if [[ -z "${POSTGRES_CONNECTION_STRING:-}" ]]; then
   if grep -q '^POSTGRES_CONNECTION_STRING=' "$TOKEN_FILE" 2>/dev/null; then
     POSTGRES_CONNECTION_STRING=$(grep '^POSTGRES_CONNECTION_STRING=' "$TOKEN_FILE" | sed 's/^[^=]*=//')
-    ok "Reusing saved POSTGRES_CONNECTION_STRING"
-  else
-    echo
-    echo "  Paste your Supabase Pooler connection string. Get it at:"
-    echo "    https://supabase.com/dashboard/project/yfufocegjhxxffqtkvkr/settings/database"
-    echo "  → Connection string → Transaction (port 6543) → Reveal password"
-    echo
-    read -r -p "  POSTGRES_CONNECTION_STRING: " POSTGRES_CONNECTION_STRING
-    [[ -z "$POSTGRES_CONNECTION_STRING" ]] && fail "Connection string required"
-    echo "POSTGRES_CONNECTION_STRING=$POSTGRES_CONNECTION_STRING" >> "$TOKEN_FILE"
-    ok "Saved"
+    ok "Found saved POSTGRES_CONNECTION_STRING"
   fi
+fi
+
+# Validate the connection string. A valid Supabase Pooler URL ends with
+# /postgres (the database name). Earlier paste truncation left it ending in
+# "/po" — silently broken. We re-prompt instead of using a corrupt value.
+while [[ -z "${POSTGRES_CONNECTION_STRING:-}" || ! "$POSTGRES_CONNECTION_STRING" =~ /postgres$ ]]; do
+  if [[ -n "${POSTGRES_CONNECTION_STRING:-}" ]]; then
+    warn "Saved Postgres connection string looks truncated (must end with /postgres)"
+    sed -i.bak '/^POSTGRES_CONNECTION_STRING=/d' "$TOKEN_FILE" 2>/dev/null || true
+    rm -f "${TOKEN_FILE}.bak" 2>/dev/null || true
+    POSTGRES_CONNECTION_STRING=""
+  fi
+  echo
+  echo "  Paste your full Supabase Pooler connection string."
+  echo "  Get it at: https://supabase.com/dashboard/project/yfufocegjhxxffqtkvkr/settings/database"
+  echo "  → Connection string → Transaction (port 6543) → Reveal password"
+  echo "  ⚠ Make sure it ends with /postgres (the database name) — paste must be on ONE line"
+  echo
+  read -r -p "  POSTGRES_CONNECTION_STRING: " POSTGRES_CONNECTION_STRING
+  [[ -z "$POSTGRES_CONNECTION_STRING" ]] && fail "Connection string required"
+done
+# Persist (only happens if we re-prompted; original branch already saved it)
+if ! grep -q '^POSTGRES_CONNECTION_STRING=' "$TOKEN_FILE" 2>/dev/null; then
+  echo "POSTGRES_CONNECTION_STRING=$POSTGRES_CONNECTION_STRING" >> "$TOKEN_FILE"
+fi
+ok "Postgres connection string OK (ends with /postgres)"
+
+# Heal a known-bad api_keys row: prior runs leaked the trailing "stgres" (from
+# the Postgres truncation) into the GITHUB_PAT prompt. Real GitHub PATs are
+# 40+ chars; anything shorter is the leaked garbage.
+GH_EXISTING=$(curl -s -H "apikey: $SUPABASE_SR_KEY" -H "Authorization: Bearer $SUPABASE_SR_KEY" \
+  "$SUPABASE_URL/rest/v1/api_keys?env_var=eq.GITHUB_PAT&select=id,value&limit=1" | jq -r '.[0].value // empty')
+if [[ -n "$GH_EXISTING" && ${#GH_EXISTING} -lt 30 ]]; then
+  warn "Found short GITHUB_PAT in api_keys (${#GH_EXISTING} chars) — likely leaked junk; deleting"
+  curl -s -X DELETE -H "apikey: $SUPABASE_SR_KEY" -H "Authorization: Bearer $SUPABASE_SR_KEY" \
+    "$SUPABASE_URL/rest/v1/api_keys?env_var=eq.GITHUB_PAT" >/dev/null 2>&1 || true
 fi
 
 # Helper: read existing api_keys row for an env_var
@@ -153,81 +179,27 @@ TWILIO_AUTH=$(read_api_key TWILIO_AUTH_TOKEN)
 
 ok "Required values gathered"
 
-# ─── Step 1: VPS — Docker + MCP stack deploy ───────────────────────────
-step "1/7 — Deploy MCP stack to $VPS_HOST"
-if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$VPS_HOST" "echo ok" >/dev/null 2>&1; then
-  fail "SSH to $VPS_HOST failed. Run: ssh-add ~/.ssh/id_ed25519 (or whichever key)"
-fi
-ok "SSH reachable"
-
-# Sync source up
-echo "  rsync source up…"
-rsync -az --delete vps-deliverables/mcp-stack/ "$VPS_HOST:/opt/mcp-stack/" || fail "rsync failed"
-
-# Bootstrap Docker + compose stack on VPS
-ssh "$VPS_HOST" bash -s <<EOF
-set -euo pipefail
-
-# Auto-install Docker if missing
-if ! command -v docker >/dev/null 2>&1; then
-  echo "  installing docker.io..."
-  apt-get update -qq
-  apt-get install -y -qq docker.io
-  systemctl enable --now docker
+# ─── Step 1: Cleanup orphan Docker MCP stack from earlier attempts ─────
+# The original Docker compose stack 502'd because of wrong CLI flags in
+# the container start commands. We've abandoned that approach for stdio
+# MCPs (matching Dylan's existing playwright-global pattern). This step
+# cleans up any leftover containers + funnel paths so they don't keep
+# burning RAM. Optional — won't fail the script if there's nothing to clean.
+step "1/7 — Cleanup orphan Docker MCP stack (if present)"
+if ssh -o ConnectTimeout=5 -o BatchMode=yes "$VPS_HOST" "echo ok" >/dev/null 2>&1; then
+  ok "SSH reachable"
+  ssh "$VPS_HOST" 'cd /opt/mcp-stack 2>/dev/null && docker compose down --rmi local --volumes 2>&1 | tail -3 || true' 2>/dev/null || true
+  ssh "$VPS_HOST" "tailscale funnel --https=8443 --set-path=/mcp/playwright off 2>/dev/null || true" 2>/dev/null || true
+  ssh "$VPS_HOST" "tailscale funnel --https=8443 --set-path=/mcp/devtools off 2>/dev/null || true" 2>/dev/null || true
+  ssh "$VPS_HOST" "tailscale funnel --https=8443 --set-path=/mcp/postgres off 2>/dev/null || true" 2>/dev/null || true
+  ok "Orphan cleanup done (containers + funnel paths removed if they existed)"
+else
+  warn "SSH unreachable — skipping cleanup. Run: ssh-add ~/.ssh/id_ed25519"
 fi
 
-# Write the env file with our tokens + pg conn string
-cat > /etc/mcp-stack.env <<ENV
-PLAYWRIGHT_MCP_TOKEN=$PLAYWRIGHT_MCP_TOKEN
-DEVTOOLS_MCP_TOKEN=$DEVTOOLS_MCP_TOKEN
-POSTGRES_MCP_TOKEN=$POSTGRES_MCP_TOKEN
-CHROME_CDP_URL=http://127.0.0.1:9222
-POSTGRES_CONNECTION_STRING=$POSTGRES_CONNECTION_STRING
-ENV
-chmod 600 /etc/mcp-stack.env
-
-cd /opt/mcp-stack
-# docker compose v2 reads env_file via --env-file at the compose level.
-# Symlink in our shared env so the YAML's \${VAR} interpolation works.
-ln -sf /etc/mcp-stack.env .env
-docker compose up -d --remove-orphans
-
-# Wait for containers to be healthy
-echo "  waiting for containers to start..."
-sleep 8
-docker compose ps --format json | jq -r '.[] | "  - \(.Service): \(.State)"' || true
-EOF
-
-ok "Containers deployed"
-
-# Tailscale Funnel paths
-ssh "$VPS_HOST" bash -s <<'EOF'
-set -euo pipefail
-tailscale funnel --bg --https=8443 --set-path=/mcp/playwright http://127.0.0.1:8010 2>&1 | head -3 || true
-tailscale funnel --bg --https=8443 --set-path=/mcp/devtools   http://127.0.0.1:8011 2>&1 | head -3 || true
-tailscale funnel --bg --https=8443 --set-path=/mcp/postgres   http://127.0.0.1:8012 2>&1 | head -3 || true
-echo "--- funnel status ---"
-tailscale funnel status | head -20
-EOF
-ok "Funnel paths registered"
-
-# ─── Step 2: Smoke-test the VPS-hosted MCPs ────────────────────────────
-step "2/7 — Smoke test VPS MCPs"
-sleep 3
-for service in playwright devtools postgres; do
-  case "$service" in
-    playwright) tok="$PLAYWRIGHT_MCP_TOKEN" ;;
-    devtools)   tok="$DEVTOOLS_MCP_TOKEN"   ;;
-    postgres)   tok="$POSTGRES_MCP_TOKEN"   ;;
-  esac
-  code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $tok" \
-    "$TS_FUNNEL_BASE/mcp/$service/healthz")
-  if [[ "$code" == "200" ]]; then
-    ok "$service MCP: HTTP 200"
-  else
-    warn "$service MCP returned HTTP $code (may still be starting; rerun in 30s)"
-  fi
-done
+# ─── Step 2: skipped (no Docker stack to smoke-test anymore) ───────────
+step "2/7 — VPS MCPs skip — using stdio everywhere now"
+ok "Stdio MCPs are launched on-demand by Claude Code; no service to smoke-test"
 
 # ─── Step 3: Register MCPs in Claude Code (Mac AND VPS) ─────────────────
 step "3/7 — Register MCPs in Claude Code (Mac + VPS)"
@@ -244,184 +216,112 @@ step "3/7 — Register MCPs in Claude Code (Mac + VPS)"
 # on the VPS even when the Mac is off. Without VPS-side registration, those
 # spawned agents would have no browser/devtools/postgres/github/sentry.
 
-add_http_mcp() {
-  # $1=name  $2=mac_url  $3=vps_url  $4=bearer_token
-  local name="$1" mac_url="$2" vps_url="$3" tok="$4"
+# Universal helpers — handle the two real cases:
+#   (a) `claude mcp add <name> ...` succeeds → ok
+#   (b) `claude mcp add <name> ...` says "already exists" → also ok (idempotent)
+#   (c) anything else → warn with the actual error visible
+#
+# CRITICAL: `<name>` MUST be the first positional argument to `claude mcp add`.
+# Putting `--scope user` or `-e KEY=VAL` BEFORE the name causes the parser to
+# treat the name as another option value (we hit this with github + brave-search
+# in the previous run — error: "Invalid environment variable format: github").
 
-  # Mac side
-  if claude mcp list 2>/dev/null | grep -q "^${name} "; then
+mac_add() {
+  # Args are passed verbatim to `claude mcp add`. Caller is responsible for
+  # putting <name> first.
+  local name="$1"
+  if claude mcp list 2>/dev/null | grep -qE "^${name}[: ]"; then
+    ok "Mac: ${name} already registered"
+    return 0
+  fi
+  local out
+  out=$(claude mcp add "$@" 2>&1)
+  if [[ $? -eq 0 ]]; then
+    ok "Mac: ${name} added"
+  elif [[ "$out" == *"already exists"* ]]; then
     ok "Mac: ${name} already registered"
   else
-    claude mcp add --scope user --transport http "$name" "$mac_url" \
-      --header "Authorization: Bearer $tok" >/dev/null 2>&1 \
-      && ok "Mac: ${name} added" \
-      || warn "Mac: ${name} add failed"
-  fi
-
-  # VPS side
-  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^${name} '"; then
-    ok "VPS: ${name} already registered"
-  else
-    ssh "$VPS_HOST" "claude mcp add --scope user --transport http '${name}' '${vps_url}' --header 'Authorization: Bearer ${tok}'" >/dev/null 2>&1 \
-      && ok "VPS: ${name} added" \
-      || warn "VPS: ${name} add failed"
+    warn "Mac: ${name} — $out"
   fi
 }
 
-add_stdio_mcp() {
-  # $1=name  $2=env-string-or-empty  $3+=command and args
-  local name="$1"; shift
-  local envstr="$1"; shift
-  local cmd_str="$*"
-
-  # Mac side
-  if claude mcp list 2>/dev/null | grep -q "^${name} "; then
-    ok "Mac: ${name} already registered"
-  else
-    if [[ -n "$envstr" ]]; then
-      eval "claude mcp add --scope user $envstr ${name} -- $cmd_str" >/dev/null 2>&1 \
-        && ok "Mac: ${name} added" \
-        || warn "Mac: ${name} add failed"
-    else
-      eval "claude mcp add --scope user ${name} -- $cmd_str" >/dev/null 2>&1 \
-        && ok "Mac: ${name} added" \
-        || warn "Mac: ${name} add failed"
-    fi
+vps_add() {
+  # Same contract, but runs over SSH. We pass a single string (already
+  # quoted) since shell quoting through SSH is fiddly.
+  local name="$1"
+  local cmd="$2"
+  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -qE '^${name}[: ]'"; then
+    ok "VPS: ${name} already registered"
+    return 0
   fi
-
-  # VPS side
-  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^${name} '"; then
+  local out
+  out=$(ssh "$VPS_HOST" "$cmd" 2>&1)
+  if [[ $? -eq 0 ]]; then
+    ok "VPS: ${name} added"
+  elif [[ "$out" == *"already exists"* ]]; then
     ok "VPS: ${name} already registered"
   else
-    if [[ -n "$envstr" ]]; then
-      ssh "$VPS_HOST" "claude mcp add --scope user $envstr ${name} -- $cmd_str" >/dev/null 2>&1 \
-        && ok "VPS: ${name} added" \
-        || warn "VPS: ${name} add failed"
-    else
-      ssh "$VPS_HOST" "claude mcp add --scope user ${name} -- $cmd_str" >/dev/null 2>&1 \
-        && ok "VPS: ${name} added" \
-        || warn "VPS: ${name} add failed"
-    fi
+    warn "VPS: ${name} — $out"
   fi
 }
 
-# ─── Cleanup any broken HTTP entries from prior runs ──────────────────
-# The earlier docker-compose approach 502'd because the container start
-# scripts had wrong syntax for @playwright/mcp / supergateway. Replacing
-# with stdio packages — same proven pattern as Dylan's existing
-# playwright-global MCP. Faster, no Docker, no bearer tokens to keep
-# in sync. Cleanup runs first so re-runs heal the stale state.
-echo "  Cleaning up broken HTTP entries (if present)..."
-for name in playwright devtools postgres; do
+# Cleanup any broken HTTP entries left over from the abandoned Docker stack
+echo "  Cleaning up broken HTTP entries from prior runs (if present)..."
+for name in playwright devtools postgres apify context7 brave-search twilio github; do
   claude mcp remove "$name" --scope user >/dev/null 2>&1 || true
   ssh "$VPS_HOST" "claude mcp remove '$name' --scope user >/dev/null 2>&1 || true" 2>/dev/null || true
 done
 
-# ─── Stdio MCPs (replace HTTP) ──────────────────────────────────────────
-# Playwright with --caps devtools = browser AND devtools in one MCP.
-# On Mac: launches local Chrome (Dylan's existing playwright-global
-# already does this — we use a different name to avoid collision).
-# On VPS: connects to existing Chrome+CDP at localhost:9222 — uses the
-# host's running Chrome, no Docker needed.
-
-# Mac: skip if playwright-global already covers it
-if claude mcp list 2>/dev/null | grep -qE "^(playwright|playwright-global) "; then
+# ─── Playwright (browser + devtools combined via --caps devtools) ─────
+# Mac: skip if playwright-global already covers it.
+if claude mcp list 2>/dev/null | grep -qE "^playwright-global[: ]"; then
   ok "Mac: playwright (have playwright-global already)"
 else
-  claude mcp add --scope user playwright -- npx -y @playwright/mcp --caps devtools 2>&1 | head -1 \
-    && ok "Mac: playwright added" || warn "Mac: playwright add failed"
+  mac_add playwright --scope user -- npx -y @playwright/mcp --caps devtools
 fi
+vps_add playwright \
+  "claude mcp add playwright --scope user -- npx -y @playwright/mcp --caps devtools --cdp-endpoint http://127.0.0.1:9222"
 
-# VPS: connect to existing Chrome+CDP
-if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^playwright '"; then
-  ok "VPS: playwright already registered"
-else
-  ssh "$VPS_HOST" "claude mcp add --scope user playwright -- npx -y @playwright/mcp --caps devtools --cdp-endpoint http://127.0.0.1:9222" 2>&1 | head -1 \
-    && ok "VPS: playwright added (uses host Chrome+CDP)" || warn "VPS: playwright add failed"
-fi
+# ─── Postgres MCP (direct SQL into Supabase) ──────────────────────────
+mac_add postgres --scope user -- npx -y @modelcontextprotocol/server-postgres "$POSTGRES_CONNECTION_STRING"
+vps_add postgres \
+  "claude mcp add postgres --scope user -- npx -y @modelcontextprotocol/server-postgres '$POSTGRES_CONNECTION_STRING'"
 
-# Postgres MCP (stdio with conn string as first arg)
-if claude mcp list 2>/dev/null | grep -q "^postgres "; then
-  ok "Mac: postgres already registered"
-else
-  claude mcp add --scope user postgres -- npx -y @modelcontextprotocol/server-postgres "$POSTGRES_CONNECTION_STRING" 2>&1 | head -1 \
-    && ok "Mac: postgres added" || warn "Mac: postgres add failed"
-fi
-if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^postgres '"; then
-  ok "VPS: postgres already registered"
-else
-  ssh "$VPS_HOST" "claude mcp add --scope user postgres -- npx -y @modelcontextprotocol/server-postgres '$POSTGRES_CONNECTION_STRING'" 2>&1 | head -1 \
-    && ok "VPS: postgres added" || warn "VPS: postgres add failed"
-fi
-
-# GitHub MCP — `-e KEY=VAL` is the actual Claude Code env-flag syntax
-# (the `--env` form silently fails on some versions). Switching here.
+# ─── GitHub MCP (PR / issue / repo ops) ────────────────────────────────
 if [[ -n "$GITHUB_TOKEN_VAL" ]]; then
-  if claude mcp list 2>/dev/null | grep -q "^github "; then
-    ok "Mac: github already registered"
-  else
-    claude mcp add --scope user -e "GITHUB_PERSONAL_ACCESS_TOKEN=$GITHUB_TOKEN_VAL" github -- npx -y @modelcontextprotocol/server-github 2>&1 | head -1 \
-      && ok "Mac: github added" || warn "Mac: github add failed"
-  fi
-  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^github '"; then
-    ok "VPS: github already registered"
-  else
-    ssh "$VPS_HOST" "claude mcp add --scope user -e 'GITHUB_PERSONAL_ACCESS_TOKEN=$GITHUB_TOKEN_VAL' github -- npx -y @modelcontextprotocol/server-github" 2>&1 | head -1 \
-      && ok "VPS: github added" || warn "VPS: github add failed"
-  fi
+  mac_add github --scope user -e "GITHUB_PERSONAL_ACCESS_TOKEN=$GITHUB_TOKEN_VAL" -- npx -y @modelcontextprotocol/server-github
+  vps_add github \
+    "claude mcp add github --scope user -e 'GITHUB_PERSONAL_ACCESS_TOKEN=$GITHUB_TOKEN_VAL' -- npx -y @modelcontextprotocol/server-github"
 fi
 
-# Sentry — Mac only (device-code OAuth can't complete on headless VPS).
-if claude mcp list 2>/dev/null | grep -q "^sentry "; then
-  ok "Mac: sentry already registered"
-else
-  claude mcp add --scope user sentry -- npx -y @sentry/mcp-server 2>&1 | head -1 \
-    && ok "Mac: sentry added (device-code OAuth on first call)" || warn "Mac: sentry add failed"
-fi
+# ─── Sentry MCP (Mac only — device-code OAuth doesn't work headless) ───
+mac_add sentry --scope user -- npx -y @sentry/mcp-server
 
+# ─── Context7 (X-API-Key header) ───────────────────────────────────────
 if [[ -n "$CONTEXT7_API_KEY_VAL" ]]; then
-  # Context7 uses X-API-Key header, not Bearer — separate from add_http_mcp
-  if claude mcp list 2>/dev/null | grep -q "^context7 "; then
-    ok "Mac: context7 already registered"
-  else
-    claude mcp add --scope user --transport http context7 "https://mcp.context7.com" \
-      --header "X-API-Key: $CONTEXT7_API_KEY_VAL" >/dev/null 2>&1 \
-      && ok "Mac: context7 added" || warn "Mac: context7 add failed"
-  fi
-  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^context7 '"; then
-    ok "VPS: context7 already registered"
-  else
-    ssh "$VPS_HOST" "claude mcp add --scope user --transport http context7 'https://mcp.context7.com' --header 'X-API-Key: $CONTEXT7_API_KEY_VAL'" >/dev/null 2>&1 \
-      && ok "VPS: context7 added" || warn "VPS: context7 add failed"
-  fi
+  mac_add context7 --scope user --transport http "https://mcp.context7.com" --header "X-API-Key: $CONTEXT7_API_KEY_VAL"
+  vps_add context7 \
+    "claude mcp add context7 --scope user --transport http 'https://mcp.context7.com' --header 'X-API-Key: $CONTEXT7_API_KEY_VAL'"
 fi
 
+# ─── Brave Search ──────────────────────────────────────────────────────
 if [[ -n "$BRAVE_SEARCH_API_KEY_VAL" ]]; then
-  if claude mcp list 2>/dev/null | grep -q "^brave-search "; then
-    ok "Mac: brave-search already registered"
-  else
-    claude mcp add --scope user -e "BRAVE_API_KEY=$BRAVE_SEARCH_API_KEY_VAL" brave-search -- npx -y @modelcontextprotocol/server-brave-search 2>&1 | head -1 \
-      && ok "Mac: brave-search added" || warn "Mac: brave-search add failed"
-  fi
-  if ssh "$VPS_HOST" "claude mcp list 2>/dev/null | grep -q '^brave-search '"; then
-    ok "VPS: brave-search already registered"
-  else
-    ssh "$VPS_HOST" "claude mcp add --scope user -e 'BRAVE_API_KEY=$BRAVE_SEARCH_API_KEY_VAL' brave-search -- npx -y @modelcontextprotocol/server-brave-search" 2>&1 | head -1 \
-      && ok "VPS: brave-search added" || warn "VPS: brave-search add failed"
-  fi
+  mac_add brave-search --scope user -e "BRAVE_API_KEY=$BRAVE_SEARCH_API_KEY_VAL" -- npx -y @modelcontextprotocol/server-brave-search
+  vps_add brave-search \
+    "claude mcp add brave-search --scope user -e 'BRAVE_API_KEY=$BRAVE_SEARCH_API_KEY_VAL' -- npx -y @modelcontextprotocol/server-brave-search"
 fi
 
+# ─── Twilio (alpha — Mac only, no SMS sending from headless VPS) ────
 if [[ -n "$TWILIO_SID" && -n "$TWILIO_AUTH" ]]; then
-  if claude mcp list 2>/dev/null | grep -q "^twilio "; then
-    ok "Mac: twilio already registered"
-  else
-    claude mcp add --scope user -e "TWILIO_ACCOUNT_SID=$TWILIO_SID" -e "TWILIO_AUTH_TOKEN=$TWILIO_AUTH" twilio -- npx -y @twilio-alpha/mcp 2>&1 | head -1 \
-      && ok "Mac: twilio added" || warn "Mac: twilio add failed"
-  fi
+  mac_add twilio --scope user -e "TWILIO_ACCOUNT_SID=$TWILIO_SID" -e "TWILIO_AUTH_TOKEN=$TWILIO_AUTH" -- npx -y @twilio-alpha/mcp
 fi
 
-[[ -n "$APIFY_TOKEN_VAL" ]] && \
-  add_http_mcp apify "https://mcp.apify.com" "https://mcp.apify.com" "$APIFY_TOKEN_VAL"
+# ─── Apify (HTTP, Bearer auth) ─────────────────────────────────────────
+if [[ -n "$APIFY_TOKEN_VAL" ]]; then
+  mac_add apify --scope user --transport http "https://mcp.apify.com" --header "Authorization: Bearer $APIFY_TOKEN_VAL"
+  vps_add apify \
+    "claude mcp add apify --scope user --transport http 'https://mcp.apify.com' --header 'Authorization: Bearer $APIFY_TOKEN_VAL'"
+fi
 
 # ─── Step 4: OAuth flows for already-installed MCPs ────────────────────
 step "4/7 — OAuth re-auth (3 clicks)"
