@@ -10,7 +10,6 @@
  */
 import { useEffect, useState } from "react"
 import { Brain, Bot, Code2, FolderTree, KeyRound, MessageSquare, Settings as SettingsIcon, TerminalSquare } from "lucide-react"
-import Link from "next/link"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -29,6 +28,7 @@ import { CodeFileViewer } from "@/components/projects/code-file-viewer"
 import { GitHubStatusBadge } from "@/components/projects/github-status-badge"
 import { PagesView } from "@/components/projects/pages-view"
 import { ApiKeysView } from "@/components/api-keys/api-keys-view"
+import { useTerminalsDrawer } from "@/components/terminals/terminals-drawer-provider"
 
 type MemoryTab = "tree" | "project-tree" | "api-keys" | "conversations" | "agent-workflows"
 const VALID_TABS: MemoryTab[] = ["tree", "project-tree", "api-keys", "conversations", "agent-workflows"]
@@ -41,6 +41,7 @@ function readTabFromHash(): MemoryTab {
 }
 
 export default function MemoryPage() {
+  const { open: openTerminals } = useTerminalsDrawer()
   const [tab, setTabRaw] = useState<MemoryTab>("tree")
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [projectPath, setProjectPath] = useState<string | null>(null)
@@ -154,16 +155,15 @@ export default function MemoryPage() {
         <div className="flex items-center gap-2">
           <VpsStatusBadge />
           {tab === "project-tree" && <GitHubStatusBadge />}
-          <Link href="/agency/terminals">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-zinc-400 hover:text-amber-100 hover:bg-amber-500/10"
-              title="Open Terminals — run multiple persistent Claude sessions in parallel"
-            >
-              <TerminalSquare className="w-4 h-4" />
-            </Button>
-          </Link>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={openTerminals}
+            className="text-zinc-400 hover:text-amber-100 hover:bg-amber-500/10"
+            title="Open Terminals — run multiple persistent Claude sessions in parallel"
+          >
+            <TerminalSquare className="w-4 h-4" />
+          </Button>
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
               <Button variant="ghost" size="sm" className="text-zinc-400 hover:text-zinc-100" title="Memory settings (token budget, MCP keys, default persona)">
