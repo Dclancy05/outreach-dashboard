@@ -19,6 +19,27 @@ import {
   type WorkflowRun, type WorkflowStep,
 } from "@/lib/api/runs"
 
+// "Started 5m ago" / "Finished 23h ago" — old card said just "23h ago" which
+// read as "this is happening every 23h." Be explicit about which side of the
+// run the timestamp refers to.
+function relTimeFor(status: WorkflowRun["status"], createdAt: string, finishedAt: string | null): string {
+  const live = status === "queued" || status === "running" || status === "paused"
+  if (live || !finishedAt) return `Started ${formatDistanceToNow(new Date(createdAt), { addSuffix: true })}`
+  return `Finished ${formatDistanceToNow(new Date(finishedAt), { addSuffix: true })}`
+}
+
+// "api" reads as a label most users won't recognize. The vast majority of
+// api-triggered runs come from the Telegram bot's webhook, so call it that.
+function triggerLabel(trigger: string): string {
+  switch (trigger) {
+    case "api": return "via Telegram"
+    case "schedule": return "Scheduled"
+    case "manual": return "Manual"
+    case "webhook": return "Webhook"
+    default: return trigger.charAt(0).toUpperCase() + trigger.slice(1)
+  }
+}
+
 export function RunsView() {
   const { data: runs = [], mutate: mutateRuns } = useSWR<WorkflowRun[]>(
     "runs", () => listRuns({ limit: 100 }),
@@ -58,11 +79,11 @@ export function RunsView() {
                 <Badge variant="outline" className={`text-[10px] ${STATUS_BADGE[r.status].className}`}>{STATUS_BADGE[r.status].label}</Badge>
               </div>
               <div className="flex items-center gap-2 mt-1 text-[10px] text-zinc-500">
-                <span>{formatDistanceToNow(new Date(r.created_at), { addSuffix: true })}</span>
+                <span>{relTimeFor(r.status, r.created_at, r.finished_at)}</span>
                 <span>·</span>
                 <span>${Number(r.cost_usd).toFixed(2)}</span>
                 <span>·</span>
-                <span className="capitalize">{r.trigger}</span>
+                <span>{triggerLabel(r.trigger)}</span>
               </div>
               {r.summary && <div className="text-[11px] text-zinc-400 mt-1 line-clamp-2">{r.summary}</div>}
             </button>
@@ -126,7 +147,7 @@ function RunDetail({ runId, onChange }: { runId: string; onChange: () => void })
           <span className="text-base">{run.workflow_emoji || "⚙️"}</span>
           <span className="font-medium text-zinc-100">{run.workflow_name || "Workflow"}</span>
           <Badge variant="outline" className={`text-[10px] ${STATUS_BADGE[run.status].className}`}>{STATUS_BADGE[run.status].label}</Badge>
-          <span className="text-xs text-zinc-500">· {formatDistanceToNow(new Date(run.created_at), { addSuffix: true })}</span>
+          <span className="text-xs text-zinc-500">· {relTimeFor(run.status, run.created_at, run.finished_at)}</span>
           <span className="text-xs text-zinc-500">· ${Number(run.cost_usd).toFixed(2)} · {run.total_tokens} tok</span>
           <div className="ml-auto flex items-center gap-1">
             {liveOrPending && (

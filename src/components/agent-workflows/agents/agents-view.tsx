@@ -33,7 +33,7 @@ export function AgentsView() {
   const selectedAgent = selectedSlug ? agents.find(a => a.slug === selectedSlug) : null
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] h-full">
+    <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] h-full">
       {/* Left: scoped tree */}
       <div className="border-r border-zinc-800/60 flex flex-col">
         <div className="px-3 py-2 border-b border-zinc-800/60 flex items-center justify-between">
@@ -71,7 +71,7 @@ export function AgentsView() {
         )}
         {selectedPath ? (
           selectedPath.startsWith(AGENT_DIR_PREFIX) && selectedPath.endsWith(".md") ? (
-            <FileEditor key={selectedPath} path={selectedPath} onPathChange={setSelectedPath} />
+            <FileEditor key={selectedPath} path={selectedPath} onPathChange={setSelectedPath} defaultTab="preview" />
           ) : (
             <EmptyHint message="Pick an agent .md file under Jarvis/agent-skills/" />
           )

@@ -24,6 +24,10 @@ const SAVE_DEBOUNCE_MS = 700
 interface FileEditorProps {
   path: string
   onPathChange?: (newPath: string | null) => void
+  /** Initial tab to show when the editor mounts. Default "edit" for the
+   *  Memory Tree, "preview" for the Agents subtab where users mostly want
+   *  to read the agent's description rather than tweak it. */
+  defaultTab?: "edit" | "preview"
 }
 
 interface FileResponse {
@@ -40,7 +44,7 @@ interface TreeNode {
   children?: TreeNode[]
 }
 
-export function FileEditor({ path, onPathChange }: FileEditorProps) {
+export function FileEditor({ path, onPathChange, defaultTab = "edit" }: FileEditorProps) {
   const [content, setContent] = useState<string>("")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -192,7 +196,7 @@ export function FileEditor({ path, onPathChange }: FileEditorProps) {
           </Button>
         </div>
       </div>
-      <Tabs defaultValue="edit" className="flex-1 flex flex-col min-h-0">
+      <Tabs defaultValue={defaultTab} className="flex-1 flex flex-col min-h-0">
         <TabsList className="mx-4 mt-2 self-start">
           <TabsTrigger value="edit" className="gap-1.5"><Pencil className="w-3.5 h-3.5" />Edit</TabsTrigger>
           <TabsTrigger value="preview" className="gap-1.5"><Eye className="w-3.5 h-3.5" />Preview</TabsTrigger>
