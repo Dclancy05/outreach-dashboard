@@ -141,17 +141,30 @@ async function bulkSyncFromVault(): Promise<number> {
   const TOKEN = (await getSecret("MEMORY_VAULT_TOKEN")) || ""
   if (!API_URL || !TOKEN) return 0
 
-  // List the agent-skills directory
-  let entries: Array<{ name: string; kind: string }> = []
+  // The vault /tree endpoint returns the full tree regardless of `?path=`.
+  // Walk it to find the AGENT_DIR (Jarvis/agent-skills) folder's direct children.
+  type TreeNode = { name: string; kind: "file" | "folder"; path?: string; children?: TreeNode[] }
+  let fullTree: TreeNode[] = []
   try {
-    const treeRes = await fetch(`${API_URL}/tree?path=${encodeURIComponent(AGENT_DIR)}&depth=1`, {
+    const treeRes = await fetch(`${API_URL}/tree`, {
       headers: { Authorization: `Bearer ${TOKEN}` },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(10_000),
     })
     if (!treeRes.ok) return 0
-    const json = await treeRes.json().catch(() => null) as { tree?: Array<{ name: string; kind: string; path?: string }> } | null
-    entries = json?.tree || []
+    const json = await treeRes.json().catch(() => null) as { tree?: TreeNode[] } | null
+    fullTree = json?.tree || []
   } catch { return 0 }
+
+  function findFolder(nodes: TreeNode[], parts: string[]): TreeNode | null {
+    if (parts.length === 0) return null
+    const [head, ...rest] = parts
+    const found = nodes.find(n => n.kind === "folder" && n.name === head)
+    if (!found) return null
+    if (rest.length === 0) return found
+    return findFolder(found.children || [], rest)
+  }
+  const skillsFolder = findFolder(fullTree, AGENT_DIR.split("/"))
+  const entries = (skillsFolder?.children || [])
 
   let count = 0
   for (const e of entries) {
