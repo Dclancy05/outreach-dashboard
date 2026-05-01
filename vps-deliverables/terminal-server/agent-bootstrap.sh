@@ -24,6 +24,9 @@ if [[ $# -eq 0 ]]; then
 fi
 
 # Path 1: systemd-run --scope (best — cgroup hard cap)
+# OOMScoreAdjust isn't accepted as a scope property on Ubuntu 24.04's systemd —
+# systemd-run errors out and exits 0 without running the command, which silently
+# kills the tmux pane every time. MemoryMax + CPUQuota are the load-bearing caps.
 if command -v systemd-run >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
   exec systemd-run \
     --scope \
@@ -31,7 +34,6 @@ if command -v systemd-run >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
     --collect \
     --property="MemoryMax=$MEM_LIMIT" \
     --property="CPUQuota=$CPU_QUOTA" \
-    --property="OOMScoreAdjust=500" \
     -- "$@"
 fi
 
