@@ -41,7 +41,11 @@ export function AgentsView() {
           <NewAgentDialog onCreated={() => mutate()} />
         </div>
         <div className="flex-1 overflow-auto">
-          <TreeView selectedPath={selectedPath} onSelect={setSelectedPath} />
+          <TreeView
+            selectedPath={selectedPath}
+            onSelect={setSelectedPath}
+            rootPath="/Jarvis/agent-skills"
+          />
         </div>
       </div>
 

@@ -55,15 +55,16 @@ export async function GET(): Promise<NextResponse> {
       return NextResponse.json({ error: `terminal-server ${res.status}` }, { status: 502 })
     }
     const body = await res.json() as { sessions?: Array<{ id: string }> }
-    // Decorate each session with the WS URL + bearer token so the dashboard
-    // can attach xterm.js to existing sessions on reload (not just freshly
-    // created ones). Browser-side this is delivered to a PIN-authed origin,
-    // and the token only authorizes this VPS service — same threat model as
-    // the noVNC password we already ship.
+    // Decorate each session with the WS URL. The bearer token rides as a
+    // `?token=` query param so Tailscale Funnel's path-prefix proxy preserves
+    // it through the WebSocket upgrade (the Sec-WebSocket-Protocol header is
+    // dropped by --set-path proxies). Browser-side this is delivered to a
+    // PIN-authed origin, and the token only authorizes this VPS service —
+    // same threat model as the noVNC password we already ship.
+    const tokQ = `?token=${encodeURIComponent(r.token)}`
     const decorated = (body.sessions || []).map((s) => ({
       ...s,
-      ws_url: `${r.wsUrl}/sessions/${s.id}/stream`,
-      token: r.token,
+      ws_url: `${r.wsUrl}/sessions/${s.id}/stream${tokQ}`,
     }))
     return NextResponse.json({ sessions: decorated })
   } catch (e) {
@@ -98,14 +99,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         { status: res.status },
       )
     }
-    // Return everything the front-end needs to attach xterm.js: session
-    // metadata + the WS URL + the (short-lived in concept; shared in Phase 1)
-    // token. This response is over HTTPS to a PIN-authed browser, so the
-    // token doesn't leak.
+    // Return everything the front-end needs to attach xterm.js. The bearer
+    // token is embedded in ws_url as ?token= so Tailscale Funnel's
+    // path-prefix proxy preserves it through the WebSocket upgrade.
+    const tokQ = `?token=${encodeURIComponent(r.token)}`
     return NextResponse.json({
       ...data,
-      ws_url: `${r.wsUrl}${data.ws_path}`,
-      token: r.token,
+      ws_url: `${r.wsUrl}${data.ws_path}${tokQ}`,
     })
   } catch (e) {
     return NextResponse.json(

@@ -49,13 +49,31 @@ interface TreeResponse {
 interface TreeViewProps {
   selectedPath: string | null
   onSelect: (path: string) => void
+  /** Optional vault path to scope the tree to. When set, only descendants of
+   *  this folder are shown — used by the Agents subtab to scope to
+   *  `/Jarvis/agent-skills`. Always-rooted ("/foo/bar"). When unset (default)
+   *  the full vault root is shown. */
+  rootPath?: string
 }
 
 // Top-level paths the tree should hide (they're surfaced elsewhere — Conversations
 // has its own tab; .trash is internal soft-delete storage).
 const HIDDEN_TOP_PATHS = new Set(["/Conversations", "/.trash"])
 
-export function TreeView({ selectedPath, onSelect }: TreeViewProps) {
+// Walk the tree to find a folder by absolute vault path. Returns its children,
+// or null if the path doesn't resolve to a folder.
+function findFolderChildren(nodes: TreeNode[], targetPath: string): TreeNode[] | null {
+  for (const n of nodes) {
+    if (n.path === targetPath) return n.kind === "folder" ? (n.children || []) : null
+    if (n.kind === "folder" && targetPath.startsWith(n.path + "/")) {
+      const found = findFolderChildren(n.children || [], targetPath)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+export function TreeView({ selectedPath, onSelect, rootPath }: TreeViewProps) {
   const [tree, setTree] = useState<TreeNode[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -315,7 +333,7 @@ export function TreeView({ selectedPath, onSelect }: TreeViewProps) {
         onDragCancel={() => setActiveDrag(null)}
       >
         <div className="overflow-y-auto flex-1 text-sm py-1">
-          {(tree || [])
+          {((rootPath ? findFolderChildren(tree || [], rootPath) : (tree || [])) || [])
             .filter((node) => !HIDDEN_TOP_PATHS.has(node.path))
             .map((node) => (
               <TreeRow
