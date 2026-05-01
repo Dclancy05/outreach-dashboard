@@ -135,7 +135,7 @@ function nextResponseWithNonce(req: NextRequest, nonce: string): NextResponse {
 
 function buildCsp(_nonce: string, _pathname: string): string {
   const supabase = "https://*.supabase.co"
-  const tailscale = "https://srv1197943.taild42583.ts.net https://*.taild42583.ts.net"
+  const tailscale = "https://srv1197943.taild42583.ts.net https://*.taild42583.ts.net wss://srv1197943.taild42583.ts.net wss://*.taild42583.ts.net"
   const isProd = process.env.NODE_ENV === "production"
   // In prod we drop 'unsafe-eval' entirely. Next dev needs eval for HMR.
   const scriptSrc = isProd
