@@ -175,6 +175,22 @@ export async function runWorkflowSync(args: {
     })
     .eq("id", run_id)
 
+  // Bump the workflow's use_count + last_run_at so the Workflows tab cards
+  // show accurate counters. The Inngest path does the same in run-workflow.ts;
+  // this mirror keeps the synchronous executor in lockstep.
+  const { data: wfMeta } = await sb
+    .from("workflows")
+    .select("use_count")
+    .eq("id", workflow_id)
+    .maybeSingle()
+  await sb
+    .from("workflows")
+    .update({
+      last_run_at: new Date().toISOString(),
+      use_count: (wfMeta?.use_count != null ? Number(wfMeta.use_count) + 1 : 1),
+    })
+    .eq("id", workflow_id)
+
   // Notify trigger source.
   try {
     await dispatchNotification(

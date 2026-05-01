@@ -101,7 +101,10 @@ export function SystemPulse() {
   } else if (okCount === total) {
     label = "All systems operational"
   } else if (failing.length >= 3) {
-    label = "VPS offline"
+    // Most-failures case: the recording-service infra (Chrome/Xvfb/proxy/queue)
+    // is down. That's the OpenClaw machinery, not the dashboard core — say so
+    // accurately instead of "VPS offline" which makes the whole box look dead.
+    label = "Recording infra paused"
   } else {
     const joined = failing.join(", ")
     label = `${joined} offline`
