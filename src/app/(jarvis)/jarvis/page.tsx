@@ -1,11 +1,12 @@
-// /jarvis → /jarvis/memory
+// /jarvis — home dashboard.
 //
-// Server-only redirect. Memory is the canonical landing page for the Jarvis
-// sub-app (per W1A spec). If a user lands here from a deep link or the back
-// button, we send them to Memory.
+// Was a server-only redirect to /jarvis/memory. Now renders a real welcome
+// page with the 90-day activity heatmap + a tile grid of every Jarvis
+// surface for fast navigation. The "Open Memory" CTA at the top makes
+// landing here cost <1 click for the canonical entry-point user.
 
-import { redirect } from "next/navigation"
+import { JarvisHome } from "@/components/jarvis/home/jarvis-home"
 
-export default function JarvisRootPage(): never {
-  redirect("/jarvis/memory")
+export default function JarvisRootPage() {
+  return <JarvisHome />
 }
