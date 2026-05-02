@@ -40,8 +40,25 @@ import {
   ChevronRight, Instagram, Facebook, Linkedin, Globe,
   RefreshCw, LogIn, XCircle, Save, Clipboard,
 } from "lucide-react"
-import NoVncViewer from "@/components/novnc-viewer"
+import {
+  VncViewer,
+  type VncViewerHandle,
+  type VncConnectionState,
+} from "@/components/jarvis/observability/vnc-viewer"
 import { PLATFORM_LOGIN_URLS } from "@/lib/platform-login-urls"
+
+// VNC WebSocket URL composition. Mirrors the legacy NoVncViewer default so
+// the same env var (NEXT_PUBLIC_VNC_WS_BASE) keeps working without any infra
+// change. Phase 2 will swap "main" for the per-group session id; for Phase 1
+// we keep the shared "main" Chrome since that's what the VPS exposes today.
+const VNC_WS_BASE =
+  process.env.NEXT_PUBLIC_VNC_WS_BASE ||
+  "wss://srv1197943.taild42583.ts.net/websockify"
+const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || ""
+function buildWsUrlForSession(sessionId: string): string {
+  const base = VNC_WS_BASE.replace(/\/+$/, "")
+  return `${base}/${encodeURIComponent(sessionId)}`
+}
 
 // Canonical login URL per platform lives in src/lib/platform-login-urls.ts —
 // /api/platforms/goto forwards this to the VPS's single Chrome instance so the
@@ -267,6 +284,20 @@ export default function PlatformLoginModal({
   const [manualPasteSaving, setManualPasteSaving] = useState(false)
   const hasNavigatedRef = useRef(false)
 
+  // VNC viewer lifecycle. We drive the imperative VncViewer so the modal can
+  // sequence "connect first, then navigate". The previous component
+  // (NoVncViewer) auto-connected on mount in parallel with /api/platforms/goto,
+  // which raced Chrome's navigation against the RFB handshake and caused the
+  // server to drop us cleanly ~1.5s in.
+  const viewerRef = useRef<VncViewerHandle | null>(null)
+  const [vncState, setVncState] = useState<VncConnectionState>("idle")
+  const vncStateRef = useRef<VncConnectionState>("idle")
+  // Phase 1: the VPS exposes a single shared Chrome under sessionId "main".
+  // Phase 2 will compute this per-group from accountId. Memoized so VncViewer
+  // doesn't see a fresh string every render (its connect callback depends on
+  // wsUrl, and a new identity would force unnecessary teardown).
+  const vncWsUrl = useMemo(() => buildWsUrlForSession("main"), [])
+
   const info = useMemo(() => instructionsFor(currentPlatform), [currentPlatform])
 
   // Reset on open / new initial platform. We want a fresh slate every time
@@ -327,14 +358,54 @@ export default function PlatformLoginModal({
     navigateToRef.current = navigateTo
   }, [navigateTo])
 
-  // Auto-navigate once on open so the user lands on the right login page
-  // without having to click anything first. The ref-guard + reading the
-  // latest navigateTo from a ref prevents the re-render cycle.
+  // Drive the VNC viewer's connection state alongside the modal's open state.
+  //   open=true  + viewer idle  → connect()
+  //   open=false                → disconnect() (and reset hasNavigatedRef so
+  //     the next open re-fires the navigate-to-login flow)
+  // The viewer manages its own RFB lifecycle internally; we just tell it when
+  // to start/stop. Reconnect-with-backoff is built into the viewer, so a
+  // transient drop self-heals without the user clicking anything.
   useEffect(() => {
-    if (!open || hasNavigatedRef.current) return
+    if (!open) {
+      // Modal closed — tear the connection down so we don't leak a live
+      // WebSocket while the user is doing other things in the dashboard.
+      try { viewerRef.current?.disconnect() } catch {}
+      hasNavigatedRef.current = false
+      setVncState("idle")
+      vncStateRef.current = "idle"
+      return
+    }
+    // Modal opened — kick off the VNC connect. We do NOT navigate Chrome here
+    // anymore: that happens once the viewer reports "connected", below.
+    setVncState("connecting")
+    vncStateRef.current = "connecting"
+    // Defer to the next tick so the VncViewer's container ref is mounted
+    // before we tell it to connect (RFB needs a valid HTMLElement target).
+    const t = setTimeout(() => {
+      try { viewerRef.current?.connect() } catch {}
+    }, 0)
+    return () => clearTimeout(t)
+  }, [open])
+
+  // Auto-navigate to the platform login page ONLY after the VNC viewer is
+  // fully connected. This is the core of the Phase 1 fix: by serializing
+  // "viewer ready → Chrome navigates", we eliminate the race where x11vnc
+  // dropped us mid-handshake while Chrome was repainting from about:blank to
+  // instagram.com.
+  useEffect(() => {
+    if (!open) return
+    if (hasNavigatedRef.current) return
+    if (vncState !== "connected") return
     hasNavigatedRef.current = true
     navigateToRef.current(initialPlatform).catch(() => {})
-  }, [open, initialPlatform])
+  }, [open, initialPlatform, vncState])
+
+  // Receive viewer state changes. Mirrored into both state (for re-renders)
+  // and a ref (for non-render-triggering reads).
+  const handleVncState = useCallback((next: VncConnectionState) => {
+    vncStateRef.current = next
+    setVncState(next)
+  }, [])
 
   async function confirmLogin() {
     setVerifying(true)
@@ -793,7 +864,34 @@ export default function PlatformLoginModal({
             </div>
 
             <div className="relative flex-1">
-              <NoVncViewer />
+              <VncViewer
+                ref={viewerRef}
+                wsUrl={vncWsUrl}
+                password={VNC_PASSWORD || undefined}
+                onStateChange={handleVncState}
+                className="h-full w-full"
+              />
+              {/* While the viewer is connecting (or waiting for RFB to finish
+                  its handshake), and BEFORE we've fired the goto request, show
+                  a polished overlay so the user understands the sequence:
+                  connect first → then navigate to the login page. */}
+              {open && vncState !== "connected" && vncState !== "error" && (
+                <div className="pointer-events-none absolute inset-x-4 top-3 rounded-xl bg-black/55 backdrop-blur-sm border border-border/30 px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-300" />
+                  {vncState === "reconnecting"
+                    ? "Reconnecting to the browser…"
+                    : "Opening the secure browser…"}
+                </div>
+              )}
+              {/* Once connected but Chrome is still navigating, show a tiny
+                  hint so the user knows the next step is loading the login
+                  page (and isn't a hang). */}
+              {open && vncState === "connected" && navigating && (
+                <div className="pointer-events-none absolute inset-x-4 top-3 rounded-xl bg-black/55 backdrop-blur-sm border border-border/30 px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-300" />
+                  Loading {info.label} login page…
+                </div>
+              )}
             </div>
           </div>
         </div>
