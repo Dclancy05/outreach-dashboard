@@ -39,6 +39,7 @@ import {
   TrendingUp,
   UserCheck,
   Brain,
+  Bot,
 } from "lucide-react"
 
 interface NavItem {
@@ -71,6 +72,7 @@ const agencyNavSections: NavSection[] = [
       { path: "/agency/analytics", label: "Analytics", icon: BarChart3, color: "text-pink-400" },
       { path: "/agency/phantom", label: "Phantom", icon: Ghost, color: "text-violet-400" },
       { path: "/agency/memory", label: "Memory", icon: Brain, color: "text-amber-400" },
+      { path: "/agency/agents", label: "Agents", icon: Bot, color: "text-violet-400" },
     ],
   },
 ]
