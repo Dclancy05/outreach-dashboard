@@ -62,7 +62,12 @@ function clampScore(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)))
 }
 
-export async function handle(req: NextRequest) {
+// `handle` is a shared internal helper. Keeping it un-exported because
+// Next.js App Router only allows GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS as
+// route exports — `export async function handle(...)` triggers a build
+// error ("'handle' is not a valid Route export field"). The exported GET
+// + POST below delegate to this private function.
+async function handle(req: NextRequest) {
   // Bearer auth — match other crons in this repo.
   const auth = req.headers.get("authorization") || ""
   const expected = process.env.CRON_SECRET || ""
