@@ -724,6 +724,10 @@ export default function OutreachPage() {
   const [matchingLeadCount, setMatchingLeadCount] = useState<number | null>(null)
   const [matchingLeads, setMatchingLeads] = useState<Lead[]>([])
   const [loadingLeadCount, setLoadingLeadCount] = useState(false)
+  // Slice 4 — Step 2 hard-stop dialog. Forces an explicit "remove the bad
+  // leads" or "go back and adjust accounts" choice when some leads don't
+  // have all the platforms the campaign needs. No silent failures.
+  const [showPlatformMissingDialog, setShowPlatformMissingDialog] = useState(false)
 
   // Launch state
   const [launching, setLaunching] = useState(false)
@@ -862,6 +866,20 @@ export default function OutreachPage() {
     }, 8000)
     return () => clearInterval(interval)
   }, [activeCampaign, pollingCampaign])
+
+  // Slice 4 — auto-open the Step 2 hard-stop dialog whenever some leads
+  // are missing required platforms. Closing happens automatically once the
+  // condition resolves (Remove trims the bad leads → no more missing) or
+  // when the user goes back to Step 1 (Step 2 unmounts).
+  useEffect(() => {
+    if (campaignStep !== 2 || matchingLeads.length === 0) {
+      setShowPlatformMissingDialog(false)
+      return
+    }
+    const selectedPlatforms = [...new Set(accounts.filter(a => selectedAccounts.includes(a.account_id)).map(a => a.platform))]
+    const hasMissing = matchingLeads.some(lead => selectedPlatforms.some(p => !getPlatformUrl(lead, p)))
+    setShowPlatformMissingDialog(hasMissing)
+  }, [campaignStep, matchingLeads, selectedAccounts, accounts])
 
   // Compute platform coverage
   const selectedSeq = sequences.find(s => s.sequence_id === selectedSequence)
@@ -1547,37 +1565,73 @@ export default function OutreachPage() {
                 )}
               </div>
 
-              {/* Platform filtration errors */}
-              {hasMissingError && matchingLeads.length > 0 && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-3 p-3 rounded-xl border border-red-500/30 bg-red-500/5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <XCircle className="h-4 w-4 text-red-400" />
-                    <span className="text-sm font-medium text-red-400">{leadsWithMissing.length} leads are missing required platforms</span>
-                  </div>
-                  <div className="space-y-1 max-h-24 overflow-y-auto">
-                    {leadsWithMissing.slice(0, 5).map(lead => (
+              {/* Slice 4 — Platform filtration HARD STOP (replaces the old
+                  banner). Modal: cannot be dismissed by clicking outside —
+                  user must explicitly choose to remove the bad leads or go
+                  back and adjust account selection. No silent failures. */}
+              <Dialog
+                open={showPlatformMissingDialog && hasMissingError && matchingLeads.length > 0}
+                onOpenChange={(open) => {
+                  // Block "X" button and outside-click closes — the only
+                  // legitimate exits are "Remove" or "Go Back".
+                  if (!open) return
+                  setShowPlatformMissingDialog(open)
+                }}
+              >
+                <DialogContent className="max-w-md rounded-2xl" onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={(e) => e.preventDefault()}>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2 text-red-400">
+                      <XCircle className="h-5 w-5" />
+                      {leadsWithMissing.length} {leadsWithMissing.length === 1 ? "Lead" : "Leads"} Missing Required Platforms
+                    </DialogTitle>
+                    <DialogDescription>
+                      These leads don&apos;t have all the platforms your selected accounts cover.
+                      You must either remove them or go back and adjust your account selection.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <div className="max-h-40 overflow-y-auto space-y-1 p-2 bg-muted/10 rounded-lg">
+                    {leadsWithMissing.slice(0, 10).map(lead => (
                       <div key={lead.lead_id} className="text-xs text-muted-foreground flex items-center gap-2">
-                        <span className="truncate">{lead.name || lead.lead_id}</span>
-                        <span className="text-red-400/70">missing: {selectedPlatforms.filter(p => !getPlatformUrl(lead, p)).join(", ")}</span>
+                        <span className="font-medium truncate">{lead.name || lead.lead_id}</span>
+                        <span className="text-red-400/70 shrink-0">missing: {selectedPlatforms.filter(p => !getPlatformUrl(lead, p)).join(", ")}</span>
                       </div>
                     ))}
-                    {leadsWithMissing.length > 5 && <p className="text-xs text-muted-foreground">+{leadsWithMissing.length - 5} more</p>}
+                    {leadsWithMissing.length > 10 && (
+                      <p className="text-xs text-muted-foreground">+{leadsWithMissing.length - 10} more</p>
+                    )}
                   </div>
-                  <div className="flex gap-2 mt-3">
-                    <Button size="sm" variant="destructive" className="rounded-xl text-xs" onClick={() => {
-                      const validIds = new Set(validLeads.map(l => l.lead_id))
-                      setMatchingLeads(matchingLeads.filter(l => validIds.has(l.lead_id)))
-                      setMatchingLeadCount(validLeads.length)
-                      toast.success(`Removed ${leadsWithMissing.length} leads with missing platforms`)
-                    }}>
-                      Remove {leadsWithMissing.length} leads & continue
+
+                  <div className="flex gap-2 mt-4">
+                    <Button
+                      variant="destructive"
+                      className="flex-1 rounded-xl"
+                      onClick={() => {
+                        const validIds = new Set(validLeads.map(l => l.lead_id))
+                        setMatchingLeads(matchingLeads.filter(l => validIds.has(l.lead_id)))
+                        setMatchingLeadCount(validLeads.length)
+                        toast.success(`Removed ${leadsWithMissing.length} leads with missing platforms`)
+                        // Effect will close the dialog on the next tick when
+                        // hasMissingError flips to false, but close eagerly
+                        // for snappier UX.
+                        setShowPlatformMissingDialog(false)
+                      }}
+                    >
+                      Remove {leadsWithMissing.length} {leadsWithMissing.length === 1 ? "Lead" : "Leads"}
                     </Button>
-                    <Button size="sm" variant="outline" className="rounded-xl text-xs" onClick={() => setCampaignStep(1)}>
+                    <Button
+                      variant="outline"
+                      className="flex-1 rounded-xl"
+                      onClick={() => {
+                        setShowPlatformMissingDialog(false)
+                        setCampaignStep(1)
+                      }}
+                    >
                       Go Back
                     </Button>
                   </div>
-                </motion.div>
-              )}
+                </DialogContent>
+              </Dialog>
 
               {/* Extra platforms warning */}
               {hasExtraWarning && matchingLeads.length > 0 && (
