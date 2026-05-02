@@ -338,43 +338,104 @@ async function runTestWithStrategy(
 
 export async function POST(req: Request) {
   try {
-    const { script_id } = await req.json()
+    const body = await req.json()
+    const { script_id, automation_id } = body as { script_id?: string; automation_id?: string }
 
-    if (!script_id) {
-      return NextResponse.json({ error: "script_id required" }, { status: 400 })
+    if (!script_id && !automation_id) {
+      return NextResponse.json({ error: "script_id or automation_id required" }, { status: 400 })
     }
 
-    // Fetch the script
-    const { data: scriptRecord, error: fetchErr } = await supabase
-      .from("automation_scripts")
-      .select("*")
-      .eq("id", script_id)
-      .single()
-
-    if (fetchErr || !scriptRecord) {
-      return NextResponse.json({ error: "Script not found" }, { status: 404 })
+    // Tier 1 path — automation_id loads from the `automations` table (new
+    // ManualStepBuilder-fed flow). Map its `steps` JSONB into the same
+    // shape the legacy strategy runner expects.
+    let scriptRecord: any = null
+    let isAutomationsTable = false
+    if (automation_id) {
+      const { data, error } = await supabase
+        .from("automations")
+        .select("*")
+        .eq("id", automation_id)
+        .single()
+      if (error || !data) {
+        return NextResponse.json({ error: "Automation not found" }, { status: 404 })
+      }
+      scriptRecord = data
+      isAutomationsTable = true
+    } else {
+      const { data, error } = await supabase
+        .from("automation_scripts")
+        .select("*")
+        .eq("id", script_id)
+        .single()
+      if (error || !data) {
+        return NextResponse.json({ error: "Script not found" }, { status: 404 })
+      }
+      scriptRecord = data
     }
 
-    const { platform, action_type, script_json } = scriptRecord
-    const script = script_json as Array<{
+    // Adapt automations.steps (Tier 1 wire format from toWireSteps) into
+    // the legacy strategy runner shape. Drops fields the runner doesn't
+    // need; supplies defaults for `step`, `cdp_method`, `description`.
+    function adaptAutomationStepsToScript(steps: any[]): Array<{
       step: number; type: string; selectors: string[];
       fallback_text?: string; fallback_coordinates?: { x: number; y: number };
       params: Record<string, unknown>; cdp_method: string; wait_after_ms?: number;
-      description: string
-    }>
+      description: string;
+    }> {
+      return (Array.isArray(steps) ? steps : []).map((s, i) => {
+        const type = String(s.type || "click").toLowerCase()
+        const cdpMap: Record<string, string> = {
+          navigate: "Page.navigate",
+          click: "Input.dispatchMouseEvent",
+          type: "Input.insertText",
+          wait: "Page.waitForLoadState",
+          press_key: "Input.dispatchKeyEvent",
+          extract: "Runtime.evaluate",
+        }
+        return {
+          step: i + 1,
+          type,
+          selectors: Array.isArray(s.selectors) ? s.selectors : [],
+          fallback_text: s.fallback_text,
+          fallback_coordinates: s.fallback_coordinates,
+          params: s.params || {},
+          cdp_method: cdpMap[type] || "Runtime.evaluate",
+          wait_after_ms: type === "wait" ? Number(s.params?.ms) || 1000 : 250,
+          description: s.params?.description || `${type} step`,
+        }
+      })
+    }
+
+    const platform = scriptRecord.platform as string
+    const action_type = (scriptRecord.action_type ||
+      (scriptRecord.tag === "outreach_action" ? "dm" : "test")) as string
+    const script = isAutomationsTable
+      ? adaptAutomationStepsToScript(scriptRecord.steps || [])
+      : (scriptRecord.script_json as Array<{
+          step: number; type: string; selectors: string[];
+          fallback_text?: string; fallback_coordinates?: { x: number; y: number };
+          params: Record<string, unknown>; cdp_method: string; wait_after_ms?: number;
+          description: string
+        }>)
+
+    // Resolve which table + which id to write back to so the rest of the
+    // route can update either the legacy automation_scripts row or the new
+    // automations row that Tier 1 ManualStepBuilder creates.
+    const recordTable = isAutomationsTable ? "automations" : "automation_scripts"
+    const recordId = (script_id || automation_id) as string
 
     const testTarget = TEST_TARGETS[platform]?.[action_type]
     if (!testTarget) {
       // No safe test target — mark as active based on script generation alone
-      await supabase.from("automation_scripts").update({
+      await supabase.from(recordTable).update({
         status: "active",
         updated_at: new Date().toISOString(),
-      }).eq("id", script_id)
+      }).eq("id", recordId)
 
       await insertNotification(
         "automation_success",
         `✅ ${platformLabel(platform)} ${action_type} automation is ready! (No auto-test available for this action)`,
-        { script_id, platform, action_type }
+        { [isAutomationsTable ? "automation_id" : "script_id"]: recordId, platform, action_type }
       )
 
       return NextResponse.json({
@@ -398,9 +459,11 @@ export async function POST(req: Request) {
         const result = await runTestWithStrategy(strategy, script, platform, action_type, testTarget)
         const duration = Date.now() - startTime
 
-        // Log the attempt
+        // Log the attempt — automation_test_log only has script_id today;
+        // for Tier 1 (automations table) leave it blank so the column
+        // doesn't FK-fail. Future migration can add automation_id.
         await supabase.from("automation_test_log").insert({
-          script_id,
+          script_id: isAutomationsTable ? null : recordId,
           attempt_number: attemptNum,
           strategy,
           test_target: testTarget.url,
@@ -420,7 +483,7 @@ export async function POST(req: Request) {
         lastError = String(e)
 
         await supabase.from("automation_test_log").insert({
-          script_id,
+          script_id: isAutomationsTable ? null : recordId,
           attempt_number: attemptNum,
           strategy,
           test_target: testTarget.url,
@@ -431,39 +494,50 @@ export async function POST(req: Request) {
       }
     }
 
-    // Update script status
+    // Update record status — `automations` table doesn't have all the
+    // columns automation_scripts has (test_attempts, last_test_result,
+    // selectors). Branch the update payload accordingly.
     const newStatus = winningStrategy ? "active" : "failed"
-    await supabase.from("automation_scripts").update({
-      status: newStatus,
-      test_attempts: STRATEGIES.length,
-      last_test_at: new Date().toISOString(),
-      last_test_result: winningStrategy
-        ? { strategy: winningStrategy, test_target: testTarget.url }
-        : { all_failed: true, last_error: lastError },
-      last_error: winningStrategy ? null : lastError,
-      // If we found a winning strategy, reorder selectors to prioritize it
-      ...(winningStrategy ? {
-        selectors: {
-          ...(scriptRecord.selectors || {}),
-          _winning_strategy: winningStrategy,
-        },
-      } : {}),
-      updated_at: new Date().toISOString(),
-    }).eq("id", script_id)
+    if (isAutomationsTable) {
+      await supabase.from("automations").update({
+        status: winningStrategy ? "active" : "needs_rerecording",
+        last_tested_at: new Date().toISOString(),
+        last_error: winningStrategy ? null : lastError,
+        updated_at: new Date().toISOString(),
+      }).eq("id", recordId)
+    } else {
+      await supabase.from("automation_scripts").update({
+        status: newStatus,
+        test_attempts: STRATEGIES.length,
+        last_test_at: new Date().toISOString(),
+        last_test_result: winningStrategy
+          ? { strategy: winningStrategy, test_target: testTarget.url }
+          : { all_failed: true, last_error: lastError },
+        last_error: winningStrategy ? null : lastError,
+        ...(winningStrategy ? {
+          selectors: {
+            ...(scriptRecord.selectors || {}),
+            _winning_strategy: winningStrategy,
+          },
+        } : {}),
+        updated_at: new Date().toISOString(),
+      }).eq("id", recordId)
+    }
 
     // Send notification
+    const idKey = isAutomationsTable ? "automation_id" : "script_id"
     const pLabel = platformLabel(platform)
     if (winningStrategy) {
       await insertNotification(
         "automation_success",
         `✅ ${pLabel} ${action_type} is now active! Tested successfully on ${testTarget.name}.`,
-        { script_id, platform, action_type, strategy: winningStrategy, test_target: testTarget.name }
+        { [idKey]: recordId, platform, action_type, strategy: winningStrategy, test_target: testTarget.name }
       )
     } else {
       await insertNotification(
         "automation_error",
         `${pLabel} ${action_type} needs attention — we couldn't get it working automatically. Tap to see what happened.`,
-        { script_id, platform, action_type, last_error: lastError }
+        { [idKey]: recordId, platform, action_type, last_error: lastError }
       )
     }
 
