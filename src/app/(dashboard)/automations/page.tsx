@@ -9,6 +9,7 @@ import {
   RefreshCw, Zap, RotateCcw, HelpCircle, ChevronRight, PartyPopper,
   LayoutGrid, Wrench, Eye, Activity, PlayCircle, Edit2, TrendingUp,
   Pencil, Server, Layers, MoreHorizontal,
+  MessageCircle as RedditFallbackIcon, Mail as EmailIcon, Smartphone as SmsIcon,
 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -100,13 +101,18 @@ function PinterestIcon({ className = "h-5 w-5" }: { className?: string }) {
   )
 }
 
+// Reddit/Email/SMS use lucide fallbacks (RedditFallbackIcon, EmailIcon, SmsIcon
+// — imported with the rest of lucide at the top). Replace with custom SVGs
+// if/when designed; no other change needed.
 const platformIcons: Record<string, React.FC<{ className?: string }>> = {
   ig: IGIcon, fb: FBIcon, li: LIIcon, tiktok: TikTokIcon, youtube: YouTubeIcon,
   x: XIcon, snapchat: SnapchatIcon, pinterest: PinterestIcon,
+  reddit: RedditFallbackIcon, email: EmailIcon, sms: SmsIcon,
 }
 const platformLabels: Record<string, string> = {
   ig: "Instagram", fb: "Facebook", li: "LinkedIn", tiktok: "TikTok", youtube: "YouTube",
   x: "X", snapchat: "Snapchat", pinterest: "Pinterest",
+  reddit: "Reddit", email: "Email", sms: "SMS",
 }
 const platformColors: Record<string, string> = {
   ig: "from-pink-500/20 to-purple-500/20 border-pink-500/30",
@@ -117,6 +123,9 @@ const platformColors: Record<string, string> = {
   x: "from-zinc-500/20 to-zinc-600/20 border-zinc-500/30",
   snapchat: "from-yellow-400/20 to-yellow-500/20 border-yellow-500/30",
   pinterest: "from-rose-500/20 to-red-500/20 border-rose-500/30",
+  reddit: "from-orange-500/20 to-red-500/20 border-orange-500/30",
+  email: "from-emerald-500/20 to-teal-500/20 border-emerald-500/30",
+  sms: "from-violet-500/20 to-purple-500/20 border-violet-500/30",
 }
 
 /* ─── Recording Guides ─── */
@@ -320,7 +329,7 @@ interface AutomationDef {
   slug: string
   active: false            // catalog default — always false; live state comes from DB
   tested: null             // catalog default — null, we never claim a test date we can't prove
-  needsRecording: true     // renders the "Needs Recording" pill when no DB row matches
+  needsRecording: boolean  // most platforms need a recorded automation; Email/SMS use API calls so they don't
   desc: string
   note?: string
   tag?: "outreach_action" | "lead_enrichment" | "utility"
@@ -363,9 +372,44 @@ const ALL_AUTOMATIONS: AutomationDef[] = [
   { platform: "li", action: "Scrape Post Count", actionKey: "scrape_post_count", slug: "li_scrape_post_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull total posts by the profile/company" },
   { platform: "li", action: "Scrape Bio", actionKey: "scrape_bio", slug: "li_scrape_bio", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the About/headline text" },
   { platform: "li", action: "Scrape Category", actionKey: "scrape_category", slug: "li_scrape_category", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the company industry or profile headline tag" },
+
+  // ─── Reddit (outreach + enrichment) ───
+  { platform: "reddit", action: "DM", actionKey: "dm", slug: "reddit_dm", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Send a direct chat message on Reddit" },
+  { platform: "reddit", action: "Follow", actionKey: "follow", slug: "reddit_follow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Follow a redditor's profile" },
+  { platform: "reddit", action: "Comment", actionKey: "comment", slug: "reddit_comment", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Reply to a Reddit post or comment" },
+  { platform: "reddit", action: "Post", actionKey: "post", slug: "reddit_post", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Submit a new post to a subreddit" },
+  { platform: "reddit", action: "Scrape Karma", actionKey: "scrape_karma", slug: "reddit_scrape_karma", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull post + comment karma from a profile" },
+  { platform: "reddit", action: "Scrape Bio", actionKey: "scrape_bio", slug: "reddit_scrape_bio", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the redditor's About text" },
+
+  // ─── X / Twitter (outreach + enrichment) ───
+  { platform: "x", action: "DM", actionKey: "dm", slug: "x_dm", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Send a direct message on X" },
+  { platform: "x", action: "Follow", actionKey: "follow", slug: "x_follow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Follow an account on X" },
+  { platform: "x", action: "Unfollow", actionKey: "unfollow", slug: "x_unfollow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Unfollow an account on X" },
+  { platform: "x", action: "Reply", actionKey: "reply", slug: "x_reply", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Reply to an X post" },
+  { platform: "x", action: "Scrape Follower Count", actionKey: "scrape_follower_count", slug: "x_scrape_follower_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the follower count from an X profile" },
+  { platform: "x", action: "Scrape Bio", actionKey: "scrape_bio", slug: "x_scrape_bio", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the X profile bio text" },
+
+  // ─── Snapchat (outreach only — no public enrichment surface) ───
+  { platform: "snapchat", action: "DM", actionKey: "dm", slug: "snapchat_dm", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Send a chat on Snapchat web" },
+  { platform: "snapchat", action: "Follow", actionKey: "follow", slug: "snapchat_follow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Add friend / follow on Snapchat" },
+
+  // ─── Pinterest (outreach + enrichment) ───
+  { platform: "pinterest", action: "DM", actionKey: "dm", slug: "pinterest_dm", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Send a Pinterest direct message" },
+  { platform: "pinterest", action: "Follow", actionKey: "follow", slug: "pinterest_follow", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Follow a Pinterest account" },
+  { platform: "pinterest", action: "Save Pin", actionKey: "save_pin", slug: "pinterest_save_pin", active: false, tested: null, needsRecording: true, tag: "outreach_action", desc: "Save a pin to a board (engagement signal)" },
+  { platform: "pinterest", action: "Scrape Follower Count", actionKey: "scrape_follower_count", slug: "pinterest_scrape_follower_count", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the follower count from a Pinterest profile" },
+  { platform: "pinterest", action: "Scrape Bio", actionKey: "scrape_bio", slug: "pinterest_scrape_bio", active: false, tested: null, needsRecording: true, tag: "lead_enrichment", desc: "Pull the profile bio text" },
+
+  // ─── Email (Instantly-backed; uses API directly — no recording) ───
+  { platform: "email", action: "Send via Instantly", actionKey: "send_instantly", slug: "email_send_instantly", active: false, tested: null, needsRecording: false, tag: "outreach_action", desc: "Send an email through Instantly's API", note: "Uses /api/email/instantly/send. Configure API key under /agency/accounts → Email." },
+  { platform: "email", action: "Validate Address", actionKey: "validate", slug: "email_validate", active: false, tested: null, needsRecording: false, tag: "utility", desc: "Validate an email exists and looks deliverable", note: "Uses Instantly's /accounts validation endpoint." },
+
+  // ─── SMS (GHL-backed; uses GHL API directly — no recording) ───
+  { platform: "sms", action: "Send via GHL", actionKey: "send_ghl", slug: "sms_send_ghl", active: false, tested: null, needsRecording: false, tag: "outreach_action", desc: "Send an SMS through GoHighLevel's API", note: "Uses /api/email/ghl/sms. Configure GHL credentials under /agency/accounts → SMS." },
+  { platform: "sms", action: "Validate Number", actionKey: "validate", slug: "sms_validate", active: false, tested: null, needsRecording: false, tag: "utility", desc: "Validate a phone number is reachable", note: "Uses Twilio Lookup via GHL." },
 ]
 
-const PLATFORMS_ORDER = ["ig", "fb", "li", "tiktok", "youtube", "x", "snapchat", "pinterest"]
+const PLATFORMS_ORDER = ["ig", "fb", "li", "tiktok", "youtube", "x", "reddit", "snapchat", "pinterest", "email", "sms"]
 
 /** Map short platform keys (ig/fb/li/etc) to the DB platform strings the
  *  /api/automations route stores. Keep this in sync with migration 005. */
