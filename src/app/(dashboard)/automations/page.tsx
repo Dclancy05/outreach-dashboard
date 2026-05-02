@@ -25,6 +25,7 @@ import { NudgeBanners } from "@/components/nudge-banners"
 import PlatformLoginModal from "@/components/platform-login-modal"
 import { SparklineChart } from "@/components/automations/sparkline-chart"
 import { VariableAutocomplete } from "@/components/automations/variable-autocomplete"
+import { DryRunResultModal, type DryRunResultPayload } from "@/components/automations/dry-run-result-modal"
 import type { DailySparklinePoint } from "@/lib/api/automations"
 import { useBusinessId } from "@/lib/use-business"
 
@@ -1658,6 +1659,11 @@ function MaintenanceTab() {
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  // Slice 4: dry-run modal state — keep the per-row "currently inspecting"
+  // id separate from the result so we can show a spinner while waiting.
+  const [dryRunOpen, setDryRunOpen] = useState(false)
+  const [dryRunLoading, setDryRunLoading] = useState(false)
+  const [dryRunResult, setDryRunResult] = useState<DryRunResultPayload | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -1681,6 +1687,41 @@ function MaintenanceTab() {
       setMessage((e as Error).message || "Network error")
     } finally {
       setRunning(false)
+    }
+  }
+
+  // Slice 4: Dry-run handler. Calls the new collection-level replay route
+  // with `dryRun: true`. The route never persists automation_runs rows
+  // and never flips automation status, so this is safe to fire from any
+  // role and on any schedule. NEVER calls campaign-worker.
+  const startDryRun = async (automation: DbAutomation) => {
+    setDryRunOpen(true)
+    setDryRunLoading(true)
+    setDryRunResult({ ok: false, automation_name: automation.name, steps: [] })
+    try {
+      const res = await fetch("/api/automations/replay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ automation_id: automation.id, dryRun: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      setDryRunResult({
+        ok: !!data.ok,
+        automation_name: data.automation_name || automation.name,
+        overall: data.overall ?? null,
+        steps: Array.isArray(data.steps) ? data.steps : [],
+        note: data.note ?? null,
+        error: data.error ?? null,
+      })
+    } catch (e) {
+      setDryRunResult({
+        ok: false,
+        automation_name: automation.name,
+        steps: [],
+        error: (e as Error).message || "Network error",
+      })
+    } finally {
+      setDryRunLoading(false)
     }
   }
 
@@ -1731,19 +1772,20 @@ function MaintenanceTab() {
                 <th className="px-4 py-3 font-semibold">Last tested</th>
                 <th className="px-4 py-3 font-semibold">Last error</th>
                 <th className="px-4 py-3 font-semibold text-right">Health</th>
+                <th className="px-4 py-3 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">
+                  <td colSpan={7} className="px-4 py-6 text-center text-muted-foreground">
                     <RefreshCw className="h-4 w-4 animate-spin inline mr-2" /> Loading…
                   </td>
                 </tr>
               )}
               {!loading && items.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  <td colSpan={7} className="px-4 py-8 text-center text-sm text-muted-foreground">
                     No automations yet. Add one from the <span className="font-semibold">Your Automations</span> tab.
                   </td>
                 </tr>
@@ -1751,6 +1793,10 @@ function MaintenanceTab() {
               {items.map((a) => {
                 const shortPlatform = PLATFORM_FROM_DB[a.platform] || a.platform
                 const PlatformIcon = platformIcons[shortPlatform]
+                // Extension-recorded rows live in autobot_automations and
+                // don't have a steps[] payload the replay route understands,
+                // so dry-run is dashboard-only for now.
+                const canDryRun = a.source !== "extension"
                 return (
                   <tr key={a.id} className="border-t border-border/20 hover:bg-muted/10 transition-colors">
                     <td className="px-4 py-3 font-medium">{a.name}</td>
@@ -1782,6 +1828,33 @@ function MaintenanceTab() {
                         {a.health_score}%
                       </span>
                     </td>
+                    <td className="px-4 py-3 text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            className="inline-flex items-center justify-center rounded-lg p-1.5 hover:bg-muted/30 transition-colors"
+                            aria-label={`Actions for ${a.name}`}
+                          >
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[180px]">
+                          <DropdownMenuItem
+                            disabled={!canDryRun}
+                            onClick={() => canDryRun && startDryRun(a)}
+                            className="text-xs"
+                          >
+                            <Eye className="h-3.5 w-3.5 mr-2 text-amber-400" />
+                            Dry run (no clicks)
+                          </DropdownMenuItem>
+                          {!canDryRun && (
+                            <DropdownMenuItem disabled className="text-[10px] text-muted-foreground">
+                              Dry run not available for extension-recorded automations
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </td>
                   </tr>
                 )
               })}
@@ -1789,6 +1862,19 @@ function MaintenanceTab() {
           </table>
         </div>
       </div>
+
+      {/* Dry-run result modal (W4B Slice 4). Pure inspection — no DMs fired. */}
+      <DryRunResultModal
+        open={dryRunOpen}
+        loading={dryRunLoading}
+        result={dryRunResult}
+        onClose={() => {
+          setDryRunOpen(false)
+          // Keep result around briefly so the modal close animation doesn't
+          // jank to an empty state, but null it once truly closed.
+          setTimeout(() => setDryRunResult(null), 250)
+        }}
+      />
     </div>
   )
 }
