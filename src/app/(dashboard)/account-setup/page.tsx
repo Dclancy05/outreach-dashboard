@@ -867,7 +867,11 @@ function EmailInboxTab({ accounts }: { accounts: AccountRecord[] }) {
 // ── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AccountSetupPage() {
-  const { data, error, isLoading, mutate } = useSWR("/api/accounts/all", fetcher, {
+  // Account-setup page shows password/2FA/cookie under a "Show secrets"
+  // toggle, so it explicitly opts into the secrets-included response.
+  // Default /api/accounts/all response strips credentials (P0 from
+  // Wave 9.7.5.T A&P testing).
+  const { data, error, isLoading, mutate } = useSWR("/api/accounts/all?include_secrets=1", fetcher, {
     revalidateOnFocus: false,
   })
 
