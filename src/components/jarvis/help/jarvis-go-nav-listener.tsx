@@ -12,7 +12,6 @@
  *   g w → /jarvis/workflows
  *   g o → /jarvis/observability
  *   g s → /jarvis/status
- *   g i → /jarvis/integrations
  *   g . → /jarvis/settings
  *
  * Skips when:
@@ -32,7 +31,6 @@ const NAV_MAP: Record<string, string> = {
   w: "/jarvis/workflows",
   o: "/jarvis/observability",
   s: "/jarvis/status",
-  i: "/jarvis/integrations",
   ".": "/jarvis/settings",
 }
 

@@ -67,7 +67,6 @@ const NAV_SHORTCUTS: ShortcutGroup = {
     { keys: ["g", "w"], label: "Go to Workflows" },
     { keys: ["g", "o"], label: "Go to Observability" },
     { keys: ["g", "s"], label: "Go to System Status" },
-    { keys: ["g", "i"], label: "Go to Integrations" },
     { keys: ["g", "."], label: "Go to Settings" },
   ],
 }

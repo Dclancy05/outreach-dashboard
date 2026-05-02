@@ -31,7 +31,7 @@ import { cn } from "@/lib/utils"
 
 type ServiceStatus = {
   name: string
-  status: "up" | "down" | "auth_required"
+  status: "up" | "down" | "auth_required" | "remote_only"
   latency_ms: number | null
   code: number | null
 }
@@ -280,7 +280,7 @@ export default function JarvisStatusPage() {
         </Section>
 
         {/* Services */}
-        <Section icon={Plug} title="Services" subtitle={`${data?.services.filter((s) => s.status === "up").length ?? 0}/${data?.services.length ?? 0} up`} delay={0.08} reduced={reduced}>
+        <Section icon={Plug} title="Services" subtitle={`${data?.services.filter((s) => s.status === "up").length ?? 0}/${data?.services.filter((s) => s.status !== "remote_only").length ?? 0} up`} delay={0.08} reduced={reduced}>
           {data?.services.length ? (
             <ul className="space-y-2">
               {data.services.map((s) => (
@@ -289,12 +289,13 @@ export default function JarvisStatusPage() {
                   className="flex items-center justify-between rounded-lg border border-mem-border bg-mem-surface-2 px-3 py-2 transition hover:bg-mem-surface-3"
                 >
                   <div className="flex items-center gap-3">
-                    <StatusDot tone={s.status === "up" ? "up" : s.status === "auth_required" ? "warn" : "down"} />
+                    <StatusDot tone={s.status === "up" ? "up" : s.status === "auth_required" || s.status === "remote_only" ? "idle" : "down"} />
                     <span className="text-sm text-mem-text-primary">{s.name}</span>
                   </div>
                   <span className="font-mono text-xs text-mem-text-muted">
-                    {s.code ? `${s.code}` : "—"}
-                    {s.latency_ms !== null ? ` · ${s.latency_ms}ms` : ""}
+                    {s.status === "remote_only"
+                      ? "VPS-only"
+                      : (s.code ? `${s.code}` : "—") + (s.latency_ms !== null ? ` · ${s.latency_ms}ms` : "")}
                   </span>
                 </li>
               ))}
