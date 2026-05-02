@@ -85,7 +85,8 @@ export function JarvisSidebar() {
       animate={{ width: collapsed ? 56 : 240 }}
       transition={reduced ? { duration: 0 } : jarvisSpring}
       className={cn(
-        "jarvis-sidebar-bg fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-mem-border lg:flex",
+        // BUG-fix (W7+W8 smoke test #12): show sidebar at tablet (md=768px) too, not just lg
+        "jarvis-sidebar-bg fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-mem-border md:flex",
         widthClass
       )}
       aria-label="Jarvis primary navigation"
