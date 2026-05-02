@@ -1,44 +1,15 @@
 "use client"
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import Link from "next/link"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { RefreshCw } from "lucide-react"
-
-type LoginResult = { platform: string; loggedIn: boolean | null; loginUrl?: string; reason?: string | null }
-type Health = {
-  chrome: boolean
-  xvfb: boolean
-  proxy: boolean
-  queueProcessor: boolean
-  recording?: boolean
-  accountsLoggedIn?: boolean
-  loginResults?: LoginResult[]
-  loggedOutCount?: number
-}
+import { useVpsHealth } from "@/lib/use-vps-health"
 
 export function SystemPulse() {
-  const [health, setHealth] = useState<Health | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { health, loading, refresh } = useVpsHealth()
   const [hovering, setHovering] = useState(false)
   const [restarting, setRestarting] = useState(false)
-
-  const load = async () => {
-    try {
-      const res = await fetch("/api/recordings/health", { cache: "no-store" })
-      const data = await res.json()
-      setHealth(data)
-    } catch {
-      setHealth({ chrome: false, xvfb: false, proxy: false, queueProcessor: false })
-    }
-    setLoading(false)
-  }
-
-  useEffect(() => {
-    load()
-    const i = setInterval(load, 30000)
-    return () => clearInterval(i)
-  }, [])
 
   const handleRestart = async (e: React.MouseEvent) => {
     e.preventDefault()
@@ -53,17 +24,14 @@ export function SystemPulse() {
     const deadline = Date.now() + 20000
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 2000))
-      try {
-        const res = await fetch("/api/recordings/health", { cache: "no-store" })
-        const data = await res.json()
-        setHealth(data)
+      await refresh()
+      const data = health
+      if (data) {
         const failing = [data.chrome, data.xvfb, data.proxy, data.queueProcessor].filter(v => !v).length
         if (failing === 0) break
-      } catch {
-        // keep polling
       }
     }
-    await load()
+    await refresh()
     setRestarting(false)
   }
 

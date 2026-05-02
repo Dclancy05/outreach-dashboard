@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback, Fragment } from "react"
+import { useSearchParams } from "next/navigation"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Wand2, Play, Square, Trash2, X, CheckCircle, AlertTriangle,
@@ -1721,7 +1722,25 @@ function MaintenanceTab() {
 }
 
 /* ─── Main Page ─── */
+const AUTOMATIONS_TABS = ["overview", "your-automations", "live-view", "maintenance"] as const
+type AutomationsTab = (typeof AUTOMATIONS_TABS)[number]
+
 export default function AutomationsPage() {
+  const searchParams = useSearchParams()
+  const tabParam = searchParams?.get("tab") || ""
+  const initialTab: AutomationsTab = (AUTOMATIONS_TABS as readonly string[]).includes(tabParam)
+    ? (tabParam as AutomationsTab)
+    : "your-automations"
+  const [activeTab, setActiveTab] = useState<AutomationsTab>(initialTab)
+
+  // Keep state in sync if the deep-link param changes (e.g. clicking the
+  // SystemPulse banner while already on this page).
+  useEffect(() => {
+    if ((AUTOMATIONS_TABS as readonly string[]).includes(tabParam)) {
+      setActiveTab(tabParam as AutomationsTab)
+    }
+  }, [tabParam])
+
   const [recordings, setRecordings] = useState<Recording[]>([])
   const [loading, setLoading] = useState(true)
   const [showVideoModal, setShowVideoModal] = useState<Recording | null>(null)
@@ -2500,7 +2519,7 @@ export default function AutomationsPage() {
       <NudgeBanners page="automations" />
 
       {/* ═══ 4 Sub-Tabs ═══ Matches the accounts/proxies page pattern. */}
-      <Tabs defaultValue="your-automations">
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as AutomationsTab)}>
         <div className="flex gap-1 p-1 rounded-xl bg-muted/30 backdrop-blur-sm w-fit">
           <TabsList className="bg-transparent p-0 h-auto">
             <TabsTrigger
