@@ -15,11 +15,19 @@ type ServiceProbe = {
   url: string
   expectStatus?: number
   authHeader?: string
+  // VPS-local services (127.0.0.1) only resolve when this route runs ON the
+  // VPS itself. On Vercel serverless these probes always fail. Marking
+  // them vps_only=true skips the probe and returns "remote_only" so the
+  // status page renders an honest "not reachable from Vercel" pill rather
+  // than a misleading "down".
+  vpsOnly?: boolean
 }
 
+const RUNNING_ON_VPS = !process.env.VERCEL
+
 const SERVICES: ServiceProbe[] = [
-  { name: "Memory Vault API", url: "http://127.0.0.1:8788/health" },
-  { name: "Terminal Server", url: "http://127.0.0.1:10002/sessions" },
+  { name: "Memory Vault API", url: "https://srv1197943.taild42583.ts.net:8443/vault/health", expectStatus: 200 },
+  { name: "Terminal Server", url: "http://127.0.0.1:10002/sessions", vpsOnly: true },
   { name: "VPS Recording", url: "https://srv1197943.taild42583.ts.net:10000/health", expectStatus: 200 },
   { name: "OpenClaw Gateway", url: "https://srv1197943.taild42583.ts.net:8443/", expectStatus: 200 },
 ]
@@ -59,7 +67,10 @@ const DB_TABLES = [
   "automations",
 ]
 
-async function probeService(svc: ServiceProbe): Promise<{ name: string; status: "up" | "down" | "auth_required"; latency_ms: number | null; code: number | null }> {
+async function probeService(svc: ServiceProbe): Promise<{ name: string; status: "up" | "down" | "auth_required" | "remote_only"; latency_ms: number | null; code: number | null }> {
+  if (svc.vpsOnly && !RUNNING_ON_VPS) {
+    return { name: svc.name, status: "remote_only", latency_ms: null, code: null }
+  }
   const start = Date.now()
   try {
     const headers: HeadersInit = svc.authHeader ? { Authorization: svc.authHeader } : {}

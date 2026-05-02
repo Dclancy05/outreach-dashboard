@@ -20,7 +20,7 @@ type Notification = {
   type: string | null
   title: string | null
   message: string | null
-  read_at: string | null
+  read: boolean
   created_at: string
   source_kind?: string | null
 }
@@ -59,7 +59,8 @@ export default function JarvisInboxPage() {
       const res = await fetch("/api/notifications?limit=200", { cache: "no-store" })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
-      setItems(Array.isArray(json?.notifications) ? json.notifications : json?.data || [])
+      const rows = Array.isArray(json?.notifications) ? json.notifications : json?.data || []
+      setItems(rows)
       setError(null)
     } catch (e: any) {
       setError(e?.message || "fetch failed")
@@ -79,14 +80,14 @@ export default function JarvisInboxPage() {
       await fetch("/api/notifications", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "mark_all_read" }),
+        body: JSON.stringify({ action: "mark_read", mark_all: true }),
       })
       await refresh()
     } catch {}
   }
 
-  const filtered = filter === "unread" ? items.filter((i) => !i.read_at) : items
-  const unreadCount = items.filter((i) => !i.read_at).length
+  const filtered = filter === "unread" ? items.filter((i) => !i.read) : items
+  const unreadCount = items.filter((i) => !i.read).length
 
   return (
     <motion.div {...enterJarvis} className="mx-auto w-full max-w-[1024px]">
@@ -167,7 +168,7 @@ export default function JarvisInboxPage() {
             className={cn(
               "flex flex-wrap items-start gap-3 rounded-lg border p-4 transition",
               typeTone(n.type),
-              !n.read_at && "ring-1 ring-mem-accent/20",
+              !n.read && "ring-1 ring-mem-accent/20",
             )}
           >
             <div className="flex-1 min-w-0">
@@ -175,7 +176,7 @@ export default function JarvisInboxPage() {
                 <span className="font-mono text-[10px] uppercase tracking-wider text-mem-text-muted">{n.type || "note"}</span>
                 <span className="font-mono text-[10px] text-mem-text-muted">·</span>
                 <span className="font-mono text-[10px] text-mem-text-muted">{fmtRelative(n.created_at)}</span>
-                {!n.read_at ? (
+                {!n.read ? (
                   <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-mem-accent" />
                 ) : null}
               </div>

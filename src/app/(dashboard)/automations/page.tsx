@@ -427,7 +427,8 @@ const PLATFORMS_ORDER = ["ig", "fb", "li", "tiktok", "youtube", "x", "reddit", "
 const PLATFORM_DB_KEY: Record<string, string> = {
   ig: "instagram", fb: "facebook", li: "linkedin",
   tiktok: "tiktok", youtube: "youtube", x: "twitter",
-  snapchat: "snapchat", pinterest: "pinterest",
+  reddit: "reddit", snapchat: "snapchat", pinterest: "pinterest",
+  email: "email", sms: "sms",
 }
 const PLATFORM_FROM_DB: Record<string, string> = Object.fromEntries(
   Object.entries(PLATFORM_DB_KEY).map(([k, v]) => [v, k])
