@@ -21,22 +21,18 @@ const nextConfig = {
       },
     ]
   },
-  // @novnc/novnc's compiled CJS emits a top-level await for a WebCodecs H264
-  // feature check. Webpack refuses that in non-ESM modules, so we (a) opt
-  // into the `topLevelAwait` experiment and (b) tell webpack to parse the
-  // novnc source as ESM so TLA is legal there. Both are safe — Next.js only
-  // ships to modern browsers that support top-level await.
+  // @novnc/novnc 1.6 ships compiled CJS in lib/. The WebCodecs feature check
+  // is wrapped in a regenerator state machine — there is no real top-level
+  // await. Forcing parse-as-ESM (a previous workaround) breaks the bundle at
+  // runtime with "exports is not defined" because ESM has no free `exports`
+  // binding for the CJS source's `Object.defineProperty(exports, ...)` calls.
+  // Default CJS parsing works correctly. We keep the `topLevelAwait`
+  // experiment enabled in case any future chunk needs it (harmless).
   webpack: (config) => {
     config.experiments = {
       ...(config.experiments || {}),
       topLevelAwait: true,
     }
-    config.module = config.module || {}
-    config.module.rules = config.module.rules || []
-    config.module.rules.push({
-      test: /node_modules[\\/]@novnc[\\/]novnc[\\/]lib[\\/].*\.js$/,
-      type: 'javascript/esm',
-    })
     return config
   },
 }
