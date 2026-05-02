@@ -49,11 +49,37 @@ export interface ManualStep {
   fallback_text?: string
   fallback_coordinates?: { x: number; y: number }
   params: Record<string, unknown>
+  /**
+   * Slice 7 — A/B step variants. When the platform changes the underlying
+   * element (e.g. Instagram's Send button moves between two component
+   * trees), Variant B holds an alternate selector the replay engine can
+   * try if Variant A misses. Stored separately on the automation row's
+   * `variant_b` jsonb column so the primary selector list stays clean.
+   */
+  variant_b_selectors?: string[]
+}
+
+/**
+ * Wire shape of variant_b — one entry per step that has a fallback.
+ * Indexed by `step_index` (the step's sequential position) so reordering
+ * steps in the editor doesn't silently desync A and B selectors.
+ */
+export interface VariantBEntry {
+  step_index: number
+  selectors: { css?: string; xpath?: string }
 }
 
 export interface ManualStepBuilderProps {
   initialSteps?: ManualStep[]
   onChange: (steps: ManualStep[]) => void
+  /**
+   * Slice 7 — fires alongside `onChange` whenever any step's variant_b
+   * selectors change. Caller persists this to the automations.variant_b
+   * jsonb column. Caller can ignore this prop and Variant B inputs simply
+   * become a no-op.
+   */
+  onVariantBChange?: (variantB: VariantBEntry[] | null) => void
+  initialVariantB?: VariantBEntry[] | null
 }
 
 const KIND_INFO: Record<StepKind, { label: string; icon: string; hint: string }> = {
@@ -98,14 +124,63 @@ function makeEmpty(type: StepKind = "navigate"): ManualStep {
   }
 }
 
-export function ManualStepBuilder({ initialSteps, onChange }: ManualStepBuilderProps) {
+export function ManualStepBuilder({
+  initialSteps,
+  onChange,
+  onVariantBChange,
+  initialVariantB,
+}: ManualStepBuilderProps) {
   const reduced = useReducedMotion() ?? false
-  const [steps, setSteps] = useState<ManualStep[]>(() => initialSteps?.length ? initialSteps : [makeEmpty()])
+  // Hydrate steps with any seeded variant_b_selectors from the parent so
+  // edits round-trip cleanly. The wire-format VariantBEntry[] is keyed by
+  // step_index, and we map it onto the local ManualStep array by position.
+  const [steps, setSteps] = useState<ManualStep[]>(() => {
+    const base = initialSteps?.length ? initialSteps : [makeEmpty()]
+    if (!initialVariantB?.length) return base
+    return base.map((s, i) => {
+      const match = initialVariantB.find(v => v.step_index === i)
+      if (!match) return s
+      const sels: string[] = []
+      if (match.selectors.css) sels.push(match.selectors.css)
+      if (match.selectors.xpath) sels.push(match.selectors.xpath)
+      return { ...s, variant_b_selectors: sels }
+    })
+  })
+  // Per-step "show Variant B" toggle. Defaults to open whenever a step
+  // already has a Variant B configured so editing isn't hidden.
+  const [openVariantB, setOpenVariantB] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {}
+    for (const s of steps) {
+      if (s.variant_b_selectors?.length) init[s.id] = true
+    }
+    return init
+  })
   const helpId = useId()
+
+  function emitVariantBChange(next: ManualStep[]) {
+    if (!onVariantBChange) return
+    const entries: VariantBEntry[] = []
+    next.forEach((s, i) => {
+      const sels = (s.variant_b_selectors || []).filter(Boolean)
+      if (!sels.length) return
+      // Heuristic: anything starting with `/` or `(/` is XPath-shaped.
+      const css = sels.find(x => !x.startsWith("/") && !x.startsWith("("))
+      const xpath = sels.find(x => x.startsWith("/") || x.startsWith("("))
+      entries.push({
+        step_index: i,
+        selectors: {
+          ...(css ? { css } : {}),
+          ...(xpath ? { xpath } : {}),
+        },
+      })
+    })
+    onVariantBChange(entries.length ? entries : null)
+  }
 
   function update(next: ManualStep[]) {
     setSteps(next)
     onChange(next)
+    emitVariantBChange(next)
   }
 
   function addStep(after?: number) {
@@ -310,6 +385,54 @@ export function ManualStepBuilder({ initialSteps, onChange }: ManualStepBuilderP
                     ))}
                   </select>
                 ) : null}
+
+                {/* Slice 7 — A/B step variants. Only meaningful for kinds
+                    that target a DOM element. Hidden behind a toggle so
+                    the simple case stays clean. */}
+                {(step.type === "click" || step.type === "type" || step.type === "extract") && onVariantBChange ? (
+                  <div className="mt-1 border-t border-border/40 pt-2">
+                    {!openVariantB[step.id] && !(step.variant_b_selectors?.length) ? (
+                      <button
+                        type="button"
+                        onClick={() => setOpenVariantB(o => ({ ...o, [step.id]: true }))}
+                        className="text-[10px] text-violet-400 hover:underline inline-flex items-center gap-1"
+                      >
+                        <Plus className="h-3 w-3" /> Add Variant B (fallback selector)
+                      </button>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                            Variant B — fallback selector
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenVariantB(o => ({ ...o, [step.id]: false }))
+                              setStep(step.id, { variant_b_selectors: [] })
+                            }}
+                            className="text-[10px] text-muted-foreground hover:text-red-400 transition"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <textarea
+                          aria-label={`Variant B selectors for step ${idx + 1}`}
+                          rows={2}
+                          placeholder='button[data-old-id="send"]&#10;//button[contains(@aria-label,"Send")]'
+                          value={(step.variant_b_selectors || []).join("\n")}
+                          onChange={(e) => setStep(step.id, {
+                            variant_b_selectors: e.target.value.split("\n").map(l => l.trim()).filter(Boolean),
+                          })}
+                          className="w-full rounded-md border border-violet-500/30 bg-background px-2 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground"
+                        />
+                        <p className="text-[10px] text-muted-foreground italic">
+                          Tried automatically when Variant A misses. Useful when a platform A/B-tests its UI between two component trees. CSS selector or XPath both work.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </div>
             </motion.li>
           ))}
@@ -335,7 +458,9 @@ export function ManualStepBuilder({ initialSteps, onChange }: ManualStepBuilderP
 
 /**
  * Convert UI-shaped steps to the wire format expected by /api/automations
- * (drops the local `id`, normalizes structure).
+ * (drops the local `id`, normalizes structure). Variant B selectors are
+ * stripped here — they live on the automation row's `variant_b` column,
+ * not inside the per-step jsonb. Use `toWireVariantB` to extract them.
  */
 export function toWireSteps(steps: ManualStep[]) {
   return steps.map((s) => ({
@@ -345,4 +470,27 @@ export function toWireSteps(steps: ManualStep[]) {
     fallback_coordinates: s.fallback_coordinates,
     params: s.params,
   }))
+}
+
+/**
+ * Slice 7 — extract the Variant B array from UI-shaped steps. Returns
+ * null when no step has a Variant B configured so the API row gets
+ * NULL'd out cleanly instead of an empty array.
+ */
+export function toWireVariantB(steps: ManualStep[]): VariantBEntry[] | null {
+  const entries: VariantBEntry[] = []
+  steps.forEach((s, i) => {
+    const sels = (s.variant_b_selectors || []).filter(Boolean)
+    if (!sels.length) return
+    const css = sels.find(x => !x.startsWith("/") && !x.startsWith("("))
+    const xpath = sels.find(x => x.startsWith("/") || x.startsWith("("))
+    entries.push({
+      step_index: i,
+      selectors: {
+        ...(css ? { css } : {}),
+        ...(xpath ? { xpath } : {}),
+      },
+    })
+  })
+  return entries.length ? entries : null
 }

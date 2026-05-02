@@ -176,6 +176,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       updates.steps = body.steps
     }
   }
+  // Slice 7 — A/B step variants. variant_b carries fallback selectors per
+  // step_index so the replay engine can try Variant B when Variant A
+  // doesn't match. Stored as jsonb on the automations table; runtime A/B
+  // selection logic lives on the VPS recording-service in a follow-up.
+  if (body.variant_b !== undefined) {
+    if (body.variant_b === null || Array.isArray(body.variant_b)) {
+      updates.variant_b = body.variant_b
+    } else {
+      return NextResponse.json({ error: "variant_b must be an array or null" }, { status: 400 })
+    }
+  }
 
   const { data, error } = await supabase
     .from("automations")
