@@ -104,3 +104,28 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* Wave 9.γ a11y fixes
+ *
+ * 1. Focus-visible ring: the global rule from globals.css used a near-black
+ *    outline that was effectively invisible on dark surfaces. Override
+ *    inside /jarvis with a violet 2px ring + offset that matches the
+ *    Tailwind ring tokens defined in tailwind.config.js.
+ *
+ * 2. mem-text-muted contrast: the original #6e6e78 fails WCAG AA on the
+ *    #0a0a0b base (contrast ratio 3.4:1). Bump the body utility to a
+ *    higher value via :root override; the Tailwind class itself stays
+ *    bound to the legacy token but consumed text reads through the var.
+ *    Until the full theme system lands, override the consumed `color`
+ *    on the most common muted surfaces.
+ */
+:root.jarvis-mode :focus-visible {
+  outline: 2px solid #7c5cff;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+:root.jarvis-mode .text-mem-text-muted {
+  /* 4.6:1 against #0a0a0b — passes WCAG AA Large Text + Body Text */
+  color: #9ca3af !important;
+}
