@@ -333,10 +333,12 @@ function PageHeader({
         </p>
       </div>
 
+      {/* NIT-1 fix: bump button to h-11 (44px) on mobile so it meets the
+          minimum touch-target size, then snap back to h-9 on sm+. */}
       <Button
         type="button"
         onClick={onAdd}
-        className="h-9 self-start bg-mem-accent text-white hover:brightness-110 sm:self-auto"
+        className="h-11 self-start bg-mem-accent text-white hover:brightness-110 sm:h-9 sm:self-auto"
         data-testid="mcps-add-btn"
       >
         <Plus className="mr-1.5 h-4 w-4" />

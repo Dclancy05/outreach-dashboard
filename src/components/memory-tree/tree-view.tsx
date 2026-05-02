@@ -11,6 +11,10 @@
  * - F2 (or double-click) to inline-rename
  * - Friendly empty state when the vault API isn't configured (HTTP 503)
  * - Live updates via SSE — when files change on disk, the tree re-renders
+ * - Drag-drop file upload (W5.L4): drop a .md/.txt from the desktop onto the
+ *   tree to upload it to the currently-selected folder. Backward-compatible —
+ *   the desktop-file detection only fires when `dataTransfer.types`
+ *   includes `"Files"`, so internal dnd-kit drags are unaffected.
  *
  * BUG-017: the Move dialog filters out /.trash/* destinations so users don't
  * accidentally move files into the trash tombstone tree.
@@ -46,6 +50,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
+import { VaultUploadOverlay } from "@/components/jarvis/memory/vault-upload-overlay"
+import { uploadFileToVault } from "@/lib/vault-upload"
 
 export interface TreeNode {
   name: string
@@ -93,6 +99,34 @@ function findFolderChildren(nodes: TreeNode[], targetPath: string): TreeNode[] |
   return null
 }
 
+// Walk the tree and find any node by absolute vault path.
+function findNodeByPath(nodes: TreeNode[], targetPath: string): TreeNode | null {
+  for (const n of nodes) {
+    if (n.path === targetPath) return n
+    if (n.kind === "folder" && targetPath.startsWith(n.path + "/")) {
+      const found = findNodeByPath(n.children || [], targetPath)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+// Determine the upload-target folder from the user's current selection:
+//   - no selection            → "/"  (root)
+//   - selection is a folder   → that folder
+//   - selection is a file     → that file's parent folder
+function deriveTargetFolder(tree: TreeNode[] | null, selectedPath: string | null, rootPath?: string): string {
+  const fallback = rootPath || "/"
+  if (!tree) return fallback
+  if (!selectedPath) return fallback
+  const node = findNodeByPath(tree, selectedPath)
+  if (!node) return fallback
+  if (node.kind === "folder") return node.path
+  // File → parent folder
+  const parent = node.path.split("/").slice(0, -1).join("/")
+  return parent || "/"
+}
+
 export function TreeView({ selectedPath, onSelect, rootPath, readOnly = false }: TreeViewProps) {
   const [tree, setTree] = useState<TreeNode[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -104,6 +138,13 @@ export function TreeView({ selectedPath, onSelect, rootPath, readOnly = false }:
   const [deleteDialog, setDeleteDialog] = useState<TreeNode | null>(null)
   const [newDialog, setNewDialog] = useState<{ kind: "file" | "folder"; parent: string } | null>(null)
   const [activeDrag, setActiveDrag] = useState<TreeNode | null>(null)
+  // W5.L4: file-drag state for desktop drag-drop upload. `over` flips on while
+  // a file from the OS is hovering the tree; null means no drag in progress.
+  const [fileDragOver, setFileDragOver] = useState(false)
+  // Counter to handle nested onDragEnter/onDragLeave correctly (children fire
+  // both as the cursor moves between them — we only want to hide the overlay
+  // when the cursor truly leaves the tree container).
+  const dragDepthRef = useRef(0)
   // Require 6px of movement before drag activates so plain clicks still work
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
@@ -284,6 +325,82 @@ export function TreeView({ selectedPath, onSelect, rootPath, readOnly = false }:
     }
   }
 
+  // ─── Desktop file drag-drop upload (W5.L4) ─────────────────────
+  // We only treat a drag as "file upload" when DataTransfer.types includes
+  // "Files" — this skips internal dnd-kit drags entirely (which use
+  // pointer events, not native HTML5 drag, but defensive nonetheless).
+  const targetFolder = useMemo(
+    () => deriveTargetFolder(tree, selectedPath, rootPath),
+    [tree, selectedPath, rootPath]
+  )
+
+  const isFileDrag = useCallback((e: React.DragEvent): boolean => {
+    const types = e.dataTransfer?.types
+    if (!types) return false
+    // types is a DOMStringList in some browsers, an array-like in others.
+    for (let i = 0; i < types.length; i++) {
+      if (types[i] === "Files") return true
+    }
+    return false
+  }, [])
+
+  const handleContainerDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (readOnly) return
+    if (!isFileDrag(e)) return
+    dragDepthRef.current += 1
+    setFileDragOver(true)
+  }, [isFileDrag, readOnly])
+
+  const handleContainerDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (readOnly) return
+    if (!isFileDrag(e)) return
+    // Required for the drop event to fire.
+    e.preventDefault()
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"
+  }, [isFileDrag, readOnly])
+
+  const handleContainerDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (readOnly) return
+    if (!isFileDrag(e)) return
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+    if (dragDepthRef.current === 0) setFileDragOver(false)
+  }, [isFileDrag, readOnly])
+
+  const handleContainerDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
+    if (readOnly) return
+    if (!isFileDrag(e)) return
+    e.preventDefault()
+    dragDepthRef.current = 0
+    setFileDragOver(false)
+    const files = Array.from(e.dataTransfer?.files || [])
+    if (files.length === 0) return
+    const parent = targetFolder
+    for (const file of files) {
+      // Wrap in toast.promise so the user sees per-file progress + outcome.
+      const uploadPromise = uploadFileToVault(file, parent).then((result) => {
+        if (!result.ok) {
+          // Re-throw so toast.promise renders the `error` slot.
+          throw new Error(result.message)
+        }
+        return result
+      })
+      toast.promise(uploadPromise, {
+        loading: `Uploading ${file.name}…`,
+        success: (result) => `Uploaded to ${result.path}`,
+        error: (err: unknown) => err instanceof Error ? err.message : "Upload failed",
+      })
+      try {
+        const result = await uploadPromise
+        // Select the freshly-uploaded file so the editor opens it.
+        onSelect(result.path)
+      } catch {
+        // toast.promise already surfaced the error — swallow so loop continues.
+      }
+    }
+    // Refresh in case the SSE event hasn't reached us yet.
+    fetchTree()
+  }, [isFileDrag, readOnly, targetFolder, onSelect, fetchTree])
+
   // ─── Render ──────────────────────────────────────────────────────
 
   if (loading && !tree) {
@@ -365,7 +482,13 @@ export function TreeView({ selectedPath, onSelect, rootPath, readOnly = false }:
         onDragEnd={handleDragEnd}
         onDragCancel={() => setActiveDrag(null)}
       >
-        <div className="overflow-y-auto flex-1 text-sm py-1">
+        <div
+          className="overflow-y-auto flex-1 text-sm py-1 relative"
+          onDragEnter={handleContainerDragEnter}
+          onDragOver={handleContainerDragOver}
+          onDragLeave={handleContainerDragLeave}
+          onDrop={handleContainerDrop}
+        >
           {((rootPath ? findFolderChildren(tree || [], rootPath) : (tree || [])) || [])
             .filter((node) => !HIDDEN_TOP_PATHS.has(node.path))
             .map((node) => (
@@ -386,6 +509,11 @@ export function TreeView({ selectedPath, onSelect, rootPath, readOnly = false }:
                 onContextDelete={(n) => setDeleteDialog(n)}
               />
             ))}
+          <VaultUploadOverlay
+            visible={!readOnly && fileDragOver}
+            active={fileDragOver}
+            targetFolder={targetFolder}
+          />
         </div>
         <DragOverlay dropAnimation={null}>
           {activeDrag ? (

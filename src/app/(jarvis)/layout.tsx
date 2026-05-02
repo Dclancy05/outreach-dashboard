@@ -29,6 +29,7 @@ import { JarvisStatusBar } from "@/components/jarvis/shell/jarvis-status-bar"
 import { JarvisBottomDock } from "@/components/jarvis/shell/jarvis-bottom-dock"
 import { MotionShell } from "@/components/jarvis/motion/motion-shell"
 import { useSidebarCollapse } from "@/components/jarvis/shell/jarvis-shell-providers"
+import { WelcomeWizardTrigger } from "@/components/jarvis/onboarding/welcome-wizard-trigger"
 
 interface JarvisLayoutProps {
   children: ReactNode
@@ -42,6 +43,7 @@ export default function JarvisLayout({ children }: JarvisLayoutProps) {
         <JarvisSidebar />
         <JarvisShellMain>{children}</JarvisShellMain>
         <JarvisBottomDock />
+        <WelcomeWizardTrigger />
       </JarvisCmdkProvider>
     </JarvisShellProviders>
   )

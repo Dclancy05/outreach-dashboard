@@ -40,7 +40,26 @@ Open these URLs to see the new work. PIN: `122436`.
 - DSN already in your env per CLAUDE.md
 - For the MCP integration: `/jarvis/mcps → Catalog → Sentry → Connect` (uses OAuth)
 
-### 4. Vercel cron limit (if you want auto-snapshots + auto-inbox)
+### 4. VNC viewer connection (for `/jarvis/observability`)
+
+The VNC viewer page renders an empty state with a 4-step setup checklist until you make port 6080 reachable. Two paths:
+
+**Path A — Caddy reverse-proxy (recommended).** The VPS already runs Caddy on `srv1197943.taild42583.ts.net:8443`. Add a route:
+```caddy
+:8443 {
+    handle_path /vnc/* {
+        reverse_proxy localhost:6080
+    }
+    # ...existing routes...
+}
+```
+Then on Vercel: `NEXT_PUBLIC_VNC_WS_URL = wss://srv1197943.taild42583.ts.net:8443/vnc/websockify`
+
+**Path B — Tailscale-only.** Skip Caddy, hit `ws://100.70.3.3:6080/websockify` directly (works only when you're on Tailscale on your laptop).
+
+After setting the env var, redeploy or wait 5 min, then `/jarvis/observability` → click Connect.
+
+### 5. Vercel cron limit (if you want auto-snapshots + auto-inbox)
 The 2 new crons (`/api/cron/vault-snapshot`, `/api/cron/inbox-tick`) are NOT in `vercel.json` because they pushed your project over the cron limit. The routes work — just no auto-trigger.
 
 If your plan supports more crons:

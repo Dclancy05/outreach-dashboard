@@ -13,6 +13,7 @@ import { motion, useReducedMotion } from "framer-motion"
 import { JarvisCmdkOpener } from "@/components/jarvis/shell/jarvis-cmdk-stub"
 import { useJarvisVersion } from "@/components/jarvis/shell/jarvis-shell-providers"
 import { statusPulse } from "@/components/jarvis/motion/presets"
+import { InboxBell } from "@/components/inbox/inbox-bell"
 import { cn } from "@/lib/utils"
 
 interface JarvisHeaderProps {
@@ -63,8 +64,10 @@ export function JarvisHeader({ liveActivity = false }: JarvisHeaderProps) {
         <JarvisCmdkOpener />
       </div>
 
-      {/* Right: live status + account */}
+      {/* Right: inbox bell + live status + account */}
       <div className="flex items-center gap-2">
+        {/* Wave 9.α fix: Inbox bell was sidebar-only; add to header for parity with /agency. */}
+        <InboxBell />
         <div
           className="hidden items-center gap-1.5 rounded-md border border-mem-border bg-mem-surface-1 px-2 py-1 md:inline-flex"
           role="status"
