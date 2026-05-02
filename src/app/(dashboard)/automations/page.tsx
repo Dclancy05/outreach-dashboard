@@ -11,6 +11,12 @@ import {
   Pencil, Server, Layers, MoreHorizontal,
   MessageCircle as RedditFallbackIcon, Mail as EmailIcon, Smartphone as SmsIcon,
 } from "lucide-react"
+import {
+  ManualStepBuilder,
+  toWireSteps,
+  type ManualStep,
+  type VariantBEntry,
+} from "@/components/automations/manual-step-builder"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   DropdownMenu,
@@ -554,6 +560,9 @@ function AddAutomationModal({
   const [saving, setSaving] = useState(false)
   const [savedId, setSavedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Tier 1 recording flow — opens ManualStepBuilder in a follow-up modal
+  // after the user creates the automation draft.
+  const [stepBuilderOpen, setStepBuilderOpen] = useState(false)
 
   const effectivePlatformKey = initial ? PLATFORM_FROM_DB[initial.platform] || platformKey || "" : platformKey || ""
   const platformLabel = effectivePlatformKey ? platformLabels[effectivePlatformKey] : ""
@@ -722,14 +731,16 @@ function AddAutomationModal({
                 {isEditing ? "Saved!" : "Draft saved"}
               </h3>
               <p className="text-sm text-muted-foreground">
-                Ready to record this automation against the dummy group.
+                Now refine the steps with selectors so the replay engine can run them.
               </p>
             </div>
 
-            <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 text-left text-xs text-amber-300 space-y-1">
-              <p className="font-semibold">Recording coming in next build</p>
-              <p className="text-amber-300/80">
-                The CDP recorder (captures selectors, coords, screenshots) is a separate workstream. Once it ships, this button will open the dummy group VNC with a bubble-per-click sidebar so you can demonstrate the steps.
+            <div className="rounded-xl bg-violet-500/10 border border-violet-500/30 p-3 text-left text-xs text-violet-200 space-y-1">
+              <p className="font-semibold">Tier 1 recording — manual step builder</p>
+              <p className="text-violet-200/80">
+                Open the step builder to add CSS selectors and fallback text for each step. The replay engine
+                cycles through 5 fallback strategies (original → text → shadow DOM → XPath → coordinates) automatically,
+                so you only have to fill what's available. Browser-recorded capture comes in a follow-up phase.
               </p>
             </div>
 
@@ -741,11 +752,11 @@ function AddAutomationModal({
                 Close
               </button>
               <button
-                disabled
-                title="Coming in next build"
-                className="rounded-xl bg-orange-500/30 px-4 py-2 text-sm font-semibold text-white/70 cursor-not-allowed flex items-center gap-1.5"
+                onClick={() => savedId && setStepBuilderOpen(true)}
+                disabled={!savedId}
+                className="rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white flex items-center gap-1.5 transition-colors"
               >
-                <Video className="h-4 w-4" /> Open recording VNC
+                <Video className="h-4 w-4" /> Open step builder
               </button>
             </div>
 
@@ -754,6 +765,21 @@ function AddAutomationModal({
             )}
           </div>
         )}
+
+        {/* Tier 1 manual step builder — renders inline as a secondary modal
+            on top of the AddAutomationModal. Persists to /api/automations/[id]
+            via PATCH; never touches the actual SEND code path. */}
+        {savedId ? (
+          <ManualStepBuilderDialog
+            open={stepBuilderOpen}
+            onClose={() => setStepBuilderOpen(false)}
+            automationId={savedId}
+            onSaved={() => {
+              setStepBuilderOpen(false)
+              onClose()
+            }}
+          />
+        ) : null}
       </motion.div>
     </motion.div>
   )
@@ -779,6 +805,138 @@ const TAG_OPTIONS = ["warmup", "outreach", "engagement", "test"]
 const tagColors: Record<string, string> = {
   warmup: "bg-amber-500/20 text-amber-400", outreach: "bg-blue-500/20 text-blue-400",
   engagement: "bg-purple-500/20 text-purple-400", test: "bg-muted/30 text-muted-foreground",
+}
+
+/* ─── ManualStepBuilderDialog — Tier 1 recording wrapper ───
+ *
+ * Mounted on top of AddAutomationModal after the user saves the draft.
+ * Uses the standalone ManualStepBuilder to collect structured steps,
+ * persists via PATCH /api/automations/[id], then triggers self-test
+ * against the dummy account (existing replay engine, no SEND code path).
+ */
+function ManualStepBuilderDialog({
+  open,
+  onClose,
+  automationId,
+  onSaved,
+}: {
+  open: boolean
+  onClose: () => void
+  automationId: string
+  onSaved: () => void
+}) {
+  const [steps, setStepsState] = useState<ManualStep[]>([])
+  const [variantB, setVariantB] = useState<VariantBEntry[] | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [testStatus, setTestStatus] = useState<string | null>(null)
+
+  if (!open) return null
+
+  async function save() {
+    if (steps.length === 0 || steps.every((s) => s.selectors.length === 0 && !s.fallback_text && !s.params.url)) {
+      setError("Add at least one step with a URL, selector, or text fallback")
+      return
+    }
+    setSaving(true)
+    setError(null)
+    setTestStatus(null)
+    try {
+      const wireSteps = toWireSteps(steps)
+      const res = await fetch(`/api/automations/${automationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ steps: wireSteps, variant_b: variantB }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || "Save failed")
+        return
+      }
+      // Trigger self-test against the dummy account. Non-fatal: if VPS is
+      // down, we keep the saved steps and just note the test couldn't run.
+      setTestStatus("Saved. Running self-test against dummy account…")
+      try {
+        const testRes = await fetch("/api/recordings/self-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ automation_id: automationId }),
+        })
+        if (testRes.ok) {
+          setTestStatus("✅ Self-test passed — automation is ready.")
+        } else {
+          setTestStatus("⚠️ Self-test failed — check selectors and try again.")
+        }
+      } catch {
+        setTestStatus("⚠️ Couldn't reach the VPS replay endpoint — saved anyway.")
+      }
+      // Give the user 1.5s to read the status before closing.
+      setTimeout(onSaved, 1500)
+    } catch (e) {
+      setError((e as Error).message || "Network error")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-background/85 backdrop-blur-md p-4"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.96, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        onClick={(e) => e.stopPropagation()}
+        className="bg-card/95 backdrop-blur-xl border border-border/50 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
+      >
+        <header className="flex items-center justify-between border-b border-border/30 p-4">
+          <div className="flex items-center gap-2">
+            <Wand2 className="h-4 w-4 text-violet-400" />
+            <h3 className="font-semibold text-sm">Build steps for this automation</h3>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-muted/30">
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          <ManualStepBuilder onChange={setStepsState} onVariantBChange={setVariantB} />
+        </div>
+
+        {testStatus ? (
+          <div className="border-t border-border/30 px-4 py-2 text-xs text-muted-foreground">
+            {testStatus}
+          </div>
+        ) : null}
+
+        {error ? (
+          <div className="border-t border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-300 flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5" /> {error}
+          </div>
+        ) : null}
+
+        <footer className="flex items-center justify-end gap-2 border-t border-border/30 p-4">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-border/50 px-4 py-2 text-sm hover:bg-muted/20"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white flex items-center gap-1.5"
+          >
+            {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+            Save + self-test
+          </button>
+        </footer>
+      </motion.div>
+    </motion.div>
+  )
 }
 
 /* ─── Recording Modal (Full-screen immersive) ─── */
