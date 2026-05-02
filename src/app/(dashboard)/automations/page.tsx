@@ -1305,6 +1305,9 @@ function OverviewTab() {
   const [sparkline, setSparkline] = useState<DailySparklinePoint[]>([])
   // Slice 5: which run is being viewed in the carousel modal.
   const [selectedRun, setSelectedRun] = useState<DbAutomationRun | null>(null)
+  // Slice 6: idle banner + bulk-pause UX state.
+  const [pausingAll, setPausingAll] = useState(false)
+  const [pauseError, setPauseError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -1320,6 +1323,47 @@ function OverviewTab() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Slice 6: idle detection — true when the latest run is older than 24h.
+  // We compute from the runs list we already loaded so there's no extra
+  // round-trip. UTC math, viewer timezone irrelevant.
+  const idleHours = (() => {
+    if (!runs.length) return null
+    const latest = runs[0]?.started_at
+    if (!latest) return null
+    return (Date.now() - new Date(latest).getTime()) / (60 * 60 * 1000)
+  })()
+  const activeCount = automations.filter(a => a.status === "active").length
+  const showIdleBanner = !loading && activeCount > 0 && (idleHours === null ? false : idleHours >= 24)
+
+  const handlePauseAll = async () => {
+    setPausingAll(true)
+    setPauseError(null)
+    try {
+      // Flip every active automation to needs_rerecording — that status
+      // already exists in the schema check constraint and pauses the
+      // maintenance loop without losing the recorded steps. The Your
+      // Automations card surfaces it as "Needs re-record" so Dylan can
+      // resume by re-recording the dummy walkthrough.
+      const targets = automations.filter(a => a.status === "active")
+      const results = await Promise.all(targets.map(a =>
+        fetch(`/api/automations/${a.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "needs_rerecording" }),
+        }).then(r => r.ok)
+      ))
+      const failed = results.filter(ok => !ok).length
+      if (failed > 0) {
+        setPauseError(`${failed} of ${targets.length} couldn't be paused — try again.`)
+      }
+      await load()
+    } catch (e) {
+      setPauseError((e as Error).message || "Network error")
+    } finally {
+      setPausingAll(false)
+    }
+  }
 
   const Card = ({
     label, value, hint, icon: Icon, tone,
@@ -1352,6 +1396,47 @@ function OverviewTab() {
   return (
     <div className="space-y-4">
       <RetryQueueWidget variant="card" />
+
+      {/* Idle-detect auto-pause banner (W4B Slice 6) */}
+      <AnimatePresence>
+        {showIdleBanner && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 shadow-lg"
+            role="alert"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="rounded-lg p-1.5 bg-amber-500/20 shrink-0">
+                  <AlertTriangle className="h-4 w-4 text-amber-300" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-amber-200">
+                    No automation has run in {idleHours ? Math.floor(idleHours) : "24+"} hours
+                  </p>
+                  <p className="text-xs text-amber-200/70">
+                    Are you still using these campaigns? Pause them to stop the maintenance cron from racking up cost.
+                  </p>
+                  {pauseError && (
+                    <p className="text-[11px] text-red-300 mt-1">{pauseError}</p>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={handlePauseAll}
+                disabled={pausingAll}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-50 px-3 py-2 text-xs font-semibold text-amber-200 transition-colors"
+              >
+                {pausingAll ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Pause className="h-3.5 w-3.5" />}
+                Pause all ({activeCount})
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         <Card
           label="Total automations"
