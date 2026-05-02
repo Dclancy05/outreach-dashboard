@@ -140,10 +140,24 @@ function nextResponseWithNonce(req: NextRequest, nonce: string): NextResponse {
 
 function buildCsp(_nonce: string, _pathname: string): string {
   const supabase = "https://*.supabase.co"
-  // Explicit port :8443 on the wss entries — CSP host-sources without an
-  // explicit port match only the scheme default (443 for wss), and the
-  // Tailscale Funnel listens on :8443 for WS.
-  const tailscale = "https://srv1197943.taild42583.ts.net https://*.taild42583.ts.net wss://srv1197943.taild42583.ts.net:8443 wss://*.taild42583.ts.net:8443"
+  // Tailscale Funnel exposes WS on multiple ports depending on which service
+  // is being reached: :8443 (openclaw), :10000 (recording-service), :6080
+  // (noVNC websockify), and the default :443 (when accounts/Sign-In modal
+  // hits port-less wss://). CSP host-source matching is port-strict, so we
+  // enumerate. A wildcard `wss://*.taild42583.ts.net` would cover everything
+  // but loses port granularity if we ever need to tighten later.
+  const tailscale = [
+    "https://srv1197943.taild42583.ts.net",
+    "https://*.taild42583.ts.net",
+    "wss://srv1197943.taild42583.ts.net",
+    "wss://*.taild42583.ts.net",
+    "wss://srv1197943.taild42583.ts.net:8443",
+    "wss://*.taild42583.ts.net:8443",
+    "wss://srv1197943.taild42583.ts.net:6080",
+    "wss://*.taild42583.ts.net:6080",
+    "wss://srv1197943.taild42583.ts.net:10000",
+    "wss://*.taild42583.ts.net:10000",
+  ].join(" ")
   const isProd = process.env.NODE_ENV === "production"
   // In prod we drop 'unsafe-eval' entirely. Next dev needs eval for HMR.
   const scriptSrc = isProd
