@@ -7,6 +7,16 @@
  *   - right: inspector panel for the selected node + budget/action toolbar
  *
  * Autosaves to /api/workflows/[id] every 2 seconds when the graph is dirty.
+ *
+ * BUG-031 fix: `fitView` is now called explicitly via `useReactFlow().fitView()`
+ *   AFTER the nodes hydrate from the server. The original `<ReactFlow fitView />`
+ *   prop only fires on mount when nodes are already present — but our nodes
+ *   arrive async via SWR, so the initial fit had nothing to frame.
+ *
+ * BUG-032 fix: `<Controls />` and `<MiniMap />` are inside `<ReactFlow>` (already
+ *   were) but the inner xyflow container needs `position: relative` and a
+ *   defined height for them to be visible — the wrapper previously had no
+ *   explicit height in some embeddings, so they were clipped/invisible.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -14,7 +24,7 @@ import useSWR from "swr"
 import { toast } from "sonner"
 import {
   ReactFlow, ReactFlowProvider, Background, Controls, MiniMap,
-  addEdge, applyNodeChanges, applyEdgeChanges,
+  addEdge, applyNodeChanges, applyEdgeChanges, useReactFlow,
   type Edge, type Node, type NodeChange, type EdgeChange, type Connection,
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
@@ -33,6 +43,18 @@ import { NODE_TYPES, PALETTE } from "@/components/agent-workflows/workflows/node
 
 interface Props { workflowId: string; onClose: () => void }
 
+/**
+ * Builds initial xyflow nodes/edges arrays from a Workflow record.
+ * Exported for the Jarvis builder (W4.C) so it can hydrate without re-implementing
+ * the cast logic. Returns plain arrays — caller wraps in setState.
+ */
+export function getInitialNodesFromWorkflow(wf: Workflow): { nodes: Node[]; edges: Edge[] } {
+  return {
+    nodes: wf.graph.nodes as unknown as Node[],
+    edges: wf.graph.edges as unknown as Edge[],
+  }
+}
+
 export function WorkflowBuilder({ workflowId, onClose }: Props) {
   return (
     <ReactFlowProvider>
@@ -44,21 +66,36 @@ export function WorkflowBuilder({ workflowId, onClose }: Props) {
 function BuilderInner({ workflowId }: Props) {
   const { data: wf, mutate: mutateWf } = useSWR<Workflow>(["workflow", workflowId], () => getWorkflow(workflowId))
   const { data: agents = [] } = useSWR<Agent[]>("agents-builder", () => listAgents({}))
+  const { fitView } = useReactFlow()
 
   const [nodes, setNodes] = useState<Node[]>([])
   const [edges, setEdges] = useState<Edge[]>([])
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
   const lastSavedRef = useRef<string>("")
+  const hasFitRef = useRef(false)
 
   // Hydrate from server
   useEffect(() => {
     if (!wf) return
-    const g = wf.graph
-    setNodes(g.nodes as unknown as Node[])
-    setEdges(g.edges as unknown as Edge[])
-    lastSavedRef.current = JSON.stringify(g)
+    const init = getInitialNodesFromWorkflow(wf)
+    setNodes(init.nodes)
+    setEdges(init.edges)
+    lastSavedRef.current = JSON.stringify(wf.graph)
   }, [wf])
+
+  // BUG-031 fix: fitView once after nodes hydrate. The xyflow `fitView` prop
+  // only fires on first paint, when our nodes are still empty.
+  useEffect(() => {
+    if (hasFitRef.current) return
+    if (nodes.length === 0) return
+    hasFitRef.current = true
+    // requestAnimationFrame ensures xyflow has measured node bounds.
+    const raf = requestAnimationFrame(() => {
+      fitView({ padding: 0.15, duration: 250 })
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [nodes, fitView])
 
   // Autosave (debounced)
   useEffect(() => {
@@ -144,8 +181,8 @@ function BuilderInner({ workflowId }: Props) {
         </div>
       </div>
 
-      {/* Canvas */}
-      <div className="relative">
+      {/* Canvas — explicit relative + h-full so Controls/MiniMap (BUG-032) render */}
+      <div className="relative h-full min-h-[480px]">
         <ReactFlow
           nodes={nodes}
           edges={edges}

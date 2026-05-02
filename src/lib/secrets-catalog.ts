@@ -432,6 +432,22 @@ export const PROVIDERS: ProviderEntry[] = [
     placeholder: "postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres",
   },
   {
+    slug: "github_mcp_token",
+    category: "Infrastructure",
+    label: "GitHub MCP Token",
+    emoji: "🐙",
+    envVars: ["GITHUB_MCP_TOKEN"],
+    help: "OAuth access token for the GitHub MCP. Auto-populated by /api/mcp/oauth/github/callback after the user clicks Connect on /jarvis/mcps; rotate by re-running the OAuth flow.",
+  },
+  {
+    slug: "github_mcp_oauth_client_id",
+    category: "Infrastructure",
+    label: "GitHub MCP OAuth Client ID",
+    emoji: "🆔",
+    envVars: ["GITHUB_MCP_OAUTH_CLIENT_ID"],
+    help: "OAuth App client ID for the GitHub MCP install flow (PKCE — no client secret needed). Create the OAuth app at https://github.com/settings/developers with callback URL https://outreach-github.vercel.app/api/mcp/oauth/github/callback.",
+  },
+  {
     slug: "context7_api_key",
     category: "AI / LLM",
     label: "Context7 API Key",

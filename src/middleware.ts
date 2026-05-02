@@ -164,7 +164,7 @@ function buildCsp(_nonce: string, _pathname: string): string {
     // NOTE: nonce-based + 'strict-dynamic' broke the site on 2026-04-23.
     // See memory: project_csp_nonce_pitfall.md. Do NOT re-introduce.
     scriptSrc,
-    `connect-src 'self' ${supabase} wss://*.supabase.co ${tailscale} https://api.brave.com https://api.openai.com https://api.apify.com https://api.elevenlabs.io https://*.sentry.io https://*.ingest.sentry.io`,
+    `connect-src 'self' ${supabase} wss://*.supabase.co ${tailscale} https://api.brave.com https://api.openai.com https://api.apify.com https://api.elevenlabs.io https://*.sentry.io https://*.ingest.sentry.io https://api.github.com https://github.com`,
     `frame-src 'self' ${tailscale}`,
     `worker-src 'self' blob:`,
     `media-src 'self' blob: data: https:`,
