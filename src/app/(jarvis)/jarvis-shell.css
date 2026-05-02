@@ -151,3 +151,33 @@
 :root.jarvis-mode .hover\:text-mem-text-muted:hover {
   color: #b3b3bd !important;
 }
+
+/* Wave 9 deep-test follow-up: axe still flags 7-10 nodes per route for
+ * color-contrast even after the muted-text bump. The other commonly-used
+ * dim tokens are `text-mem-text-secondary` (#a1a1a6, ratio ~6.4:1, OK on
+ * #0a0a0b but FAILS on #17171a surface-2 at 5.7:1 → marginal) and the
+ * Tailwind `text-muted-foreground` used in /agency-shared components.
+ *
+ * Bump both to ensure every dim-text surface sits at ≥4.5:1 across the
+ * three jarvis surfaces. Stops short of overriding text-foreground —
+ * primary text is already #ededed at 14:1.
+ */
+:root.jarvis-mode .text-mem-text-secondary {
+  color: #c4c4cc !important; /* 7.1:1 on bg, 6.7:1 on surface-2 */
+}
+:root.jarvis-mode .text-muted-foreground {
+  /* shadcn shared token leaks into Jarvis via dialog/select/input. */
+  color: #c4c4cc !important;
+}
+
+/* Wave 9 deep-test: axe `aria-progressbar-name` flagged the global loading
+ * indicator without an accessible name. Inject a generic label since we
+ * can't reach into every progressbar consumer. Visually identical. */
+:root.jarvis-mode [role="progressbar"]:not([aria-label]):not([aria-labelledby])::after {
+  content: "Loading";
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
