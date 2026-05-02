@@ -224,6 +224,68 @@ function getPlatformUrl(lead: Lead, platform: string): string {
   }
 }
 
+/**
+ * Pre-flight per-day capacity check.
+ *
+ * For the chosen leads × sequence × accounts, project how many sends each
+ * account would do on each day_offset and compare to its daily_limit. We
+ * use a deterministic round-robin (not the random launch path) so the
+ * preview is stable on re-render. The actual launch may differ slightly,
+ * which is why the warning copy says "estimate".
+ *
+ * Returns a flat list of (day, accountId, projected, limit, exceeds).
+ */
+function computeDayCaps(
+  leads: Lead[],
+  sequence: Sequence,
+  selectedAccountIds: string[],
+  accountsData: Account[],
+): { day: number; accountId: string; projected: number; limit: number; exceeds: boolean }[] {
+  const dayAccountSends: Record<number, Record<string, number>> = {}
+
+  // Round-robin per (day, platform) so the preview is deterministic.
+  const rrCursor: Record<string, number> = {}
+
+  for (const lead of leads) {
+    for (const step of Object.values(sequence.steps || {})) {
+      const day = step.day_offset || 0
+      const platform = step.platform || ""
+      if (!platform) continue
+
+      // Skip steps the lead has no URL for — same as actual launch.
+      if (!getPlatformUrl(lead, platform)) continue
+
+      const accts = accountsData.filter(
+        a => selectedAccountIds.includes(a.account_id) && a.platform === platform,
+      )
+      if (accts.length === 0) continue
+
+      const rrKey = `${day}|${platform}`
+      const idx = (rrCursor[rrKey] || 0) % accts.length
+      rrCursor[rrKey] = (rrCursor[rrKey] || 0) + 1
+      const acctId = accts[idx].account_id
+
+      if (!dayAccountSends[day]) dayAccountSends[day] = {}
+      dayAccountSends[day][acctId] = (dayAccountSends[day][acctId] || 0) + 1
+    }
+  }
+
+  const result: { day: number; accountId: string; projected: number; limit: number; exceeds: boolean }[] = []
+  for (const [dayStr, acctMap] of Object.entries(dayAccountSends)) {
+    const day = parseInt(dayStr)
+    for (const [acctId, count] of Object.entries(acctMap)) {
+      const acct = accountsData.find(a => a.account_id === acctId)
+      const limit = parseInt(acct?.daily_limit || "40") || 40
+      result.push({
+        day, accountId: acctId, projected: count, limit,
+        exceeds: count > limit,
+      })
+    }
+  }
+
+  return result
+}
+
 /* ─── SEQUENCE BUILDER DIALOG ─── */
 function SequenceBuilderDialog({ open, onOpenChange, editSequence, onSaved }: {
   open: boolean; onOpenChange: (v: boolean) => void; editSequence?: Sequence | null; onSaved: (seq: Sequence) => void;
@@ -764,6 +826,10 @@ export default function OutreachPage() {
   // Platform coverage
   const [coverageExpanded, setCoverageExpanded] = useState(false)
 
+  // Step 3 pre-flight cap check (slice 5). Recomputed when sequence /
+  // leads / accounts change. Only entries where exceeds=true are kept.
+  const [capCheckExceeds, setCapCheckExceeds] = useState<ReturnType<typeof computeDayCaps>>([])
+
   // Dialogs
   const [showSequenceBuilder, setShowSequenceBuilder] = useState(false)
   const [editingSequence, setEditingSequence] = useState<Sequence | null>(null)
@@ -917,6 +983,18 @@ export default function OutreachPage() {
     }
     return { fullCoverage, missingLeads, extraPlatforms: [...extraPlatforms], missingByPlatform }
   }, [selectedSeq, matchingLeads, seqPlatforms])
+
+  // Slice 5 — pre-flight per-day cap check. Recompute whenever the
+  // selected sequence, picked leads, or selected accounts change.
+  // Only retains entries where projected > daily_limit.
+  useEffect(() => {
+    if (selectedSeq && matchingLeads.length > 0 && selectedAccounts.length > 0) {
+      const exceeds = computeDayCaps(matchingLeads, selectedSeq, selectedAccounts, accounts)
+      setCapCheckExceeds(exceeds.filter(x => x.exceeds))
+    } else {
+      setCapCheckExceeds([])
+    }
+  }, [selectedSeq, matchingLeads, selectedAccounts, accounts])
 
   async function togglePlatform(platform: string, action: string) {
     await fetch("/api/automation/status", {
@@ -1828,6 +1906,42 @@ export default function OutreachPage() {
                         💡 Many leads also have <span className="font-medium">{coverageAnalysis.extraPlatforms.join(", ")}</span> — want to add those to the sequence?
                       </p>
                     </div>
+                  )}
+
+                  {/* Slice 5 — Pre-flight per-day cap warnings.
+                      Surfaces accounts that would blow past their daily_limit
+                      on a given day_offset, so Dylan can shift step day_offsets
+                      or pick more accounts before launching. Estimate (uses
+                      round-robin; the real launch may pick differently). */}
+                  {capCheckExceeds.length > 0 && (
+                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                      className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/5">
+                      <div className="flex items-center gap-2 mb-2">
+                        <AlertTriangle className="h-4 w-4 text-amber-400" />
+                        <span className="text-sm font-medium text-amber-400">Daily capacity warnings</span>
+                      </div>
+                      <div className="space-y-1 text-xs text-muted-foreground">
+                        {capCheckExceeds.slice(0, 8).map(cap => {
+                          const acct = accounts.find(a => a.account_id === cap.accountId)
+                          return (
+                            <div key={`${cap.day}-${cap.accountId}`} className="flex items-center gap-2 flex-wrap">
+                              <span>
+                                Day {cap.day}: <span className="font-medium text-foreground/80">@{acct?.username || cap.accountId}</span> would send {cap.projected} (limit {cap.limit})
+                              </span>
+                              <Badge variant="outline" className="text-[10px] bg-amber-500/10 border-amber-500/20 text-amber-400">
+                                +{cap.projected - cap.limit} overflow
+                              </Badge>
+                            </div>
+                          )
+                        })}
+                        {capCheckExceeds.length > 8 && (
+                          <p className="text-xs text-muted-foreground/70">+{capCheckExceeds.length - 8} more</p>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-2">
+                        💡 Tip: Spread the sequence across more days, or add more sending accounts. This is an estimate — launch uses live load balancing.
+                      </p>
+                    </motion.div>
                   )}
 
                   {/* Campaign Intelligence */}
