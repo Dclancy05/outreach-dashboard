@@ -5,10 +5,19 @@
  *
  * Header actions: Move… (folder picker), Delete (confirm). Body: Edit /
  * Preview tabs.
+ *
+ * BUG-016 fix: when `readOnly` is true (Time Machine engaged via `?at=`), the
+ * Edit tab is disabled with a tooltip, the textarea is grayed/uneditable, and
+ * Move + Delete actions are disabled. Default is false so /agency/memory and
+ * the Agents subtab keep working unchanged.
+ *
+ * BUG-004 (a11y): the Move + Delete dialogs already wrap their DialogContent
+ * with DialogHeader → DialogTitle (Radix screen-reader compliance). This
+ * file is the canonical reference — both dialogs are confirmed compliant.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
-import { Loader2, Eye, Pencil, Trash2, FolderInput } from "lucide-react"
+import { Loader2, Eye, Pencil, Trash2, FolderInput, Lock } from "lucide-react"
 import { toast } from "sonner"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
@@ -28,6 +37,13 @@ interface FileEditorProps {
    *  Memory Tree, "preview" for the Agents subtab where users mostly want
    *  to read the agent's description rather than tweak it. */
   defaultTab?: "edit" | "preview"
+  /** When true, the editor is locked: Edit tab is disabled, Move + Delete
+   *  buttons are disabled. Used by /jarvis/memory when Time Machine is
+   *  engaged (`?at=…`). Default false (back-compat with /agency/memory). */
+  readOnly?: boolean
+  /** Optional human-friendly label for why the editor is read-only. Shown in
+   *  the tooltip. Default: "Read-only (time travel)". */
+  readOnlyReason?: string
 }
 
 interface FileResponse {
@@ -44,7 +60,13 @@ interface TreeNode {
   children?: TreeNode[]
 }
 
-export function FileEditor({ path, onPathChange, defaultTab = "edit" }: FileEditorProps) {
+export function FileEditor({
+  path,
+  onPathChange,
+  defaultTab = "edit",
+  readOnly = false,
+  readOnlyReason = "Read-only (time travel)",
+}: FileEditorProps) {
   const [content, setContent] = useState<string>("")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -55,6 +77,10 @@ export function FileEditor({ path, onPathChange, defaultTab = "edit" }: FileEdit
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlight = useRef<AbortController | null>(null)
+
+  // When read-only is active, force the Preview tab so the user doesn't land
+  // on a disabled Edit pane.
+  const effectiveDefaultTab = readOnly ? "preview" : defaultTab
 
   useEffect(() => {
     let cancelled = false
@@ -89,6 +115,7 @@ export function FileEditor({ path, onPathChange, defaultTab = "edit" }: FileEdit
   }, [path])
 
   const persist = useCallback(async (next: string) => {
+    if (readOnly) return // BUG-016: never write when locked
     inFlight.current?.abort()
     const ctl = new AbortController()
     inFlight.current = ctl
@@ -112,25 +139,27 @@ export function FileEditor({ path, onPathChange, defaultTab = "edit" }: FileEdit
       setSaveState("error")
       console.error("[file-editor] save failed:", err)
     }
-  }, [path])
+  }, [path, readOnly])
 
   const onChange = useCallback((next: string) => {
+    if (readOnly) return // BUG-016: ignore typing when locked
     setContent(next)
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => persist(next), SAVE_DEBOUNCE_MS)
-  }, [persist])
+  }, [persist, readOnly])
 
   useEffect(() => {
     return () => {
       if (saveTimer.current) {
         clearTimeout(saveTimer.current)
-        persist(content)
+        if (!readOnly) persist(content)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
   async function softDelete() {
+    if (readOnly) return
     try {
       const res = await fetch(`/api/memory-vault/file?path=${encodeURIComponent(path)}`, { method: "DELETE" })
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`)
@@ -171,6 +200,11 @@ export function FileEditor({ path, onPathChange, defaultTab = "edit" }: FileEdit
           <div className="text-xs text-zinc-500 truncate">{path.split("/").slice(0, -1).join(" / ") || "/"}</div>
           <div className="text-sm text-zinc-100 font-medium truncate">{path.split("/").pop()}</div>
         </div>
+        {readOnly && (
+          <Badge variant="outline" className="text-[10px] gap-1 border-amber-500/40 text-amber-300">
+            <Lock className="h-3 w-3" /> Read-only
+          </Badge>
+        )}
         <Badge variant="outline" className="text-[10px] tabular-nums">
           {content.length.toLocaleString()} chars
         </Badge>
@@ -179,26 +213,38 @@ export function FileEditor({ path, onPathChange, defaultTab = "edit" }: FileEdit
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 w-7 p-0 text-zinc-500 hover:text-zinc-100"
+            disabled={readOnly}
+            className="h-7 w-7 p-0 text-zinc-500 hover:text-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => setMoveDialogOpen(true)}
-            title="Move file to another folder"
+            title={readOnly ? readOnlyReason : "Move file to another folder"}
           >
             <FolderInput className="w-3.5 h-3.5" />
           </Button>
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 w-7 p-0 text-zinc-500 hover:text-red-400"
+            disabled={readOnly}
+            className="h-7 w-7 p-0 text-zinc-500 hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed"
             onClick={() => setDeleteDialogOpen(true)}
-            title="Delete (soft — into /.trash/)"
+            title={readOnly ? readOnlyReason : "Delete (soft — into /.trash/)"}
           >
             <Trash2 className="w-3.5 h-3.5" />
           </Button>
         </div>
       </div>
-      <Tabs defaultValue={defaultTab} className="flex-1 flex flex-col min-h-0">
+      <Tabs defaultValue={effectiveDefaultTab} className="flex-1 flex flex-col min-h-0">
         <TabsList className="mx-4 mt-2 self-start">
-          <TabsTrigger value="edit" className="gap-1.5"><Pencil className="w-3.5 h-3.5" />Edit</TabsTrigger>
+          <TabsTrigger
+            value="edit"
+            disabled={readOnly}
+            title={readOnly ? readOnlyReason : undefined}
+            className={cn(
+              "gap-1.5",
+              readOnly && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            <Pencil className="w-3.5 h-3.5" />Edit
+          </TabsTrigger>
           <TabsTrigger value="preview" className="gap-1.5"><Eye className="w-3.5 h-3.5" />Preview</TabsTrigger>
         </TabsList>
         <TabsContent value="edit" className="flex-1 px-4 pb-4 mt-2 min-h-0">
@@ -206,7 +252,13 @@ export function FileEditor({ path, onPathChange, defaultTab = "edit" }: FileEdit
             value={content}
             onChange={(e) => onChange(e.target.value)}
             placeholder="Write markdown here…"
-            className="h-full w-full font-mono text-sm resize-none"
+            readOnly={readOnly}
+            aria-readonly={readOnly}
+            title={readOnly ? readOnlyReason : undefined}
+            className={cn(
+              "h-full w-full font-mono text-sm resize-none",
+              readOnly && "opacity-60 cursor-not-allowed"
+            )}
             spellCheck={false}
           />
         </TabsContent>
@@ -217,7 +269,7 @@ export function FileEditor({ path, onPathChange, defaultTab = "edit" }: FileEdit
         </TabsContent>
       </Tabs>
 
-      {/* Move dialog */}
+      {/* Move dialog (BUG-004: DialogHeader/DialogTitle present below) */}
       <MoveFileDialog
         open={moveDialogOpen}
         currentPath={path}
@@ -229,7 +281,7 @@ export function FileEditor({ path, onPathChange, defaultTab = "edit" }: FileEdit
         }}
       />
 
-      {/* Delete dialog */}
+      {/* Delete dialog (BUG-004: DialogHeader/DialogTitle present) */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -299,6 +351,13 @@ function MoveFileDialog({ open, currentPath, onClose, onMoved }: {
     }
   }
 
+  // BUG-017: hide /.trash and any descendants from the destination list. Users
+  // who want to send a file to trash use the Delete button.
+  const visibleFolders = useMemo(
+    () => folders.filter((f) => f !== "/.trash" && !f.startsWith("/.trash/")),
+    [folders]
+  )
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-md">
@@ -306,7 +365,7 @@ function MoveFileDialog({ open, currentPath, onClose, onMoved }: {
           <DialogTitle>Move {fileName} to…</DialogTitle>
         </DialogHeader>
         <div className="max-h-64 overflow-y-auto -mx-1 px-1">
-          {folders.map((f) => (
+          {visibleFolders.map((f) => (
             <button
               key={f}
               onClick={() => setTarget(f)}

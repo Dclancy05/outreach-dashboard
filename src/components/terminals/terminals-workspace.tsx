@@ -17,8 +17,24 @@
  * promotes it into the focused slot of the grid. Sessions not currently in
  * the grid are still running — their tmux pane is alive on the VPS, we just
  * unmount the xterm.js instance to keep RAM bounded.
+ *
+ * Mount-timing safety (BUG-005 fix):
+ * `<TerminalPane>` calls `xterm.Terminal#open()` synchronously in its mount
+ * effect. xterm reads `clientWidth`/`clientHeight` from the container at that
+ * moment to size its renderer; if those are zero (because we're inside a
+ * drawer that's still animating from `x:100%` to `0`, or the parent has
+ * `display:none`/`hidden`/`opacity:0`), xterm crashes later with
+ * `Cannot read properties of undefined (reading 'dimensions')` — every time
+ * its Viewport tries to recompute scroll on a never-sized renderer.
+ *
+ * Mitigation: gate the grid that hosts `<TerminalPane>` behind a
+ * `ResizeObserver` watching the grid container. Until we observe a non-zero
+ * `contentRect`, we render a tiny placeholder. The pane (and therefore
+ * xterm.open) only mounts once the container has real dimensions. After
+ * first non-zero observation we keep the panes mounted — `<TerminalPane>`
+ * has its own ResizeObserver that handles subsequent resizes via fit().
  */
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Plus, Loader2, Square, Maximize2, PanelRightClose, PanelRightOpen, TerminalSquare, Zap, Server, KeyRound, AlertTriangle } from "lucide-react"
 import Link from "next/link"
 import { toast } from "sonner"
@@ -78,6 +94,45 @@ export function TerminalsWorkspace() {
     if (typeof window === "undefined") return true
     return window.localStorage.getItem("terminals.activityOpen") !== "false"
   })
+
+  /**
+   * Grid-container "ready" gate — see BUG-005 doc above.
+   * `gridReady` flips true on the first ResizeObserver tick where the grid
+   * container has non-zero clientWidth and clientHeight. Until then we render
+   * a no-op placeholder instead of `<TerminalPane>` so xterm.open() never
+   * runs against a 0×0 element.
+   */
+  const gridContainerRef = useRef<HTMLDivElement | null>(null)
+  const [gridReady, setGridReady] = useState(false)
+
+  useEffect(() => {
+    const el = gridContainerRef.current
+    if (!el) return
+
+    // Fast-path: container is already sized (typical for /agency/terminals
+    // and /jarvis/terminals — full-screen mounts), skip waiting.
+    if (el.clientWidth > 0 && el.clientHeight > 0) {
+      setGridReady(true)
+      return
+    }
+
+    // Slow-path (drawer / hidden mount): wait until we observe non-zero
+    // dimensions. This is the actual BUG-005 trigger — terminals-drawer
+    // mounts the workspace inside an `AnimatePresence` panel sliding in from
+    // `x:100%`, and on the Memory page the drawer can be mounted before its
+    // panel has any layout box.
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      const { width, height } = entry.contentRect
+      if (width > 0 && height > 0) {
+        setGridReady(true)
+        ro.disconnect()
+      }
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // ─── Data fetch ────────────────────────────────────────────────────
 
@@ -361,8 +416,8 @@ export function TerminalsWorkspace() {
           </div>
         )}
 
-        {/* Grid */}
-        <div className="flex-1 min-w-0 p-3">
+        {/* Grid — gated by ResizeObserver so xterm never opens at 0×0 */}
+        <div ref={gridContainerRef} className="flex-1 min-w-0 p-3">
           {error && <SetupOrErrorCard error={error} />}
 
           {!error && visibleSessions.length === 0 && (
@@ -439,11 +494,20 @@ export function TerminalsWorkspace() {
                     </div>
                     <div className="flex-1 min-h-0 relative">
                       {conn ? (
-                        <TerminalPane
-                          sessionId={s.id}
-                          wsUrl={conn.ws_url}
-                          onResize={(cols, rows) => handleResize(s.id, cols, rows)}
-                        />
+                        gridReady ? (
+                          <TerminalPane
+                            sessionId={s.id}
+                            wsUrl={conn.ws_url}
+                            onResize={(cols, rows) => handleResize(s.id, cols, rows)}
+                          />
+                        ) : (
+                          // BUG-005: container hasn't laid out yet. Show a
+                          // skeleton instead of mounting xterm into a 0×0 box.
+                          <div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-xs">
+                            <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                            Sizing terminal…
+                          </div>
+                        )
                       ) : (
                         <div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-xs">
                           <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
@@ -545,4 +609,3 @@ function SetupStep({ n, children }: { n: number; children: React.ReactNode }) {
     </li>
   )
 }
-

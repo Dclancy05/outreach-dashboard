@@ -114,8 +114,20 @@ export function SettingsPanel({
   const totalTokensApprox = memories.reduce((sum, m) => sum + Math.ceil(((m.title?.length || 0) + (m.body?.length || 0)) / 4), 0)
   const mcpUrl = `${typeof window !== "undefined" ? window.location.origin : ""}/api/mcp/memory`
 
+  // BUG-012: ensure the panel scrolls inside its dialog. The wrapper enforces
+  // a 90vh cap so very tall content (MCP snippet + cards) is reachable on
+  // shorter viewports. The sticky summary row keeps the budget readout visible
+  // while the user scrolls. The dialog wrapping caller owns the actual title.
   return (
-    <div className="grid gap-4 md:grid-cols-2">
+    <div className="-m-6 max-h-[90vh] overflow-y-auto">
+      <div className="sticky top-0 z-10 bg-card/95 backdrop-blur-sm border-b border-border px-6 py-3 flex items-center gap-2">
+        <Sparkles className="h-4 w-4 text-amber-400 shrink-0" />
+        <span className="text-[11px] uppercase tracking-[0.08em] font-semibold text-muted-foreground">Configure</span>
+        <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
+          {memories.length} memories · {totalTokensApprox.toLocaleString()} tokens
+        </span>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 p-6">
       {/* Token budget */}
       <Card className="p-5">
         <div className="mb-3 flex items-center gap-2">
@@ -280,6 +292,7 @@ export function SettingsPanel({
           </Button>
         </div>
       </Card>
+      </div>
     </div>
   )
 }

@@ -11,6 +11,22 @@
  * - F2 (or double-click) to inline-rename
  * - Friendly empty state when the vault API isn't configured (HTTP 503)
  * - Live updates via SSE — when files change on disk, the tree re-renders
+ *
+ * BUG-017: the Move dialog filters out /.trash/* destinations so users don't
+ * accidentally move files into the trash tombstone tree.
+ *
+ * BUG-018: Rename is exposed in the right-click menu at every depth (root files
+ * included). A dedicated RenameDialog supplements the inline F2/double-click
+ * rename for users who prefer a confirmation modal.
+ *
+ * A11y: the folder row outer wrapper is a `<div role="group">` to avoid the
+ * "button containing a button" pattern flagged by the audit. The expand toggle
+ * is a small inner `<button>` (the chevron); clicking the row body selects the
+ * folder. File rows remain a single `<button>` (no nesting issue).
+ *
+ * Time travel: when `at` is set (Time Machine), the tree's mutation toolbar
+ * is suppressed and the right-click menu hides destructive items. Default
+ * `at` is null so /agency/memory continues to behave exactly as before.
  */
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import * as Collapsible from "@radix-ui/react-collapsible"
@@ -54,6 +70,10 @@ interface TreeViewProps {
    *  `/Jarvis/agent-skills`. Always-rooted ("/foo/bar"). When unset (default)
    *  the full vault root is shown. */
   rootPath?: string
+  /** When true, the tree is browse-only: New File/Folder, Rename, Move,
+   *  Delete are all hidden. Used by /jarvis/memory when Time Machine is
+   *  engaged. Default false (back-compat with /agency/memory). */
+  readOnly?: boolean
 }
 
 // Top-level paths the tree should hide (they're surfaced elsewhere — Conversations
@@ -73,12 +93,13 @@ function findFolderChildren(nodes: TreeNode[], targetPath: string): TreeNode[] |
   return null
 }
 
-export function TreeView({ selectedPath, onSelect, rootPath }: TreeViewProps) {
+export function TreeView({ selectedPath, onSelect, rootPath, readOnly = false }: TreeViewProps) {
   const [tree, setTree] = useState<TreeNode[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [errorStatus, setErrorStatus] = useState<number | null>(null)
-  const [renaming, setRenaming] = useState<string | null>(null)         // path being renamed
+  const [renaming, setRenaming] = useState<string | null>(null)         // path being renamed (inline)
+  const [renameDialog, setRenameDialog] = useState<TreeNode | null>(null) // BUG-018: dedicated dialog
   const [moveDialog, setMoveDialog] = useState<TreeNode | null>(null)
   const [deleteDialog, setDeleteDialog] = useState<TreeNode | null>(null)
   const [newDialog, setNewDialog] = useState<{ kind: "file" | "folder"; parent: string } | null>(null)
@@ -196,6 +217,7 @@ export function TreeView({ selectedPath, onSelect, rootPath }: TreeViewProps) {
       toast.error(err instanceof Error ? err.message : "Rename failed")
     } finally {
       setRenaming(null)
+      setRenameDialog(null)
     }
   }
 
@@ -225,12 +247,14 @@ export function TreeView({ selectedPath, onSelect, rootPath }: TreeViewProps) {
   }
 
   function handleDragStart(e: DragStartEvent) {
+    if (readOnly) return
     const node = findNode(tree || [], String(e.active.id))
     if (node) setActiveDrag(node)
   }
 
   async function handleDragEnd(e: DragEndEvent) {
     setActiveDrag(null)
+    if (readOnly) return
     const fromPath = String(e.active.id)
     const targetFolder = e.over ? String(e.over.id) : null
     if (!targetFolder) return
@@ -294,24 +318,33 @@ export function TreeView({ selectedPath, onSelect, rootPath }: TreeViewProps) {
     <div className="flex flex-col h-full">
       {/* Toolbar */}
       <div className="flex items-center gap-1 px-2 py-1.5 border-b border-zinc-800/60 shrink-0">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-xs gap-1 text-zinc-400 hover:text-zinc-100"
-          onClick={() => setNewDialog({ kind: "file", parent: "/" })}
-          title="New file at root"
-        >
-          <FilePlus className="w-3.5 h-3.5" /> File
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-xs gap-1 text-zinc-400 hover:text-zinc-100"
-          onClick={() => setNewDialog({ kind: "folder", parent: "/" })}
-          title="New folder at root"
-        >
-          <FolderPlus className="w-3.5 h-3.5" /> Folder
-        </Button>
+        {!readOnly && (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs gap-1 text-zinc-400 hover:text-zinc-100"
+              onClick={() => setNewDialog({ kind: "file", parent: "/" })}
+              title="New file at root"
+            >
+              <FilePlus className="w-3.5 h-3.5" /> File
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs gap-1 text-zinc-400 hover:text-zinc-100"
+              onClick={() => setNewDialog({ kind: "folder", parent: "/" })}
+              title="New folder at root"
+            >
+              <FolderPlus className="w-3.5 h-3.5" /> Folder
+            </Button>
+          </>
+        )}
+        {readOnly && (
+          <span className="px-2 text-[11px] text-amber-400/80 font-mono">
+            Read-only · time travel
+          </span>
+        )}
         <div className="flex-1" />
         <Button
           variant="ghost"
@@ -343,10 +376,12 @@ export function TreeView({ selectedPath, onSelect, rootPath }: TreeViewProps) {
                 selectedPath={selectedPath}
                 renaming={renaming}
                 activeDragPath={activeDrag?.path ?? null}
+                readOnly={readOnly}
                 onSelect={onSelect}
                 onStartRename={(path) => setRenaming(path)}
                 onCommitRename={rename}
                 onContextNew={(kind, parent) => setNewDialog({ kind, parent })}
+                onContextRename={(n) => setRenameDialog(n)}
                 onContextMove={(n) => setMoveDialog(n)}
                 onContextDelete={(n) => setDeleteDialog(n)}
               />
@@ -364,7 +399,7 @@ export function TreeView({ selectedPath, onSelect, rootPath }: TreeViewProps) {
         </DragOverlay>
       </DndContext>
 
-      {/* Dialogs */}
+      {/* Dialogs (suppressed when read-only — can't open them anyway) */}
       <NewItemDialog
         open={!!newDialog}
         kind={newDialog?.kind || "file"}
@@ -375,6 +410,11 @@ export function TreeView({ selectedPath, onSelect, rootPath }: TreeViewProps) {
           else if (newDialog?.kind === "folder") createFolder(newDialog.parent, name)
           setNewDialog(null)
         }}
+      />
+      <RenameDialog
+        node={renameDialog}
+        onClose={() => setRenameDialog(null)}
+        onCommit={rename}
       />
       <MoveDialog
         node={moveDialog}
@@ -394,18 +434,21 @@ export function TreeView({ selectedPath, onSelect, rootPath }: TreeViewProps) {
 // ─── TreeRow ──────────────────────────────────────────────────────
 
 function TreeRow({
-  node, depth, selectedPath, renaming, activeDragPath,
-  onSelect, onStartRename, onCommitRename, onContextNew, onContextMove, onContextDelete,
+  node, depth, selectedPath, renaming, activeDragPath, readOnly,
+  onSelect, onStartRename, onCommitRename, onContextNew,
+  onContextRename, onContextMove, onContextDelete,
 }: {
   node: TreeNode
   depth: number
   selectedPath: string | null
   renaming: string | null
   activeDragPath: string | null
+  readOnly: boolean
   onSelect: (p: string) => void
   onStartRename: (path: string) => void
   onCommitRename: (node: TreeNode, newName: string) => void
   onContextNew: (kind: "file" | "folder", parent: string) => void
+  onContextRename: (n: TreeNode) => void
   onContextMove: (n: TreeNode) => void
   onContextDelete: (n: TreeNode) => void
 }) {
@@ -419,12 +462,12 @@ function TreeRow({
   const isRenaming = renaming === node.path
 
   // Draggable: every row can be picked up. Disabled while renaming so the input works.
-  const drag = useDraggable({ id: node.path, disabled: isRenaming })
+  const drag = useDraggable({ id: node.path, disabled: isRenaming || readOnly })
   // Droppable: only folders accept drops. Disable for self while dragging this node
   // (don't let user "drop on yourself"). Server also blocks self/descendant drops.
   const drop = useDroppable({
     id: node.path,
-    disabled: node.kind !== "folder" || activeDragPath === node.path,
+    disabled: readOnly || node.kind !== "folder" || activeDragPath === node.path,
   })
 
   // Auto-expand a closed folder if the user hovers over it for 600ms while dragging.
@@ -450,11 +493,12 @@ function TreeRow({
   }
 
   const handleKey = useCallback((e: React.KeyboardEvent) => {
+    if (readOnly) return
     if (e.key === "F2" && !isRenaming) {
       e.preventDefault()
       onStartRename(node.path)
     }
-  }, [isRenaming, node.path, onStartRename])
+  }, [isRenaming, node.path, onStartRename, readOnly])
 
   const renameInputRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -464,65 +508,126 @@ function TreeRow({
     }
   }, [isRenaming])
 
-  const rowContent = (
-    <div ref={setRefs} {...drag.attributes} {...drag.listeners} style={dragRowStyle} className={dropTargetClass}>
-    <ContextMenu.Root>
-      <ContextMenu.Trigger asChild>
-        {node.kind === "folder" ? (
-          <Collapsible.Root open={open} onOpenChange={setOpen}>
-            <Collapsible.Trigger asChild>
-              <button
-                onKeyDown={handleKey}
-                onDoubleClick={(e) => { e.stopPropagation(); if (depth > 0) onStartRename(node.path) }}
-                className={cn(
-                  "flex items-center gap-1 w-full text-left py-1 hover:bg-zinc-800/50 rounded text-zinc-200 px-2 transition-colors",
-                  isSelected && "bg-zinc-800/70"
-                )}
-                style={{ paddingLeft: 8 + indent }}
-              >
-                <ChevronRight className={cn("w-3 h-3 text-zinc-500 transition-transform shrink-0", open && "rotate-90")} />
-                {open ? <FolderOpen className="w-4 h-4 text-amber-400 shrink-0" /> : <Folder className="w-4 h-4 text-amber-500 shrink-0" />}
-                {isRenaming ? (
-                  <RenameInput
-                    ref={renameInputRef}
-                    initial={node.name}
-                    onCommit={(n) => onCommitRename(node, n)}
-                    onCancel={() => onCommitRename(node, node.name)}
+
+  // ── Folder row ── outer <div role="group">; only chevron is a button (a11y fix)
+
+  if (node.kind === "folder") {
+    return (
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <ContextMenu.Root>
+          <ContextMenu.Trigger asChild>
+            <div
+              ref={setRefs}
+              {...drag.attributes}
+              {...drag.listeners}
+              role="group"
+              aria-label={node.name || "(root)"}
+              tabIndex={isRenaming ? -1 : 0}
+              onDoubleClick={(e) => {
+                e.stopPropagation()
+                if (depth > 0 && !readOnly) onStartRename(node.path)
+              }}
+              onKeyDown={(e) => {
+                if (readOnly) return
+                if (e.key === "F2" && !isRenaming) {
+                  e.preventDefault()
+                  onStartRename(node.path)
+                }
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  setOpen(!open)
+                }
+              }}
+              style={{ ...dragRowStyle, paddingLeft: 8 + indent }}
+              className={cn(
+                "flex items-center gap-1 w-full text-left py-1 hover:bg-zinc-800/50 rounded text-zinc-200 px-2 transition-colors cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-amber-500/40",
+                isSelected && "bg-zinc-800/70",
+                dropTargetClass
+              )}
+            >
+              {/* ── Inner expand-toggle button (the only button inside the row) ── */}
+              <Collapsible.Trigger asChild>
+                <button
+                  type="button"
+                  aria-label={open ? `Collapse ${node.name || "root"}` : `Expand ${node.name || "root"}`}
+                  className="grid place-items-center w-4 h-4 -ml-0.5 rounded hover:bg-zinc-700/40 shrink-0"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ChevronRight
+                    className={cn(
+                      "w-3 h-3 text-zinc-500 transition-transform",
+                      open && "rotate-90"
+                    )}
                   />
-                ) : (
-                  <span className="truncate flex-1">{node.name || "(root)"}</span>
-                )}
-                {!isRenaming && (node.children || []).filter((c) => c.kind === "file").length > 0 && (
-                  <span className="text-[10px] text-zinc-500 shrink-0 tabular-nums">
-                    {(node.children || []).filter((c) => c.kind === "file").length}
-                  </span>
-                )}
-              </button>
-            </Collapsible.Trigger>
-            <Collapsible.Content>
-              {(node.children || []).map((child) => (
-                <TreeRow
-                  key={child.path}
-                  node={child}
-                  depth={depth + 1}
-                  selectedPath={selectedPath}
-                  renaming={renaming}
-                  activeDragPath={activeDragPath}
-                  onSelect={onSelect}
-                  onStartRename={onStartRename}
-                  onCommitRename={onCommitRename}
-                  onContextNew={onContextNew}
-                  onContextMove={onContextMove}
-                  onContextDelete={onContextDelete}
+                </button>
+              </Collapsible.Trigger>
+              {open
+                ? <FolderOpen className="w-4 h-4 text-amber-400 shrink-0" />
+                : <Folder className="w-4 h-4 text-amber-500 shrink-0" />}
+              {isRenaming ? (
+                <RenameInput
+                  ref={renameInputRef}
+                  initial={node.name}
+                  onCommit={(n) => onCommitRename(node, n)}
+                  onCancel={() => onCommitRename(node, node.name)}
                 />
-              ))}
-            </Collapsible.Content>
-          </Collapsible.Root>
-        ) : (
+              ) : (
+                <span className="truncate flex-1">{node.name || "(root)"}</span>
+              )}
+              {!isRenaming && (node.children || []).filter((c) => c.kind === "file").length > 0 && (
+                <span className="text-[10px] text-zinc-500 shrink-0 tabular-nums">
+                  {(node.children || []).filter((c) => c.kind === "file").length}
+                </span>
+              )}
+            </div>
+          </ContextMenu.Trigger>
+          <FolderRowContextItems
+            node={node}
+            depth={depth}
+            readOnly={readOnly}
+            onContextNew={onContextNew}
+            onContextRename={onContextRename}
+            onContextMove={onContextMove}
+            onContextDelete={onContextDelete}
+          />
+        </ContextMenu.Root>
+        <Collapsible.Content>
+          {(node.children || []).map((child) => (
+            <TreeRow
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              selectedPath={selectedPath}
+              renaming={renaming}
+              activeDragPath={activeDragPath}
+              readOnly={readOnly}
+              onSelect={onSelect}
+              onStartRename={onStartRename}
+              onCommitRename={onCommitRename}
+              onContextNew={onContextNew}
+              onContextRename={onContextRename}
+              onContextMove={onContextMove}
+              onContextDelete={onContextDelete}
+            />
+          ))}
+        </Collapsible.Content>
+      </Collapsible.Root>
+    )
+  }
+
+  // ── File row ── single <button>; no nesting concern.
+  return (
+    <div ref={setRefs} {...drag.attributes} {...drag.listeners} style={dragRowStyle}>
+      <ContextMenu.Root>
+        <ContextMenu.Trigger asChild>
           <button
+            type="button"
             onClick={() => !isRenaming && onSelect(node.path)}
             onKeyDown={handleKey}
-            onDoubleClick={(e) => { e.stopPropagation(); onStartRename(node.path) }}
+            onDoubleClick={(e) => {
+              e.stopPropagation()
+              if (!readOnly) onStartRename(node.path)
+            }}
             className={cn(
               "flex items-center gap-1 w-full text-left py-1 rounded transition-colors px-2",
               isSelected
@@ -546,41 +651,115 @@ function TreeRow({
               <span className="text-[9px] text-zinc-600 shrink-0">↗</span>
             )}
           </button>
-        )}
-      </ContextMenu.Trigger>
-
-      <ContextMenu.Portal>
-        <ContextMenu.Content className="min-w-[180px] bg-zinc-900 border border-zinc-800 rounded-md shadow-xl py-1 text-sm">
-          {node.kind === "folder" && (
-            <>
-              <CtxItem icon={<FilePlus className="w-3.5 h-3.5" />} onSelect={() => onContextNew("file", node.path)}>New file here</CtxItem>
-              <CtxItem icon={<FolderPlus className="w-3.5 h-3.5" />} onSelect={() => onContextNew("folder", node.path)}>New folder here</CtxItem>
-              <ContextMenu.Separator className="h-px bg-zinc-800 my-1" />
-            </>
-          )}
-          {depth > 0 && (
-            <CtxItem icon={<Pencil className="w-3.5 h-3.5" />} onSelect={() => onStartRename(node.path)}>
-              Rename <span className="ml-auto text-[10px] text-zinc-500">F2</span>
-            </CtxItem>
-          )}
-          <CtxItem icon={<FolderInput className="w-3.5 h-3.5" />} onSelect={() => onContextMove(node)}>Move to…</CtxItem>
-          <ContextMenu.Separator className="h-px bg-zinc-800 my-1" />
-          <CtxItem icon={<Trash2 className="w-3.5 h-3.5 text-red-400" />} className="text-red-400" onSelect={() => onContextDelete(node)}>Delete</CtxItem>
-        </ContextMenu.Content>
-      </ContextMenu.Portal>
-    </ContextMenu.Root>
+        </ContextMenu.Trigger>
+        <FileRowContextItems
+          node={node}
+          readOnly={readOnly}
+          onContextRename={onContextRename}
+          onContextMove={onContextMove}
+          onContextDelete={onContextDelete}
+        />
+      </ContextMenu.Root>
     </div>
   )
-
-  return rowContent
 }
 
-function CtxItem({ icon, onSelect, children, className }: { icon: React.ReactNode; onSelect: () => void; children: React.ReactNode; className?: string }) {
+// ─── Context-menu items ──────────────────────────────────────────
+
+function FolderRowContextItems({
+  node, depth, readOnly,
+  onContextNew, onContextRename, onContextMove, onContextDelete,
+}: {
+  node: TreeNode
+  depth: number
+  readOnly: boolean
+  onContextNew: (kind: "file" | "folder", parent: string) => void
+  onContextRename: (n: TreeNode) => void
+  onContextMove: (n: TreeNode) => void
+  onContextDelete: (n: TreeNode) => void
+}) {
+  return (
+    <ContextMenu.Portal>
+      <ContextMenu.Content className="min-w-[180px] bg-zinc-900 border border-zinc-800 rounded-md shadow-xl py-1 text-sm">
+        {!readOnly && (
+          <>
+            <CtxItem icon={<FilePlus className="w-3.5 h-3.5" />} onSelect={() => onContextNew("file", node.path)}>New file here</CtxItem>
+            <CtxItem icon={<FolderPlus className="w-3.5 h-3.5" />} onSelect={() => onContextNew("folder", node.path)}>New folder here</CtxItem>
+            <ContextMenu.Separator className="h-px bg-zinc-800 my-1" />
+            {/* BUG-018: rename available at every depth */}
+            <CtxItem icon={<Pencil className="w-3.5 h-3.5" />} onSelect={() => onContextRename(node)}>
+              Rename <span className="ml-auto text-[10px] text-zinc-500">F2</span>
+            </CtxItem>
+            <CtxItem icon={<FolderInput className="w-3.5 h-3.5" />} onSelect={() => onContextMove(node)}>Move to…</CtxItem>
+            <ContextMenu.Separator className="h-px bg-zinc-800 my-1" />
+            <CtxItem
+              icon={<Trash2 className="w-3.5 h-3.5 text-red-400" />}
+              className="text-red-400"
+              onSelect={() => onContextDelete(node)}
+              disabled={depth === 0}
+            >
+              Delete
+            </CtxItem>
+          </>
+        )}
+        {readOnly && (
+          <div className="px-3 py-2 text-[11px] text-zinc-500">
+            Read-only · time travel
+          </div>
+        )}
+      </ContextMenu.Content>
+    </ContextMenu.Portal>
+  )
+}
+
+function FileRowContextItems({
+  node, readOnly,
+  onContextRename, onContextMove, onContextDelete,
+}: {
+  node: TreeNode
+  readOnly: boolean
+  onContextRename: (n: TreeNode) => void
+  onContextMove: (n: TreeNode) => void
+  onContextDelete: (n: TreeNode) => void
+}) {
+  return (
+    <ContextMenu.Portal>
+      <ContextMenu.Content className="min-w-[180px] bg-zinc-900 border border-zinc-800 rounded-md shadow-xl py-1 text-sm">
+        {!readOnly ? (
+          <>
+            {/* BUG-018: rename always available, including for root files */}
+            <CtxItem icon={<Pencil className="w-3.5 h-3.5" />} onSelect={() => onContextRename(node)}>
+              Rename <span className="ml-auto text-[10px] text-zinc-500">F2</span>
+            </CtxItem>
+            <CtxItem icon={<FolderInput className="w-3.5 h-3.5" />} onSelect={() => onContextMove(node)}>Move to…</CtxItem>
+            <ContextMenu.Separator className="h-px bg-zinc-800 my-1" />
+            <CtxItem icon={<Trash2 className="w-3.5 h-3.5 text-red-400" />} className="text-red-400" onSelect={() => onContextDelete(node)}>Delete</CtxItem>
+          </>
+        ) : (
+          <div className="px-3 py-2 text-[11px] text-zinc-500">
+            Read-only · time travel
+          </div>
+        )}
+      </ContextMenu.Content>
+    </ContextMenu.Portal>
+  )
+}
+
+function CtxItem({
+  icon, onSelect, children, className, disabled,
+}: {
+  icon: React.ReactNode
+  onSelect: () => void
+  children: React.ReactNode
+  className?: string
+  disabled?: boolean
+}) {
   return (
     <ContextMenu.Item
       onSelect={onSelect}
+      disabled={disabled}
       className={cn(
-        "flex items-center gap-2 px-3 py-1.5 cursor-pointer outline-none data-[highlighted]:bg-zinc-800 text-zinc-200",
+        "flex items-center gap-2 px-3 py-1.5 cursor-pointer outline-none data-[highlighted]:bg-zinc-800 text-zinc-200 data-[disabled]:opacity-50 data-[disabled]:cursor-not-allowed",
         className
       )}
     >
@@ -650,6 +829,46 @@ function NewItemDialog({ open, kind, parent, onClose, onCreate }: {
   )
 }
 
+// BUG-018: dedicated rename dialog for users who prefer a confirmation modal
+// over the inline F2 / double-click rename input.
+function RenameDialog({ node, onClose, onCommit }: {
+  node: TreeNode | null
+  onClose: () => void
+  onCommit: (n: TreeNode, newName: string) => void
+}) {
+  const [name, setName] = useState("")
+  useEffect(() => { setName(node?.name ?? "") }, [node])
+  return (
+    <Dialog open={!!node} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Rename {node?.name}</DialogTitle>
+        </DialogHeader>
+        <Input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && name.trim() && node) onCommit(node, name.trim())
+          }}
+        />
+        <p className="text-xs text-zinc-500">
+          Files keep their content; references in other files won&apos;t auto-update.
+        </p>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button
+            disabled={!name.trim() || !node || name.trim() === node.name}
+            onClick={() => node && onCommit(node, name.trim())}
+          >
+            Rename
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function MoveDialog({ node, tree, onClose, onMove }: {
   node: TreeNode | null
   tree: TreeNode[]
@@ -657,6 +876,11 @@ function MoveDialog({ node, tree, onClose, onMove }: {
   onMove: (n: TreeNode, newParent: string) => void
 }) {
   const folders = useMemo(() => collectFolders(tree, []), [tree])
+  // BUG-017: hide /.trash and any descendants from the destination list.
+  const visibleFolders = useMemo(
+    () => folders.filter((f) => f !== "/.trash" && !f.startsWith("/.trash/")),
+    [folders]
+  )
   const [target, setTarget] = useState<string>("/")
   return (
     <Dialog open={!!node} onOpenChange={(v) => !v && onClose()}>
@@ -665,7 +889,7 @@ function MoveDialog({ node, tree, onClose, onMove }: {
           <DialogTitle>Move {node?.name} to…</DialogTitle>
         </DialogHeader>
         <div className="max-h-64 overflow-y-auto -mx-1 px-1">
-          {folders
+          {visibleFolders
             .filter((f) => !node || (f !== node.path && !f.startsWith(node.path + "/")))
             .map((f) => (
               <button
