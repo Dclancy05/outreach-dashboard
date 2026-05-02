@@ -105,11 +105,13 @@ export function JarvisHeader({ liveActivity = false }: JarvisHeaderProps) {
           </span>
         </div>
         <Link
-          href="/agency/settings"
+          href="/jarvis/settings"
           aria-label="Account settings"
+          title="Account settings"
           className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-mem-border bg-mem-surface-1 text-mem-text-secondary transition-colors hover:border-mem-border-strong hover:text-mem-text-primary"
         >
           <User className="h-4 w-4" />
+          <span className="sr-only">Account settings</span>
         </Link>
       </div>
     </header>
