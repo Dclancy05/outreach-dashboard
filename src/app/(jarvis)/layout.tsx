@@ -32,6 +32,8 @@ import { useSidebarCollapse } from "@/components/jarvis/shell/jarvis-shell-provi
 import { WelcomeWizardTrigger } from "@/components/jarvis/onboarding/welcome-wizard-trigger"
 import { InboxDrawerProvider } from "@/components/inbox/inbox-drawer-provider"
 import { InboxDrawer } from "@/components/inbox/inbox-drawer"
+import { JarvisHelpOverlayProvider } from "@/components/jarvis/help/jarvis-help-overlay"
+import { JarvisGoNavListener } from "@/components/jarvis/help/jarvis-go-nav-listener"
 
 interface JarvisLayoutProps {
   children: ReactNode
@@ -47,12 +49,15 @@ export default function JarvisLayout({ children }: JarvisLayoutProps) {
     <InboxDrawerProvider>
       <JarvisShellProviders>
         <JarvisCmdkProvider>
-          <JarvisModeClass />
-          <JarvisSidebar />
-          <JarvisShellMain>{children}</JarvisShellMain>
-          <JarvisBottomDock />
-          <WelcomeWizardTrigger />
-          <InboxDrawer />
+          <JarvisHelpOverlayProvider>
+            <JarvisModeClass />
+            <JarvisSidebar />
+            <JarvisShellMain>{children}</JarvisShellMain>
+            <JarvisBottomDock />
+            <WelcomeWizardTrigger />
+            <InboxDrawer />
+            <JarvisGoNavListener />
+          </JarvisHelpOverlayProvider>
         </JarvisCmdkProvider>
       </JarvisShellProviders>
     </InboxDrawerProvider>
