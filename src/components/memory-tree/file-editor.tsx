@@ -114,6 +114,22 @@ export function FileEditor({
     }
   }, [path])
 
+  // beforeunload guard: when there's an in-flight save (or content has been
+  // edited but not yet saved by the debounce), warn the user before they
+  // close the tab / navigate away. Closes the data-loss gap Wave 9 flagged.
+  useEffect(() => {
+    const isDirty = saveState === "saving" || saveTimer.current !== null
+    if (!isDirty) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      // Most browsers ignore the custom message, but the empty returnValue
+      // still triggers the native confirmation dialog.
+      e.returnValue = ""
+    }
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [saveState])
+
   const persist = useCallback(async (next: string) => {
     if (readOnly) return // BUG-016: never write when locked
     inFlight.current?.abort()
