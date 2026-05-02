@@ -2307,7 +2307,13 @@ export default function AutomationsPage() {
     fetchDayStats()
     fetchDbAutomations()
     fetchConnectedPlatforms()
-    const h = setInterval(fetchHealth, 15000)
+    // Health every 60s. Was 15s — combined with the global system-pulse poller
+    // and the now-removed /login-status probe inside /api/recordings/health,
+    // this stacked Chrome-navigation traffic to the VPS every ~15s. Even after
+    // decoupling login-status, no need to poll infra status more than once a
+    // minute. (See /root/.claude/plans/funnel-restored-goofy-stearns.md for
+    // the rotation incident write-up.)
+    const h = setInterval(fetchHealth, 60000)
     const s = setInterval(fetchDayStats, 30000)
     const a = setInterval(fetchDbAutomations, 30000)
     const p = setInterval(fetchConnectedPlatforms, 30000)
