@@ -5,6 +5,12 @@
  * Collapsible to a 48px strip on desktop. On mobile (in pane-stack mode) the
  * parent decides visibility; this component just renders the panel.
  *
+ * BUG (W1C right-rail icon-only at <md) fix: when the viewport drops below
+ * md (768px), the rail snaps to icon-only width regardless of the user's
+ * previous toggle. Tapping any icon expands it back to the full panel for
+ * that interaction. This prevents the tab labels (Chat/Info/History/Memories)
+ * from clipping at narrow widths.
+ *
  * - Chat       — context-aware AI chat (uses /api/memories/inject for context)
  * - Info       — file metadata (path, size, last edit, etc.)
  * - History    — file modtime list (vault) or memory_versions if a memory is selected
@@ -29,8 +35,27 @@ interface Props {
   defaultCollapsed?: boolean
 }
 
+// BUG (W1C) fix: media-query hook scoped to <md so the rail collapses to
+// icon-only on small tablets / large phones where labels would clip.
+function useBelowMd(): boolean {
+  const [below, setBelow] = React.useState(false)
+  React.useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)")
+    const handler = (e: MediaQueryListEvent | MediaQueryList) =>
+      setBelow("matches" in e ? e.matches : (e as MediaQueryList).matches)
+    handler(mq)
+    mq.addEventListener("change", handler)
+    return () => mq.removeEventListener("change", handler)
+  }, [])
+  return below
+}
+
 export function RightRail({ path, businessId, defaultCollapsed = false }: Props) {
-  const [collapsed, setCollapsed] = React.useState(defaultCollapsed)
+  const belowMd = useBelowMd()
+  const [userCollapsed, setUserCollapsed] = React.useState(defaultCollapsed)
+  // BUG (W1C) fix: at <md the rail is forced icon-only regardless of user
+  // preference. Above md the user toggle still wins.
+  const collapsed = belowMd ? true : userCollapsed
   const [tab, setTab] = React.useState<Tab>("chat")
 
   const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
@@ -88,7 +113,9 @@ export function RightRail({ path, businessId, defaultCollapsed = false }: Props)
                 key={t.id}
                 onClick={() => {
                   setTab(t.id)
-                  setCollapsed(false)
+                  // BUG (W1C) fix: at <md we don't expand the rail (no room);
+                  // above md we expand to show the panel content as before.
+                  if (!belowMd) setUserCollapsed(false)
                 }}
                 className={cn(
                   "h-7 w-7 grid place-items-center rounded-md transition-colors",
@@ -97,21 +124,26 @@ export function RightRail({ path, businessId, defaultCollapsed = false }: Props)
                     : "text-mem-text-secondary hover:text-mem-text-primary hover:bg-mem-surface-2"
                 )}
                 aria-label={t.label}
+                title={t.label}
               >
                 <Icon size={14} />
               </button>
             )
           })}
-        <button
-          onClick={() => setCollapsed((c) => !c)}
-          aria-label={collapsed ? "Expand side panel" : "Collapse side panel"}
-          className={cn(
-            "h-6 w-6 grid place-items-center rounded-md text-mem-text-muted hover:text-mem-text-primary hover:bg-mem-surface-2 transition-colors",
-            !collapsed && "ml-auto"
-          )}
-        >
-          {collapsed ? <ChevronLeft size={12} /> : <ChevronRight size={12} />}
-        </button>
+        {/* BUG (W1C) fix: hide the chevron toggle at <md — there's no expanded
+            state to toggle to since the rail is force-collapsed. */}
+        {!belowMd && (
+          <button
+            onClick={() => setUserCollapsed((c) => !c)}
+            aria-label={collapsed ? "Expand side panel" : "Collapse side panel"}
+            className={cn(
+              "h-6 w-6 grid place-items-center rounded-md text-mem-text-muted hover:text-mem-text-primary hover:bg-mem-surface-2 transition-colors",
+              !collapsed && "ml-auto"
+            )}
+          >
+            {collapsed ? <ChevronLeft size={12} /> : <ChevronRight size={12} />}
+          </button>
+        )}
       </div>
 
       {!collapsed && (

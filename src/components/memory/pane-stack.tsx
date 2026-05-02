@@ -7,9 +7,12 @@
  *   - "file"  : full-width editor; back button returns to tree
  *   - "rail"  : full-width right rail (Chat/Info/History/Memories); back returns to file
  *
- * Used at viewports < 1024px. Triggered by the parent page when window width
- * drops below the breakpoint. Selecting a file in tree advances to "file";
- * tapping the rail icon advances to "rail".
+ * BUG (W1C tablet breakpoint mismatch): Used at viewports < 768px (md). Spec
+ * wants 2-pane at 768-1024 (tablet), so tablets are NOT considered mobile here
+ * any more — they get the dual-pane layout the parent renders for >= md.
+ * Triggered by the parent page when the viewport width drops below md.
+ * Selecting a file in tree advances to "file"; tapping the rail icon advances
+ * to "rail".
  */
 import * as React from "react"
 import { ArrowLeft, MessageSquare } from "lucide-react"
@@ -73,11 +76,17 @@ export function PaneStack({
   )
 }
 
-/** Hook: tracks whether the viewport is below the lg breakpoint (1024px). */
+/**
+ * Hook: tracks whether the viewport is below the md breakpoint (768px).
+ *
+ * BUG (W1C tablet breakpoint) fix: previously used `lg` (1024px), which forced
+ * tablets (768-1023) into the single-pane stack. Spec calls for 2-pane on
+ * tablet, so the threshold drops to `md` and tablets are no longer "mobile".
+ */
 export function useIsMobile(): boolean {
   const [isMobile, setIsMobile] = React.useState(false)
   React.useEffect(() => {
-    const mq = window.matchMedia("(max-width: 1023px)")
+    const mq = window.matchMedia("(max-width: 767px)")
     const handler = (e: MediaQueryListEvent | MediaQueryList) =>
       setIsMobile("matches" in e ? e.matches : (e as MediaQueryList).matches)
     handler(mq)

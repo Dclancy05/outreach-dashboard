@@ -15,6 +15,7 @@ import {
   Bot,
   Brain,
   ChevronLeft,
+  Eye,
   PanelLeft,
   PlayCircle,
   Plug,
@@ -60,6 +61,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/jarvis/terminals", label: "Terminals", icon: Terminal },
   { href: "/jarvis/inbox", label: "Inbox", icon: Bell },
   { href: "/jarvis/mcps", label: "MCPs", icon: Plug },
+  { href: "/jarvis/observability", label: "Observability", icon: Eye },
 ]
 
 /* -------------------------------------------------------------------------- */

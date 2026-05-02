@@ -5,6 +5,9 @@
  * if the configured URL is unreachable).
  *
  * Polls /api/memory-vault/status every 30s.
+ *
+ * BUG-025 fix: latency chip turns yellow > 200ms and red > 500ms; tooltip
+ * explains "VPS round-trip latency from your browser".
  */
 import { useEffect, useState } from "react"
 import { CheckCircle2, AlertTriangle, ServerOff, Server } from "lucide-react"
@@ -21,6 +24,16 @@ type Status = {
   remote_ts?: string | null
   ts?: string
   error?: string
+}
+
+// BUG-025 fix: latency thresholds. <=200ms = good, 201-500 = warning, >500 = bad.
+const LATENCY_WARN_MS = 200
+const LATENCY_BAD_MS = 500
+
+function latencyColorClass(ms: number): string {
+  if (ms > LATENCY_BAD_MS) return "text-red-400"
+  if (ms > LATENCY_WARN_MS) return "text-amber-400"
+  return "text-zinc-500"
 }
 
 export function VpsStatusBadge() {
@@ -98,7 +111,13 @@ export function VpsStatusBadge() {
         <Icon className="w-3 h-3" />
         <span className="font-medium">{shortHost}</span>
         {ok && typeof status.latency_ms === "number" && (
-          <span className="text-zinc-500">{status.latency_ms}ms</span>
+          // BUG-025 fix: color the chip + tooltip explains the meaning.
+          <span
+            className={latencyColorClass(status.latency_ms)}
+            title="VPS round-trip latency from your browser"
+          >
+            {status.latency_ms}ms
+          </span>
         )}
       </button>
 
@@ -123,7 +142,11 @@ export function VpsStatusBadge() {
             {status.path && status.path !== "/" && <Row label="Path" value={status.path} />}
             <Row label="Vault root" value={status.vault_root || "—"} />
             {typeof status.latency_ms === "number" && (
-              <Row label="Latency" value={`${status.latency_ms} ms`} />
+              <Row
+                label="Latency"
+                value={`${status.latency_ms} ms`}
+                valueClass={latencyColorClass(status.latency_ms)}
+              />
             )}
             {status.remote_ts && <Row label="Remote time" value={new Date(status.remote_ts).toLocaleTimeString()} />}
             {status.error && (
