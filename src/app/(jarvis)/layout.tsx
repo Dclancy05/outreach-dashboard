@@ -42,7 +42,9 @@ interface JarvisLayoutProps {
 export default function JarvisLayout({ children }: JarvisLayoutProps) {
   // InboxDrawerProvider wraps everything that uses useInboxDrawer (the
   // header InboxBell calls it). Sibling route groups don't inherit from
-  // (dashboard)/layout.tsx, so we mount our own copy here.
+  // (dashboard)/layout.tsx, so we mount our own copy here. Without this,
+  // every /jarvis/* page crashed at hydration with
+  // "useInboxDrawer must be used inside <InboxDrawerProvider>".
   return (
     <InboxDrawerProvider>
       <JarvisShellProviders>
