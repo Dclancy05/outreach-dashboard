@@ -233,7 +233,10 @@ function WorkflowPicker({
 }) {
   return (
     <Select value={activeId ?? undefined} onValueChange={onChange}>
-      <SelectTrigger className="h-8 w-[220px] sm:w-[280px] bg-mem-surface-1 border-mem-border text-mem-text-primary text-[12px]">
+      <SelectTrigger
+        aria-label="Choose workflow"
+        className="h-8 w-[220px] sm:w-[280px] bg-mem-surface-1 border-mem-border text-mem-text-primary text-[12px]"
+      >
         <SelectValue placeholder="Pick a workflow" />
       </SelectTrigger>
       <SelectContent>

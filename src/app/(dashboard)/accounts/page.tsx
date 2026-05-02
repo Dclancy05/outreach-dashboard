@@ -368,6 +368,24 @@ export default function AccountsPage() {
   const [testingDirectApi, setTestingDirectApi] = useState(false)
   const [limitMode, setLimitMode] = useState<"daily" | "warmup">("daily")
   const [activeTab, setActiveTab] = useState("groups")
+  // Wave 9.7.5.T A&P testing flagged: `?tab=X` deep-link wasn't honored on
+  // first paint. Wizard "Make new sequence" (A&P slice #14) relies on
+  // /accounts?tab=warmup&new=1 to open the warmup creator dialog.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const params = new URLSearchParams(window.location.search)
+    const tab = params.get("tab")
+    if (tab === "warmup" || tab === "accounts" || tab === "proxies" || tab === "groups") {
+      setActiveTab(tab)
+    }
+    if (params.get("new") === "1") {
+      // Defer one tick so the Warmup tab is rendered before the dialog mounts.
+      setTimeout(() => {
+        setEditingWarmupId(null)
+        setShowWarmupForm(true)
+      }, 80)
+    }
+  }, [])
   const [warmupForm, setWarmupForm] = useState({ name: "", platform: "", steps: [{ day_start: 1, day_end: 5, daily_limit: 5 }, { day_start: 6, day_end: 10, daily_limit: 10 }, { day_start: 11, day_end: 20, daily_limit: 20 }, { day_start: 21, day_end: 999, daily_limit: 40 }] })
   const [editingWarmupId, setEditingWarmupId] = useState<string | null>(null)
   const [warmupAccountsFor, setWarmupAccountsFor] = useState<WarmupSequence | null>(null)

@@ -176,8 +176,12 @@ const ACTION_BLOCKS = [
   { id: "li_msg", platform: "linkedin", action: "message", label: "LI Message", hasMessage: true, hasSubject: false, category: "DM" },
   { id: "li_connect", platform: "linkedin", action: "connect", label: "LI Connect", hasMessage: true, hasSubject: false, category: "Connect" },
   { id: "ig_follow", platform: "instagram", action: "follow", label: "IG Follow", hasMessage: false, hasSubject: false, category: "Connect" },
-  { id: "email", platform: "email", action: "message", label: "Email", hasMessage: true, hasSubject: true, category: "Email" },
-  { id: "sms", platform: "sms", action: "message", label: "SMS", hasMessage: true, hasSubject: false, category: "Email" },
+  { id: "email", platform: "email", action: "message", label: "Email (Generic)", hasMessage: true, hasSubject: true, category: "Email" },
+  // Backend integration: send-email route routes to Instantly when action="message_instantly".
+  { id: "email_instantly", platform: "email", action: "message_instantly", label: "Email via Instantly", hasMessage: true, hasSubject: true, category: "Email" },
+  { id: "sms", platform: "sms", action: "message", label: "SMS (Generic)", hasMessage: true, hasSubject: false, category: "Email" },
+  // Backend integration: send-sms route routes to GHL when action="message_ghl".
+  { id: "sms_ghl", platform: "sms", action: "message_ghl", label: "SMS via GHL", hasMessage: true, hasSubject: false, category: "Email" },
 ]
 
 const VARIABLE_CHIPS = ["{{name}}", "{{niche}}", "{{business}}"]
@@ -218,6 +222,68 @@ function getPlatformUrl(lead: Lead, platform: string): string {
     case "phone": case "sms": return lead.phone || ""
     default: return ""
   }
+}
+
+/**
+ * Pre-flight per-day capacity check.
+ *
+ * For the chosen leads × sequence × accounts, project how many sends each
+ * account would do on each day_offset and compare to its daily_limit. We
+ * use a deterministic round-robin (not the random launch path) so the
+ * preview is stable on re-render. The actual launch may differ slightly,
+ * which is why the warning copy says "estimate".
+ *
+ * Returns a flat list of (day, accountId, projected, limit, exceeds).
+ */
+function computeDayCaps(
+  leads: Lead[],
+  sequence: Sequence,
+  selectedAccountIds: string[],
+  accountsData: Account[],
+): { day: number; accountId: string; projected: number; limit: number; exceeds: boolean }[] {
+  const dayAccountSends: Record<number, Record<string, number>> = {}
+
+  // Round-robin per (day, platform) so the preview is deterministic.
+  const rrCursor: Record<string, number> = {}
+
+  for (const lead of leads) {
+    for (const step of Object.values(sequence.steps || {})) {
+      const day = step.day_offset || 0
+      const platform = step.platform || ""
+      if (!platform) continue
+
+      // Skip steps the lead has no URL for — same as actual launch.
+      if (!getPlatformUrl(lead, platform)) continue
+
+      const accts = accountsData.filter(
+        a => selectedAccountIds.includes(a.account_id) && a.platform === platform,
+      )
+      if (accts.length === 0) continue
+
+      const rrKey = `${day}|${platform}`
+      const idx = (rrCursor[rrKey] || 0) % accts.length
+      rrCursor[rrKey] = (rrCursor[rrKey] || 0) + 1
+      const acctId = accts[idx].account_id
+
+      if (!dayAccountSends[day]) dayAccountSends[day] = {}
+      dayAccountSends[day][acctId] = (dayAccountSends[day][acctId] || 0) + 1
+    }
+  }
+
+  const result: { day: number; accountId: string; projected: number; limit: number; exceeds: boolean }[] = []
+  for (const [dayStr, acctMap] of Object.entries(dayAccountSends)) {
+    const day = parseInt(dayStr)
+    for (const [acctId, count] of Object.entries(acctMap)) {
+      const acct = accountsData.find(a => a.account_id === acctId)
+      const limit = parseInt(acct?.daily_limit || "40") || 40
+      result.push({
+        day, accountId: acctId, projected: count, limit,
+        exceeds: count > limit,
+      })
+    }
+  }
+
+  return result
 }
 
 /* ─── SEQUENCE BUILDER DIALOG ─── */
@@ -720,6 +786,10 @@ export default function OutreachPage() {
   const [matchingLeadCount, setMatchingLeadCount] = useState<number | null>(null)
   const [matchingLeads, setMatchingLeads] = useState<Lead[]>([])
   const [loadingLeadCount, setLoadingLeadCount] = useState(false)
+  // Slice 4 — Step 2 hard-stop dialog. Forces an explicit "remove the bad
+  // leads" or "go back and adjust accounts" choice when some leads don't
+  // have all the platforms the campaign needs. No silent failures.
+  const [showPlatformMissingDialog, setShowPlatformMissingDialog] = useState(false)
 
   // Launch state
   const [launching, setLaunching] = useState(false)
@@ -741,12 +811,24 @@ export default function OutreachPage() {
   // collapsed otherwise (so the picker stays scannable on big accounts).
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set())
   const [pickerGroupsHydrated, setPickerGroupsHydrated] = useState(false)
+
+  // P7 — readiness filters. Default ON (skip the bad accounts) so we keep
+  // today's safe behaviour: Dylan never picks an account that's guaranteed
+  // to fail at launch. Toggling them off lets him surface a problematic
+  // account if he genuinely needs to inspect or unblock it from the picker.
+  const [skipNoProxyGroup, setSkipNoProxyGroup] = useState(true)
+  const [skipExpiredCookies, setSkipExpiredCookies] = useState(true)
+  const [skipPausedWarmup, setSkipPausedWarmup] = useState(true)
   // P5.3 — "all tiles at once" view is on when there are >6 proxy groups.
   const [vncGridView, setVncGridView] = useState(false)
   const [vncHoverTile, setVncHoverTile] = useState<string | null>(null)
 
   // Platform coverage
   const [coverageExpanded, setCoverageExpanded] = useState(false)
+
+  // Step 3 pre-flight cap check (slice 5). Recomputed when sequence /
+  // leads / accounts change. Only entries where exceeds=true are kept.
+  const [capCheckExceeds, setCapCheckExceeds] = useState<ReturnType<typeof computeDayCaps>>([])
 
   // Dialogs
   const [showSequenceBuilder, setShowSequenceBuilder] = useState(false)
@@ -851,6 +933,20 @@ export default function OutreachPage() {
     return () => clearInterval(interval)
   }, [activeCampaign, pollingCampaign])
 
+  // Slice 4 — auto-open the Step 2 hard-stop dialog whenever some leads
+  // are missing required platforms. Closing happens automatically once the
+  // condition resolves (Remove trims the bad leads → no more missing) or
+  // when the user goes back to Step 1 (Step 2 unmounts).
+  useEffect(() => {
+    if (campaignStep !== 2 || matchingLeads.length === 0) {
+      setShowPlatformMissingDialog(false)
+      return
+    }
+    const selectedPlatforms = [...new Set(accounts.filter(a => selectedAccounts.includes(a.account_id)).map(a => a.platform))]
+    const hasMissing = matchingLeads.some(lead => selectedPlatforms.some(p => !getPlatformUrl(lead, p)))
+    setShowPlatformMissingDialog(hasMissing)
+  }, [campaignStep, matchingLeads, selectedAccounts, accounts])
+
   // Compute platform coverage
   const selectedSeq = sequences.find(s => s.sequence_id === selectedSequence)
   const seqSteps = selectedSeq?.steps || {}
@@ -887,6 +983,18 @@ export default function OutreachPage() {
     }
     return { fullCoverage, missingLeads, extraPlatforms: [...extraPlatforms], missingByPlatform }
   }, [selectedSeq, matchingLeads, seqPlatforms])
+
+  // Slice 5 — pre-flight per-day cap check. Recompute whenever the
+  // selected sequence, picked leads, or selected accounts change.
+  // Only retains entries where projected > daily_limit.
+  useEffect(() => {
+    if (selectedSeq && matchingLeads.length > 0 && selectedAccounts.length > 0) {
+      const exceeds = computeDayCaps(matchingLeads, selectedSeq, selectedAccounts, accounts)
+      setCapCheckExceeds(exceeds.filter(x => x.exceeds))
+    } else {
+      setCapCheckExceeds([])
+    }
+  }, [selectedSeq, matchingLeads, selectedAccounts, accounts])
 
   async function togglePlatform(platform: string, action: string) {
     await fetch("/api/automation/status", {
@@ -1276,6 +1384,42 @@ export default function OutreachPage() {
                 <Input placeholder="e.g. NYC Restaurants April" value={campaignName} onChange={e => setCampaignName(e.target.value)} className="rounded-xl max-w-md" />
               </div>
 
+              {/* P7 — Readiness filters. Default ON so the picker only shows
+                  accounts that can actually send right now. Toggle off to
+                  inspect / pick an account that's currently parked. */}
+              <div className="mb-4 p-3 rounded-xl bg-muted/10 border border-border/30 space-y-2">
+                <p className="text-xs font-medium text-muted-foreground uppercase">Skip accounts with</p>
+                <div className="flex flex-wrap gap-4">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={skipNoProxyGroup}
+                      onChange={e => setSkipNoProxyGroup(e.target.checked)}
+                      className="w-4 h-4 rounded border-border accent-violet-500"
+                    />
+                    <span className="text-muted-foreground">No proxy group</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={skipExpiredCookies}
+                      onChange={e => setSkipExpiredCookies(e.target.checked)}
+                      className="w-4 h-4 rounded border-border accent-violet-500"
+                    />
+                    <span className="text-muted-foreground">Expired cookies</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={skipPausedWarmup}
+                      onChange={e => setSkipPausedWarmup(e.target.checked)}
+                      className="w-4 h-4 rounded border-border accent-violet-500"
+                    />
+                    <span className="text-muted-foreground">Paused warmup</span>
+                  </label>
+                </div>
+              </div>
+
               <Label className="mb-2 block">Sending Accounts</Label>
               {(() => {
                 // P3.B — folder-grouped picker. Filter accounts that *can*
@@ -1283,12 +1427,20 @@ export default function OutreachPage() {
                 // Email/SMS accounts don't need a proxy, so they always pass
                 // the proxy gate and live in the "No Group (direct API)" bucket.
                 const sendable = accounts.filter(a => {
+                  // Hard filters — these are non-negotiable. Inactive
+                  // accounts can't send; Google booster accounts aren't
+                  // senders by design.
                   if (a.status !== "active") return false
                   if (a.platform === "google") return false
-                  if (a.session_status === "expired" || a.session_status === "needs_signin") return false
-                  if (a.warmup_paused === true) return false
+                  // Soft filters — Dylan can toggle these off to inspect a
+                  // problematic account. Default behaviour skips them so a
+                  // launch never queues guaranteed failures.
+                  if (skipExpiredCookies && (a.session_status === "expired" || a.session_status === "needs_signin")) return false
+                  if (skipPausedWarmup && a.warmup_paused === true) return false
                   const isDirectApi = a.platform === "email" || a.platform === "sms"
-                  if (!isDirectApi && !a.proxy_group_id) return false
+                  // Email / SMS never need a proxy, so the no-proxy filter
+                  // simply doesn't apply to them.
+                  if (skipNoProxyGroup && !isDirectApi && !a.proxy_group_id) return false
                   return true
                 })
 
@@ -1491,37 +1643,73 @@ export default function OutreachPage() {
                 )}
               </div>
 
-              {/* Platform filtration errors */}
-              {hasMissingError && matchingLeads.length > 0 && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-3 p-3 rounded-xl border border-red-500/30 bg-red-500/5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <XCircle className="h-4 w-4 text-red-400" />
-                    <span className="text-sm font-medium text-red-400">{leadsWithMissing.length} leads are missing required platforms</span>
-                  </div>
-                  <div className="space-y-1 max-h-24 overflow-y-auto">
-                    {leadsWithMissing.slice(0, 5).map(lead => (
+              {/* Slice 4 — Platform filtration HARD STOP (replaces the old
+                  banner). Modal: cannot be dismissed by clicking outside —
+                  user must explicitly choose to remove the bad leads or go
+                  back and adjust account selection. No silent failures. */}
+              <Dialog
+                open={showPlatformMissingDialog && hasMissingError && matchingLeads.length > 0}
+                onOpenChange={(open) => {
+                  // Block "X" button and outside-click closes — the only
+                  // legitimate exits are "Remove" or "Go Back".
+                  if (!open) return
+                  setShowPlatformMissingDialog(open)
+                }}
+              >
+                <DialogContent className="max-w-md rounded-2xl" onInteractOutside={(e) => e.preventDefault()} onEscapeKeyDown={(e) => e.preventDefault()}>
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2 text-red-400">
+                      <XCircle className="h-5 w-5" />
+                      {leadsWithMissing.length} {leadsWithMissing.length === 1 ? "Lead" : "Leads"} Missing Required Platforms
+                    </DialogTitle>
+                    <DialogDescription>
+                      These leads don&apos;t have all the platforms your selected accounts cover.
+                      You must either remove them or go back and adjust your account selection.
+                    </DialogDescription>
+                  </DialogHeader>
+
+                  <div className="max-h-40 overflow-y-auto space-y-1 p-2 bg-muted/10 rounded-lg">
+                    {leadsWithMissing.slice(0, 10).map(lead => (
                       <div key={lead.lead_id} className="text-xs text-muted-foreground flex items-center gap-2">
-                        <span className="truncate">{lead.name || lead.lead_id}</span>
-                        <span className="text-red-400/70">missing: {selectedPlatforms.filter(p => !getPlatformUrl(lead, p)).join(", ")}</span>
+                        <span className="font-medium truncate">{lead.name || lead.lead_id}</span>
+                        <span className="text-red-400/70 shrink-0">missing: {selectedPlatforms.filter(p => !getPlatformUrl(lead, p)).join(", ")}</span>
                       </div>
                     ))}
-                    {leadsWithMissing.length > 5 && <p className="text-xs text-muted-foreground">+{leadsWithMissing.length - 5} more</p>}
+                    {leadsWithMissing.length > 10 && (
+                      <p className="text-xs text-muted-foreground">+{leadsWithMissing.length - 10} more</p>
+                    )}
                   </div>
-                  <div className="flex gap-2 mt-3">
-                    <Button size="sm" variant="destructive" className="rounded-xl text-xs" onClick={() => {
-                      const validIds = new Set(validLeads.map(l => l.lead_id))
-                      setMatchingLeads(matchingLeads.filter(l => validIds.has(l.lead_id)))
-                      setMatchingLeadCount(validLeads.length)
-                      toast.success(`Removed ${leadsWithMissing.length} leads with missing platforms`)
-                    }}>
-                      Remove {leadsWithMissing.length} leads & continue
+
+                  <div className="flex gap-2 mt-4">
+                    <Button
+                      variant="destructive"
+                      className="flex-1 rounded-xl"
+                      onClick={() => {
+                        const validIds = new Set(validLeads.map(l => l.lead_id))
+                        setMatchingLeads(matchingLeads.filter(l => validIds.has(l.lead_id)))
+                        setMatchingLeadCount(validLeads.length)
+                        toast.success(`Removed ${leadsWithMissing.length} leads with missing platforms`)
+                        // Effect will close the dialog on the next tick when
+                        // hasMissingError flips to false, but close eagerly
+                        // for snappier UX.
+                        setShowPlatformMissingDialog(false)
+                      }}
+                    >
+                      Remove {leadsWithMissing.length} {leadsWithMissing.length === 1 ? "Lead" : "Leads"}
                     </Button>
-                    <Button size="sm" variant="outline" className="rounded-xl text-xs" onClick={() => setCampaignStep(1)}>
+                    <Button
+                      variant="outline"
+                      className="flex-1 rounded-xl"
+                      onClick={() => {
+                        setShowPlatformMissingDialog(false)
+                        setCampaignStep(1)
+                      }}
+                    >
                       Go Back
                     </Button>
                   </div>
-                </motion.div>
-              )}
+                </DialogContent>
+              </Dialog>
 
               {/* Extra platforms warning */}
               {hasExtraWarning && matchingLeads.length > 0 && (
@@ -1718,6 +1906,42 @@ export default function OutreachPage() {
                         💡 Many leads also have <span className="font-medium">{coverageAnalysis.extraPlatforms.join(", ")}</span> — want to add those to the sequence?
                       </p>
                     </div>
+                  )}
+
+                  {/* Slice 5 — Pre-flight per-day cap warnings.
+                      Surfaces accounts that would blow past their daily_limit
+                      on a given day_offset, so Dylan can shift step day_offsets
+                      or pick more accounts before launching. Estimate (uses
+                      round-robin; the real launch may pick differently). */}
+                  {capCheckExceeds.length > 0 && (
+                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                      className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/5">
+                      <div className="flex items-center gap-2 mb-2">
+                        <AlertTriangle className="h-4 w-4 text-amber-400" />
+                        <span className="text-sm font-medium text-amber-400">Daily capacity warnings</span>
+                      </div>
+                      <div className="space-y-1 text-xs text-muted-foreground">
+                        {capCheckExceeds.slice(0, 8).map(cap => {
+                          const acct = accounts.find(a => a.account_id === cap.accountId)
+                          return (
+                            <div key={`${cap.day}-${cap.accountId}`} className="flex items-center gap-2 flex-wrap">
+                              <span>
+                                Day {cap.day}: <span className="font-medium text-foreground/80">@{acct?.username || cap.accountId}</span> would send {cap.projected} (limit {cap.limit})
+                              </span>
+                              <Badge variant="outline" className="text-[10px] bg-amber-500/10 border-amber-500/20 text-amber-400">
+                                +{cap.projected - cap.limit} overflow
+                              </Badge>
+                            </div>
+                          )
+                        })}
+                        {capCheckExceeds.length > 8 && (
+                          <p className="text-xs text-muted-foreground/70">+{capCheckExceeds.length - 8} more</p>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-2">
+                        💡 Tip: Spread the sequence across more days, or add more sending accounts. This is an estimate — launch uses live load balancing.
+                      </p>
+                    </motion.div>
                   )}
 
                   {/* Campaign Intelligence */}

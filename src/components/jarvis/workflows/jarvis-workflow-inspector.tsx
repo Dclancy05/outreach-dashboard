@@ -139,7 +139,7 @@ function NodeInspector({
             value={(data.agent_slug as string) || ""}
             onValueChange={(v) => onChange({ agent_slug: v })}
           >
-            <SelectTrigger>
+            <SelectTrigger aria-label="Choose agent">
               <SelectValue placeholder="Pick an agent" />
             </SelectTrigger>
             <SelectContent>
@@ -222,7 +222,7 @@ function NodeInspector({
               value={(data.mode as string) || "until"}
               onValueChange={(v) => onChange({ mode: v })}
             >
-              <SelectTrigger>
+              <SelectTrigger aria-label="Loop mode">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -309,7 +309,7 @@ function NodeInspector({
               value={(data.channel as string) || "in_app"}
               onValueChange={(v) => onChange({ channel: v })}
             >
-              <SelectTrigger>
+              <SelectTrigger aria-label="Notification channel">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -396,7 +396,7 @@ function WorkflowSettingsPane({
           value={status}
           onValueChange={(v) => setStatus(v as WorkflowStatus)}
         >
-          <SelectTrigger>
+          <SelectTrigger aria-label="Workflow status">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

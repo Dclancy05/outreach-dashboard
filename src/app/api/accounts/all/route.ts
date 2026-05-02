@@ -1,8 +1,29 @@
 // Accounts are Supabase-backed. NEVER embed credentials in source.
-import { NextResponse } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 
 export const dynamic = "force-dynamic"
+
+// HARD SECURITY GATE (Wave 9.T A&P testing finding, P0):
+// Default response strips secrets (password, twofa, emailPassword, cookie)
+// from every account. Pass `?include_secrets=1` to opt-in to the full
+// response — but the caller must also be admin-PIN authenticated (the
+// /accounts route is already PIN-gated by middleware so this stays
+// consistent with the existing trust boundary). Browser code that just
+// needs to render account cards never needs secrets.
+function stripSecretsFromAccount<T extends {
+  password?: string
+  twofa?: string
+  emailPassword?: string
+  cookie?: string
+}>(a: T): T {
+  const next = { ...a }
+  delete next.password
+  delete next.twofa
+  delete next.emailPassword
+  delete next.cookie
+  return next
+}
 
 interface GoLoginProfile {
   id: string
@@ -178,8 +199,10 @@ async function loadAccountsFromSupabase(): Promise<AccountRecord[]> {
   return accounts
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const { searchParams } = new URL(req.url)
+    const includeSecrets = searchParams.get("include_secrets") === "1"
     const accounts = await loadAccountsFromSupabase()
 
     // Fetch live GoLogin profiles (list + individual details for session status)
@@ -282,7 +305,16 @@ export async function GET() {
       return acct
     })
 
-    return NextResponse.json({ accounts: enriched, total: enriched.length })
+    // P0 SECURITY: strip credentials by default. Caller must explicitly opt-in
+    // with ?include_secrets=1 to get password/twofa/emailPassword/cookie in
+    // the response. Reduces XSS impact and accidental log exposure.
+    const safe = includeSecrets ? enriched : enriched.map(stripSecretsFromAccount)
+
+    return NextResponse.json({
+      accounts: safe,
+      total: safe.length,
+      secrets_included: includeSecrets,
+    })
   } catch (error) {
     console.error("Error loading accounts:", error)
     return NextResponse.json({ error: "Failed to load accounts" }, { status: 500 })

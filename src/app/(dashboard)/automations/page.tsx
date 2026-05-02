@@ -11,6 +11,12 @@ import {
   Pencil, Server, Layers, MoreHorizontal,
   MessageCircle as RedditFallbackIcon, Mail as EmailIcon, Smartphone as SmsIcon,
 } from "lucide-react"
+import {
+  ManualStepBuilder,
+  toWireSteps,
+  type ManualStep,
+  type VariantBEntry,
+} from "@/components/automations/manual-step-builder"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   DropdownMenu,
@@ -23,6 +29,11 @@ import { ReplayAutomationDialog } from "@/components/replay-automation-dialog"
 import { RetryQueueWidget } from "@/components/retry-queue-widget"
 import { NudgeBanners } from "@/components/nudge-banners"
 import PlatformLoginModal from "@/components/platform-login-modal"
+import { SparklineChart } from "@/components/automations/sparkline-chart"
+import { VariableAutocomplete } from "@/components/automations/variable-autocomplete"
+import { DryRunResultModal, type DryRunResultPayload } from "@/components/automations/dry-run-result-modal"
+import { ReplayViewerModal } from "@/components/automations/replay-viewer-modal"
+import type { DailySparklinePoint } from "@/lib/api/automations"
 import { useBusinessId } from "@/lib/use-business"
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.08 } } }
@@ -514,6 +525,10 @@ interface DbAutomationRun {
   finished_at: string | null
   error: string | null
   steps_completed: number | null
+  // Populated by /api/automations/list when the recording-service has
+  // captured per-step shots. Optional because older runs predate that
+  // column being persisted from the VPS replay endpoint.
+  screenshot_urls?: string[] | null
 }
 
 /* ─── Add Automation Modal ───
@@ -545,6 +560,9 @@ function AddAutomationModal({
   const [saving, setSaving] = useState(false)
   const [savedId, setSavedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Tier 1 recording flow — opens ManualStepBuilder in a follow-up modal
+  // after the user creates the automation draft.
+  const [stepBuilderOpen, setStepBuilderOpen] = useState(false)
 
   const effectivePlatformKey = initial ? PLATFORM_FROM_DB[initial.platform] || platformKey || "" : platformKey || ""
   const platformLabel = effectivePlatformKey ? platformLabels[effectivePlatformKey] : ""
@@ -645,13 +663,13 @@ function AddAutomationModal({
               <div>
                 <label className="text-sm font-medium mb-1.5 block">Steps</label>
                 <p className="text-[11px] text-muted-foreground mb-1.5">
-                  One step per line, in order. Use {"{variable}"} for anything that changes per lead (e.g. {"{target_handle}"}, {"{message_body}"}).
+                  One step per line, in order. Type <code className="font-mono">{"{{"}</code> to insert a variable like {"{{target_url}}"} or {"{{message}}"}.
                 </p>
-                <textarea
+                <VariableAutocomplete
                   value={steps}
-                  onChange={e => setSteps(e.target.value)}
+                  onChange={setSteps}
                   rows={6}
-                  placeholder={"Navigate to {target_profile_url}\nClick the Message button\nType {message_body}\nPress Enter"}
+                  placeholder={"Navigate to {{target_url}}\nClick the Message button\nType {{message}}\nPress Enter"}
                   className="w-full rounded-xl border border-border/50 bg-muted/20 px-3 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
                 />
               </div>
@@ -713,14 +731,16 @@ function AddAutomationModal({
                 {isEditing ? "Saved!" : "Draft saved"}
               </h3>
               <p className="text-sm text-muted-foreground">
-                Ready to record this automation against the dummy group.
+                Now refine the steps with selectors so the replay engine can run them.
               </p>
             </div>
 
-            <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 text-left text-xs text-amber-300 space-y-1">
-              <p className="font-semibold">Recording coming in next build</p>
-              <p className="text-amber-300/80">
-                The CDP recorder (captures selectors, coords, screenshots) is a separate workstream. Once it ships, this button will open the dummy group VNC with a bubble-per-click sidebar so you can demonstrate the steps.
+            <div className="rounded-xl bg-violet-500/10 border border-violet-500/30 p-3 text-left text-xs text-violet-200 space-y-1">
+              <p className="font-semibold">Tier 1 recording — manual step builder</p>
+              <p className="text-violet-200/80">
+                Open the step builder to add CSS selectors and fallback text for each step. The replay engine
+                cycles through 5 fallback strategies (original → text → shadow DOM → XPath → coordinates) automatically,
+                so you only have to fill what's available. Browser-recorded capture comes in a follow-up phase.
               </p>
             </div>
 
@@ -732,11 +752,11 @@ function AddAutomationModal({
                 Close
               </button>
               <button
-                disabled
-                title="Coming in next build"
-                className="rounded-xl bg-orange-500/30 px-4 py-2 text-sm font-semibold text-white/70 cursor-not-allowed flex items-center gap-1.5"
+                onClick={() => savedId && setStepBuilderOpen(true)}
+                disabled={!savedId}
+                className="rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white flex items-center gap-1.5 transition-colors"
               >
-                <Video className="h-4 w-4" /> Open recording VNC
+                <Video className="h-4 w-4" /> Open step builder
               </button>
             </div>
 
@@ -745,6 +765,21 @@ function AddAutomationModal({
             )}
           </div>
         )}
+
+        {/* Tier 1 manual step builder — renders inline as a secondary modal
+            on top of the AddAutomationModal. Persists to /api/automations/[id]
+            via PATCH; never touches the actual SEND code path. */}
+        {savedId ? (
+          <ManualStepBuilderDialog
+            open={stepBuilderOpen}
+            onClose={() => setStepBuilderOpen(false)}
+            automationId={savedId}
+            onSaved={() => {
+              setStepBuilderOpen(false)
+              onClose()
+            }}
+          />
+        ) : null}
       </motion.div>
     </motion.div>
   )
@@ -770,6 +805,138 @@ const TAG_OPTIONS = ["warmup", "outreach", "engagement", "test"]
 const tagColors: Record<string, string> = {
   warmup: "bg-amber-500/20 text-amber-400", outreach: "bg-blue-500/20 text-blue-400",
   engagement: "bg-purple-500/20 text-purple-400", test: "bg-muted/30 text-muted-foreground",
+}
+
+/* ─── ManualStepBuilderDialog — Tier 1 recording wrapper ───
+ *
+ * Mounted on top of AddAutomationModal after the user saves the draft.
+ * Uses the standalone ManualStepBuilder to collect structured steps,
+ * persists via PATCH /api/automations/[id], then triggers self-test
+ * against the dummy account (existing replay engine, no SEND code path).
+ */
+function ManualStepBuilderDialog({
+  open,
+  onClose,
+  automationId,
+  onSaved,
+}: {
+  open: boolean
+  onClose: () => void
+  automationId: string
+  onSaved: () => void
+}) {
+  const [steps, setStepsState] = useState<ManualStep[]>([])
+  const [variantB, setVariantB] = useState<VariantBEntry[] | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [testStatus, setTestStatus] = useState<string | null>(null)
+
+  if (!open) return null
+
+  async function save() {
+    if (steps.length === 0 || steps.every((s) => s.selectors.length === 0 && !s.fallback_text && !s.params.url)) {
+      setError("Add at least one step with a URL, selector, or text fallback")
+      return
+    }
+    setSaving(true)
+    setError(null)
+    setTestStatus(null)
+    try {
+      const wireSteps = toWireSteps(steps)
+      const res = await fetch(`/api/automations/${automationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ steps: wireSteps, variant_b: variantB }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || "Save failed")
+        return
+      }
+      // Trigger self-test against the dummy account. Non-fatal: if VPS is
+      // down, we keep the saved steps and just note the test couldn't run.
+      setTestStatus("Saved. Running self-test against dummy account…")
+      try {
+        const testRes = await fetch("/api/recordings/self-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ automation_id: automationId }),
+        })
+        if (testRes.ok) {
+          setTestStatus("✅ Self-test passed — automation is ready.")
+        } else {
+          setTestStatus("⚠️ Self-test failed — check selectors and try again.")
+        }
+      } catch {
+        setTestStatus("⚠️ Couldn't reach the VPS replay endpoint — saved anyway.")
+      }
+      // Give the user 1.5s to read the status before closing.
+      setTimeout(onSaved, 1500)
+    } catch (e) {
+      setError((e as Error).message || "Network error")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-background/85 backdrop-blur-md p-4"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.96, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        onClick={(e) => e.stopPropagation()}
+        className="bg-card/95 backdrop-blur-xl border border-border/50 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
+      >
+        <header className="flex items-center justify-between border-b border-border/30 p-4">
+          <div className="flex items-center gap-2">
+            <Wand2 className="h-4 w-4 text-violet-400" />
+            <h3 className="font-semibold text-sm">Build steps for this automation</h3>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-muted/30">
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          <ManualStepBuilder onChange={setStepsState} onVariantBChange={setVariantB} />
+        </div>
+
+        {testStatus ? (
+          <div className="border-t border-border/30 px-4 py-2 text-xs text-muted-foreground">
+            {testStatus}
+          </div>
+        ) : null}
+
+        {error ? (
+          <div className="border-t border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-300 flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5" /> {error}
+          </div>
+        ) : null}
+
+        <footer className="flex items-center justify-end gap-2 border-t border-border/30 p-4">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-border/50 px-4 py-2 text-sm hover:bg-muted/20"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={save}
+            disabled={saving}
+            className="rounded-xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 px-4 py-2 text-sm font-semibold text-white flex items-center gap-1.5"
+          >
+            {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+            Save + self-test
+          </button>
+        </footer>
+      </motion.div>
+    </motion.div>
+  )
 }
 
 /* ─── Recording Modal (Full-screen immersive) ─── */
@@ -1293,6 +1460,12 @@ function OverviewTab() {
   const [successRate, setSuccessRate] = useState<number | null>(null)
   const [runs, setRuns] = useState<DbAutomationRun[]>([])
   const [automations, setAutomations] = useState<DbAutomation[]>([])
+  const [sparkline, setSparkline] = useState<DailySparklinePoint[]>([])
+  // Slice 5: which run is being viewed in the carousel modal.
+  const [selectedRun, setSelectedRun] = useState<DbAutomationRun | null>(null)
+  // Slice 6: idle banner + bulk-pause UX state.
+  const [pausingAll, setPausingAll] = useState(false)
+  const [pauseError, setPauseError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -1303,10 +1476,52 @@ function OverviewTab() {
       setSuccessRate(typeof data.success_rate === "number" ? data.success_rate : null)
       setRuns(data.runs || [])
       setAutomations(data.data || [])
+      setSparkline(Array.isArray(data.sparkline) ? data.sparkline : [])
     } catch {} finally { setLoading(false) }
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Slice 6: idle detection — true when the latest run is older than 24h.
+  // We compute from the runs list we already loaded so there's no extra
+  // round-trip. UTC math, viewer timezone irrelevant.
+  const idleHours = (() => {
+    if (!runs.length) return null
+    const latest = runs[0]?.started_at
+    if (!latest) return null
+    return (Date.now() - new Date(latest).getTime()) / (60 * 60 * 1000)
+  })()
+  const activeCount = automations.filter(a => a.status === "active").length
+  const showIdleBanner = !loading && activeCount > 0 && (idleHours === null ? false : idleHours >= 24)
+
+  const handlePauseAll = async () => {
+    setPausingAll(true)
+    setPauseError(null)
+    try {
+      // Flip every active automation to needs_rerecording — that status
+      // already exists in the schema check constraint and pauses the
+      // maintenance loop without losing the recorded steps. The Your
+      // Automations card surfaces it as "Needs re-record" so Dylan can
+      // resume by re-recording the dummy walkthrough.
+      const targets = automations.filter(a => a.status === "active")
+      const results = await Promise.all(targets.map(a =>
+        fetch(`/api/automations/${a.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "needs_rerecording" }),
+        }).then(r => r.ok)
+      ))
+      const failed = results.filter(ok => !ok).length
+      if (failed > 0) {
+        setPauseError(`${failed} of ${targets.length} couldn't be paused — try again.`)
+      }
+      await load()
+    } catch (e) {
+      setPauseError((e as Error).message || "Network error")
+    } finally {
+      setPausingAll(false)
+    }
+  }
 
   const Card = ({
     label, value, hint, icon: Icon, tone,
@@ -1339,6 +1554,47 @@ function OverviewTab() {
   return (
     <div className="space-y-4">
       <RetryQueueWidget variant="card" />
+
+      {/* Idle-detect auto-pause banner (W4B Slice 6) */}
+      <AnimatePresence>
+        {showIdleBanner && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 shadow-lg"
+            role="alert"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="rounded-lg p-1.5 bg-amber-500/20 shrink-0">
+                  <AlertTriangle className="h-4 w-4 text-amber-300" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-amber-200">
+                    No automation has run in {idleHours ? Math.floor(idleHours) : "24+"} hours
+                  </p>
+                  <p className="text-xs text-amber-200/70">
+                    Are you still using these campaigns? Pause them to stop the maintenance cron from racking up cost.
+                  </p>
+                  {pauseError && (
+                    <p className="text-[11px] text-red-300 mt-1">{pauseError}</p>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={handlePauseAll}
+                disabled={pausingAll}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-50 px-3 py-2 text-xs font-semibold text-amber-200 transition-colors"
+              >
+                {pausingAll ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Pause className="h-3.5 w-3.5" />}
+                Pause all ({activeCount})
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
         <Card
           label="Total automations"
@@ -1377,6 +1633,30 @@ function OverviewTab() {
         />
       </div>
 
+      {/* 14-Day Health Trend sparkline (W4B Slice 1) */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+        className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-4 shadow-lg"
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-emerald-400" />
+            14-Day Health Trend
+          </h3>
+          <span className="text-[10px] text-muted-foreground">Daily pass rate</span>
+        </div>
+        {loading ? (
+          <div className="h-[60px] flex items-center justify-center text-xs text-muted-foreground">
+            <RefreshCw className="h-3 w-3 animate-spin mr-1.5" />
+            Loading…
+          </div>
+        ) : (
+          <SparklineChart data={sparkline} height={60} />
+        )}
+      </motion.div>
+
       {/* Recent runs list */}
       <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg overflow-hidden">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border/30">
@@ -1399,22 +1679,39 @@ function OverviewTab() {
                 : run.status === "failed" ? "bg-red-500/20 text-red-400 border-red-500/30"
                 : "bg-amber-500/20 text-amber-400 border-amber-500/30"
               return (
-                <li key={run.id} className="flex items-center justify-between px-4 py-2.5 text-xs hover:bg-muted/10 transition-colors">
-                  <div className="min-w-0">
-                    <p className="font-medium truncate">{runById.get(run.automation_id) || run.automation_id.slice(0, 8)}</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {run.run_type || "run"} · {new Date(run.started_at).toLocaleString()}
-                    </p>
-                  </div>
-                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold border ${tone}`}>
-                    {run.status}
-                  </span>
+                <li key={run.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRun(run)}
+                    className="w-full flex items-center justify-between px-4 py-2.5 text-xs hover:bg-muted/10 transition-colors text-left"
+                    aria-label={`Open replay viewer for run ${run.id}`}
+                  >
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{runById.get(run.automation_id) || run.automation_id.slice(0, 8)}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {run.run_type || "run"} · {new Date(run.started_at).toLocaleString()}
+                      </p>
+                    </div>
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold border ${tone}`}>
+                      {run.status}
+                    </span>
+                  </button>
                 </li>
               )
             })}
           </ul>
         )}
       </div>
+
+      {/* Replay viewer modal (W4B Slice 5) — opens when a run row is clicked. */}
+      <ReplayViewerModal
+        open={!!selectedRun}
+        run={selectedRun ? {
+          ...selectedRun,
+          automation_name: runById.get(selectedRun.automation_id) || null,
+        } : null}
+        onClose={() => setSelectedRun(null)}
+      />
     </div>
   )
 }
@@ -1629,6 +1926,11 @@ function MaintenanceTab() {
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  // Slice 4: dry-run modal state — keep the per-row "currently inspecting"
+  // id separate from the result so we can show a spinner while waiting.
+  const [dryRunOpen, setDryRunOpen] = useState(false)
+  const [dryRunLoading, setDryRunLoading] = useState(false)
+  const [dryRunResult, setDryRunResult] = useState<DryRunResultPayload | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -1652,6 +1954,41 @@ function MaintenanceTab() {
       setMessage((e as Error).message || "Network error")
     } finally {
       setRunning(false)
+    }
+  }
+
+  // Slice 4: Dry-run handler. Calls the new collection-level replay route
+  // with `dryRun: true`. The route never persists automation_runs rows
+  // and never flips automation status, so this is safe to fire from any
+  // role and on any schedule. NEVER calls campaign-worker.
+  const startDryRun = async (automation: DbAutomation) => {
+    setDryRunOpen(true)
+    setDryRunLoading(true)
+    setDryRunResult({ ok: false, automation_name: automation.name, steps: [] })
+    try {
+      const res = await fetch("/api/automations/replay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ automation_id: automation.id, dryRun: true }),
+      })
+      const data = await res.json().catch(() => ({}))
+      setDryRunResult({
+        ok: !!data.ok,
+        automation_name: data.automation_name || automation.name,
+        overall: data.overall ?? null,
+        steps: Array.isArray(data.steps) ? data.steps : [],
+        note: data.note ?? null,
+        error: data.error ?? null,
+      })
+    } catch (e) {
+      setDryRunResult({
+        ok: false,
+        automation_name: automation.name,
+        steps: [],
+        error: (e as Error).message || "Network error",
+      })
+    } finally {
+      setDryRunLoading(false)
     }
   }
 
@@ -1702,19 +2039,20 @@ function MaintenanceTab() {
                 <th className="px-4 py-3 font-semibold">Last tested</th>
                 <th className="px-4 py-3 font-semibold">Last error</th>
                 <th className="px-4 py-3 font-semibold text-right">Health</th>
+                <th className="px-4 py-3 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">
+                  <td colSpan={7} className="px-4 py-6 text-center text-muted-foreground">
                     <RefreshCw className="h-4 w-4 animate-spin inline mr-2" /> Loading…
                   </td>
                 </tr>
               )}
               {!loading && items.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  <td colSpan={7} className="px-4 py-8 text-center text-sm text-muted-foreground">
                     No automations yet. Add one from the <span className="font-semibold">Your Automations</span> tab.
                   </td>
                 </tr>
@@ -1722,6 +2060,10 @@ function MaintenanceTab() {
               {items.map((a) => {
                 const shortPlatform = PLATFORM_FROM_DB[a.platform] || a.platform
                 const PlatformIcon = platformIcons[shortPlatform]
+                // Extension-recorded rows live in autobot_automations and
+                // don't have a steps[] payload the replay route understands,
+                // so dry-run is dashboard-only for now.
+                const canDryRun = a.source !== "extension"
                 return (
                   <tr key={a.id} className="border-t border-border/20 hover:bg-muted/10 transition-colors">
                     <td className="px-4 py-3 font-medium">{a.name}</td>
@@ -1753,6 +2095,33 @@ function MaintenanceTab() {
                         {a.health_score}%
                       </span>
                     </td>
+                    <td className="px-4 py-3 text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            className="inline-flex items-center justify-center rounded-lg p-1.5 hover:bg-muted/30 transition-colors"
+                            aria-label={`Actions for ${a.name}`}
+                          >
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[180px]">
+                          <DropdownMenuItem
+                            disabled={!canDryRun}
+                            onClick={() => canDryRun && startDryRun(a)}
+                            className="text-xs"
+                          >
+                            <Eye className="h-3.5 w-3.5 mr-2 text-amber-400" />
+                            Dry run (no clicks)
+                          </DropdownMenuItem>
+                          {!canDryRun && (
+                            <DropdownMenuItem disabled className="text-[10px] text-muted-foreground">
+                              Dry run not available for extension-recorded automations
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </td>
                   </tr>
                 )
               })}
@@ -1760,6 +2129,19 @@ function MaintenanceTab() {
           </table>
         </div>
       </div>
+
+      {/* Dry-run result modal (W4B Slice 4). Pure inspection — no DMs fired. */}
+      <DryRunResultModal
+        open={dryRunOpen}
+        loading={dryRunLoading}
+        result={dryRunResult}
+        onClose={() => {
+          setDryRunOpen(false)
+          // Keep result around briefly so the modal close animation doesn't
+          // jank to an empty state, but null it once truly closed.
+          setTimeout(() => setDryRunResult(null), 250)
+        }}
+      />
     </div>
   )
 }

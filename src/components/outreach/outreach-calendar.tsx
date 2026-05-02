@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import {
   ChevronLeft, ChevronRight, CalendarDays, X, Instagram, Facebook, Linkedin,
@@ -28,6 +29,22 @@ interface CalendarEvent {
   id: string; date: string; lead_name: string; business_type?: string;
   platform: string; action: string; status: string; message_preview?: string;
   sequence_name?: string; step_number?: number; type: string;
+  // Slice 6 — server-supplied keys for filter dropdowns
+  account_id?: string | null;
+  campaign_id?: string | null;
+}
+
+// Slice 6 — minimal shape for the Group filter dropdown lookup.
+interface AccountLite {
+  account_id: string;
+  username?: string | null;
+  proxy_group_id?: string | null;
+}
+
+interface ProxyGroupLite {
+  id: string;
+  name?: string | null;
+  ip?: string | null;
 }
 
 // ── Platform config ──
@@ -166,29 +183,62 @@ export default function OutreachCalendar() {
   const [hoveredDay, setHoveredDay] = useState<number | null>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
 
+  // Slice 6 — Group filter. We fetch accounts + proxy_groups so we can
+  // map event.account_id → proxy_group_id at filter time without
+  // requiring a server-side join. selectedGroup === null means "all".
+  const [accountsLite, setAccountsLite] = useState<AccountLite[]>([])
+  const [proxyGroups, setProxyGroups] = useState<ProxyGroupLite[]>([])
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null)
+
   const fetchEvents = useCallback(async () => {
     setLoading(true)
     try {
-      const [eventsRes, campaignsRes] = await Promise.all([
+      const [eventsRes, campaignsRes, accountsRes, groupsRes] = await Promise.all([
         fetch(`/api/calendar/outreach?month=${month}&year=${year}`).then(r => r.json()),
         fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get_campaigns" }) }).then(r => r.json()).catch(() => ({ data: [] })),
+        fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get_accounts" }) }).then(r => r.json()).catch(() => ({ data: [] })),
+        fetch("/api/proxy-groups").then(r => r.json()).catch(() => ({ data: [] })),
       ])
       setEvents(eventsRes.events || [])
       setCampaigns(campaignsRes.data || [])
+      setAccountsLite((accountsRes.data || []).map((a: { account_id: string; username?: string; proxy_group_id?: string | null }) => ({
+        account_id: a.account_id,
+        username: a.username,
+        proxy_group_id: a.proxy_group_id ?? null,
+      })))
+      setProxyGroups((groupsRes.data || []).map((g: { id: string; name?: string; ip?: string }) => ({
+        id: g.id,
+        name: g.name,
+        ip: g.ip,
+      })))
     } catch { setEvents([]); setCampaigns([]) }
     setLoading(false)
   }, [month, year])
 
   useEffect(() => { fetchEvents() }, [fetchEvents])
 
+  // Slice 6 — account_id → proxy_group_id lookup (rebuilt when accounts
+  // change). Used by filteredEvents below.
+  const accountToGroup = useMemo(() => {
+    const m: Record<string, string | null> = {}
+    for (const a of accountsLite) m[a.account_id] = a.proxy_group_id ?? null
+    return m
+  }, [accountsLite])
+
   // ── Derived data ──
   const filteredEvents = useMemo(() => {
     let filtered = events.filter(e => activeFilters.has(e.platform))
     if (selectedCampaign) {
-      filtered = filtered.filter(e => (e as CalendarEvent & { campaign_id?: string }).campaign_id === selectedCampaign)
+      filtered = filtered.filter(e => e.campaign_id === selectedCampaign)
+    }
+    if (selectedGroup) {
+      filtered = filtered.filter(e => {
+        if (!e.account_id) return false
+        return accountToGroup[e.account_id] === selectedGroup
+      })
     }
     return filtered
-  }, [events, activeFilters, selectedCampaign])
+  }, [events, activeFilters, selectedCampaign, selectedGroup, accountToGroup])
 
   const eventsByDay = useMemo(() => {
     const map: Record<number, CalendarEvent[]> = {}
@@ -432,6 +482,28 @@ export default function OutreachCalendar() {
             </button>
           )
         })}
+
+        {/* Slice 6 — Group filter. Hidden when there are no proxy groups
+            (e.g. fresh install) so we don't add visual noise. */}
+        {proxyGroups.length > 0 && (
+          <Select
+            value={selectedGroup ?? "all"}
+            onValueChange={v => setSelectedGroup(v === "all" ? null : v)}
+          >
+            <SelectTrigger className="h-7 w-44 text-xs rounded-full">
+              <SelectValue placeholder="Filter by group" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All groups</SelectItem>
+              {proxyGroups.map(g => (
+                <SelectItem key={g.id} value={g.id}>
+                  {g.name || g.ip || `Group ${g.id.slice(0, 8)}`}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
         <div className="flex-1" />
         <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => setSelectedDay(null)}>
           <Send className="h-3 w-3" /> Schedule Outreach
