@@ -54,7 +54,15 @@ import { PLATFORM_LOGIN_URLS } from "@/lib/platform-login-urls"
 const VNC_WS_BASE =
   process.env.NEXT_PUBLIC_VNC_WS_BASE ||
   "wss://srv1197943.taild42583.ts.net/websockify"
-const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || ""
+// Password fallback mirrors `src/app/(dashboard)/automations/page.tsx` (set in
+// commit e2c21ad — "default: 8-char DcMktg20 — RFB caps at 8 chars anyway").
+// Without this fallback, the noVNC client receives the VncAuth challenge and
+// hangs silently — modal stays at "Opening the secure browser…" forever. The
+// security envelope is unchanged: the WSS endpoint is already public via
+// Tailscale Funnel, and the password lives client-side in the bundle for the
+// existing /automations VNC viewer too. Override with NEXT_PUBLIC_VNC_PASSWORD
+// at build time if you rotate the x11vnc password.
+const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || "DcMktg20"
 function buildWsUrlForSession(sessionId: string): string {
   const base = VNC_WS_BASE.replace(/\/+$/, "")
   return `${base}/${encodeURIComponent(sessionId)}`
