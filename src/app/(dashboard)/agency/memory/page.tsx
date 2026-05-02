@@ -1,62 +1,131 @@
 "use client"
 /**
- * /agency/memory — Memory Tree v2.
+ * /agency/memory — 4-pane Memory page (v2).
  *
- * Tabs: Memory Tree, Project Tree (read-only source code browser),
- * Conversations, Agent Workflows.
+ *   ┌──────────────────────────────────────────────────────────────┐
+ *   │ Header: title · filter chips · VPS · Search · 🔔 · ⚙ · 💻    │
+ *   ├─────────────┬─────────────────────────────────┬──────────────┤
+ *   │             │                                 │              │
+ *   │  Tree pane  │  Editor pane                    │  Right rail  │
+ *   │             │                                 │  (Chat/Info/ │
+ *   │  (vault     │  (markdown editor / code        │   History/   │
+ *   │   tree, or  │   viewer / conversation         │   Memories)  │
+ *   │   code      │   transcript / pages view)      │              │
+ *   │   tree)     │                                 │              │
+ *   │             │  ┌──────────────────────────────┴────────────┐ │
+ *   │             │  │ Time Machine scrubber                    │ │
+ *   │             │  └──────────────────────────────────────────┘ │
+ *   └─────────────┴────────────────────────────────────────────────┘
  *
- * Header gear button opens the existing memory SettingsPanel as a dialog so power
- * users can still tweak token budgets, MCP keys, default personas, etc.
+ * Filter chips: All · Knowledge · Code · Conversations · Inbox
+ *   - Inbox chip opens the right-edge slide-in drawer (and tints the chip).
+ *
+ * Mobile (<lg): pane-stack navigator (tree → file → rail).
+ * Tablet (sm-lg): 2-pane (tree + editor) with right rail collapsed to 48px.
+ *
+ * Hash redirects (top of page):
+ *   #agent-workflows*  → /agency/agents
+ *   #api-keys          → /agency/integrations#api-keys (route doesn't exist
+ *                        yet — falls through to /agency/team for now)
  */
-import { useEffect, useState } from "react"
-import { Brain, Bot, Code2, FolderTree, KeyRound, MessageSquare, Settings as SettingsIcon, TerminalSquare } from "lucide-react"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import * as React from "react"
+import dynamic from "next/dynamic"
+import Link from "next/link"
+import { useRouter, useSearchParams } from "next/navigation"
+import {
+  Brain, Settings as SettingsIcon, TerminalSquare, FileText, Search, Code2, MessageSquare,
+} from "lucide-react"
+import useSWR from "swr"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import useSWR from "swr"
-import { listPersonas, type Persona, type Memory } from "@/lib/api/memory"
-import { listMemories } from "@/lib/api/memory"
+
+import { listPersonas, listMemories, type Memory } from "@/lib/api/memory"
 import { SettingsPanel } from "@/components/memory/settings-panel"
 import { TreeView } from "@/components/memory-tree/tree-view"
 import { FileEditor } from "@/components/memory-tree/file-editor"
 import { ConversationsView } from "@/components/memory-tree/conversations-view"
 import { VpsStatusBadge } from "@/components/memory-tree/vps-status-badge"
-import { AgentWorkflowsTabs } from "@/components/agent-workflows/agent-workflows-tabs"
 import { CodeTreeView } from "@/components/projects/code-tree-view"
 import { CodeFileViewer } from "@/components/projects/code-file-viewer"
 import { GitHubStatusBadge } from "@/components/projects/github-status-badge"
 import { PagesView } from "@/components/projects/pages-view"
-import { ApiKeysView } from "@/components/api-keys/api-keys-view"
 import { useTerminalsDrawer } from "@/components/terminals/terminals-drawer-provider"
 
-type MemoryTab = "tree" | "project-tree" | "api-keys" | "conversations" | "agent-workflows"
-const VALID_TABS: MemoryTab[] = ["tree", "project-tree", "api-keys", "conversations", "agent-workflows"]
+import { FilterChips, type FilterId } from "@/components/memory/filter-chips"
+import { WelcomeBanner } from "@/components/memory/welcome-banner"
+import { ContinueCard } from "@/components/memory/continue-card"
+import { TimeMachine } from "@/components/memory/time-machine"
+import { TimeMachineBanner } from "@/components/memory/time-machine-banner"
+import { RightRail } from "@/components/memory/right-rail"
+import { PaneStack, useIsMobile, type PaneStackState } from "@/components/memory/pane-stack"
+import { InboxBell } from "@/components/inbox/inbox-bell"
+import { useInboxDrawer } from "@/components/inbox/inbox-drawer-provider"
+import { recordFileOpen } from "@/lib/last-file-tracker"
+import { cn } from "@/lib/utils"
 
-function readTabFromHash(): MemoryTab {
-  if (typeof window === "undefined") return "tree"
-  // Hash may be "tree" or "agent-workflows/runs". Take the first segment.
-  const h = window.location.hash.replace(/^#/, "").split("/")[0] as MemoryTab
-  return VALID_TABS.includes(h) ? h : "tree"
+type TimeMachineRaw = "1h" | "1d" | "1w" | "30d" | null
+
+function parseAt(raw: string | null): TimeMachineRaw {
+  if (raw === "1h" || raw === "1d" || raw === "1w" || raw === "30d") return raw
+  return null
 }
 
 export default function MemoryPage() {
-  const { open: openTerminals } = useTerminalsDrawer()
-  const [tab, setTabRaw] = useState<MemoryTab>("tree")
-  const [selectedPath, setSelectedPath] = useState<string | null>(null)
-  const [projectPath, setProjectPath] = useState<string | null>(null)
-  const [projectViewMode, setProjectViewMode] = useState<"files" | "pages">("pages")
-  // When set, PagesView auto-selects this page route once its list is loaded.
-  // Used by the "Open in Pages" cross-nav button in the Files view.
-  const [pendingPageRoute, setPendingPageRoute] = useState<string | null>(null)
-  const [businessId, setBusinessId] = useState<string | null>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  return (
+    <React.Suspense fallback={<div className="h-screen bg-background" aria-hidden />}>
+      <MemoryPageInner />
+    </React.Suspense>
+  )
+}
 
-  // Persist view-mode choice across reloads — non-technical users land on
-  // "pages" by default, technical users keep "files" once they've toggled.
-  // URL search params (?file= / ?page=) take precedence over localStorage so
-  // shared cross-nav links land on the right view immediately.
-  useEffect(() => {
+function MemoryPageInner() {
+  const router = useRouter()
+  const search = useSearchParams()
+  const { open: openTerminals } = useTerminalsDrawer()
+  const { open: openInbox, isOpen: inboxOpen } = useInboxDrawer()
+
+  // ── Hash redirects (legacy deep-links) ─────────────────────────────────
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const h = window.location.hash.replace(/^#/, "")
+    if (!h) return
+    const seg = h.split("/")[0]
+    if (seg === "agent-workflows") {
+      // Old #agent-workflows[/sub] → /agency/agents
+      window.history.replaceState(null, "", window.location.pathname + window.location.search)
+      router.replace("/agency/agents")
+      return
+    }
+    if (seg === "api-keys") {
+      window.history.replaceState(null, "", window.location.pathname + window.location.search)
+      // /agency/integrations doesn't exist yet — surface settings dialog later.
+      // For now fall through; users land on the default Memory view.
+      return
+    }
+    // #tree / #project-tree / #conversations: map to filter chips
+    if (seg === "project-tree") setFilter("code")
+    else if (seg === "conversations") setFilter("conversations")
+    // others fall through
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ── State ──────────────────────────────────────────────────────────────
+  const [filter, setFilter] = React.useState<FilterId>("all")
+  const [selectedPath, setSelectedPath] = React.useState<string | null>(null)
+  const [projectPath, setProjectPath] = React.useState<string | null>(null)
+  const [projectViewMode, setProjectViewMode] = React.useState<"files" | "pages">("pages")
+  const [pendingPageRoute, setPendingPageRoute] = React.useState<string | null>(null)
+  const [businessId, setBusinessId] = React.useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [paneState, setPaneState] = React.useState<PaneStackState>("tree")
+
+  const isMobile = useIsMobile()
+  const at = parseAt(search?.get("at") ?? null)
+  const dimmed = at !== null
+
+  // ── Persist project view-mode in localStorage; honor URL params ───────
+  React.useEffect(() => {
     if (typeof window === "undefined") return
     const params = new URLSearchParams(window.location.search)
     const fileParam = params.get("file")
@@ -64,17 +133,50 @@ export default function MemoryPage() {
     if (fileParam) {
       setProjectViewMode("files")
       setProjectPath(fileParam)
+      setFilter("code")
       return
     }
     if (pageParam) {
       setProjectViewMode("pages")
       setPendingPageRoute(pageParam)
+      setFilter("code")
       return
     }
     const stored = localStorage.getItem("project_tree_mode")
     if (stored === "files" || stored === "pages") setProjectViewMode(stored)
   }, [])
 
+  React.useEffect(() => {
+    const stored =
+      typeof window !== "undefined" ? localStorage.getItem("memory_business_scope") : null
+    setBusinessId(stored)
+  }, [])
+
+  // ── SettingsPanel still expects personas + memories as props ──────────
+  const { data: personas = [] } = useSWR(["personas", businessId], () =>
+    listPersonas({ business_id: businessId, include_archived: false })
+  )
+  const { data: memoryData } = useSWR(["memories-meta", businessId], () =>
+    listMemories({ business_id: businessId, limit: 1 })
+  )
+  const memories: Memory[] = memoryData?.data ?? []
+
+  // ── Inbox filter chip: open drawer + visually pin the chip ────────────
+  function handleFilter(id: FilterId) {
+    setFilter(id)
+    if (id === "inbox") {
+      openInbox()
+    }
+  }
+
+  // ── File selection (records to last-file tracker) ─────────────────────
+  function handleSelect(path: string) {
+    setSelectedPath(path)
+    if (path) recordFileOpen(path)
+    if (isMobile) setPaneState("file")
+  }
+
+  // ── Project tree URL sync (preserved from legacy) ─────────────────────
   function setProjectMode(mode: "files" | "pages") {
     setProjectViewMode(mode)
     if (typeof window !== "undefined") localStorage.setItem("project_tree_mode", mode)
@@ -93,9 +195,6 @@ export default function MemoryPage() {
     window.history.replaceState(null, "", newUrl)
   }
 
-  // Cross-nav: jump from a Pages card to the raw source file.
-  // sourcePath is repo-relative ("src/app/foo/page.tsx"); the Files view expects
-  // the slug-prefixed form ("agency-hq/src/app/foo/page.tsx").
   function openInTree(sourcePath: string) {
     const slugged = sourcePath.startsWith("agency-hq/") ? sourcePath : `agency-hq/${sourcePath}`
     setProjectMode("files")
@@ -103,241 +202,234 @@ export default function MemoryPage() {
     syncProjectUrl("files", slugged, null)
   }
 
-  // Cross-nav: jump from a Files-view file back to the matching Page card.
   function openInPages(route: string) {
     setProjectMode("pages")
     setPendingPageRoute(route)
     syncProjectUrl("pages", null, route)
   }
 
-  // Load the active tab from URL hash on mount + listen for back/forward nav.
-  // This makes a browser refresh keep you on the tab you were on instead of
-  // jumping back to "tree".
-  useEffect(() => {
-    setTabRaw(readTabFromHash())
-    const onHash = () => setTabRaw(readTabFromHash())
-    window.addEventListener("hashchange", onHash)
-    return () => window.removeEventListener("hashchange", onHash)
-  }, [])
-
-  const setTab = (next: MemoryTab) => {
-    setTabRaw(next)
-    if (typeof window !== "undefined") {
-      // Use replaceState so the back button doesn't get spammed with tab switches.
-      const newUrl = `${window.location.pathname}${window.location.search}#${next}`
-      window.history.replaceState(null, "", newUrl)
-    }
-  }
-
-  useEffect(() => {
-    const stored = typeof window !== "undefined" ? localStorage.getItem("memory_business_scope") : null
-    setBusinessId(stored)
-  }, [])
-
-  // We still load personas + memories so SettingsPanel works (it expects them as props).
-  const { data: personas = [] } = useSWR(["personas", businessId], () =>
-    listPersonas({ business_id: businessId, include_archived: false })
-  )
-  const { data: memoryData } = useSWR(["memories-meta", businessId], () =>
-    listMemories({ business_id: businessId, limit: 1 })
-  )
-  const memories: Memory[] = memoryData?.data ?? []
-
-  return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)] md:h-screen">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-zinc-800/60 shrink-0">
-        <div className="flex items-center gap-2">
-          <Brain className="w-5 h-5 text-amber-400" />
-          <h1 className="text-lg font-semibold text-zinc-100">Memory</h1>
-          <span className="text-xs text-zinc-500 hidden sm:inline">— what your AI knows</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <VpsStatusBadge />
-          {tab === "project-tree" && <GitHubStatusBadge />}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={openTerminals}
-            className="text-zinc-400 hover:text-amber-100 hover:bg-amber-500/10"
-            title="Open Terminals — run multiple persistent Claude sessions in parallel"
-          >
-            <TerminalSquare className="w-4 h-4" />
-          </Button>
-          <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <DialogTrigger asChild>
-              <Button variant="ghost" size="sm" className="text-zinc-400 hover:text-zinc-100" title="Memory settings (token budget, MCP keys, default persona)">
-                <SettingsIcon className="w-4 h-4" />
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-3xl">
-              <DialogHeader>
-                <DialogTitle>Memory settings</DialogTitle>
-              </DialogHeader>
-              <SettingsPanel personas={personas} memories={memories} businessId={businessId} />
-            </DialogContent>
-          </Dialog>
-        </div>
+  // ── Pane assembly ─────────────────────────────────────────────────────
+  const treePane = (
+    <Card className="h-full overflow-hidden p-0 rounded-none border-0 bg-mem-surface-1">
+      <div className="px-3 py-2 border-b border-mem-border text-[10px] uppercase tracking-[0.04em] font-semibold text-mem-text-muted">
+        {filter === "conversations" ? "Conversations" : filter === "code" ? "Source code" : "Vault"}
       </div>
-
-      {/* Tabs */}
-      <Tabs value={tab} onValueChange={(v) => setTab(v as MemoryTab)} className="flex-1 flex flex-col min-h-0">
-        <TabsList className="mx-4 mt-3 self-start">
-          <TabsTrigger value="tree" className="gap-2">
-            <FolderTree className="w-4 h-4" />
-            Memory Tree
-          </TabsTrigger>
-          <TabsTrigger value="project-tree" className="gap-2">
-            <Code2 className="w-4 h-4" />
-            Project Tree
-          </TabsTrigger>
-          <TabsTrigger value="api-keys" className="gap-2">
-            <KeyRound className="w-4 h-4" />
-            Keys
-          </TabsTrigger>
-          <TabsTrigger value="conversations" className="gap-2">
-            <MessageSquare className="w-4 h-4" />
-            Conversations
-          </TabsTrigger>
-          <TabsTrigger value="agent-workflows" className="gap-2">
-            <Bot className="w-4 h-4" />
-            Agent Workflows
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="tree" className="flex-1 mt-3 min-h-0">
-          <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-3 px-4 pb-4 h-full">
-            <Card className="overflow-hidden p-0">
-              <div className="px-3 py-2 border-b border-zinc-800/60 text-xs text-zinc-500 uppercase tracking-wider">
-                Vault
-              </div>
-              <div className="h-[calc(100%-2.5rem)]">
-                <TreeView selectedPath={selectedPath} onSelect={setSelectedPath} />
-              </div>
-            </Card>
-            <Card className="overflow-hidden p-0">
-              {selectedPath ? (
-                <FileEditor key={selectedPath} path={selectedPath} onPathChange={setSelectedPath} />
-              ) : (
-                <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-sm">
-                  <Brain className="w-8 h-8 mb-3 text-zinc-700" />
-                  <div>Pick a file from the tree to view or edit it.</div>
-                  <div className="text-xs text-zinc-600 mt-2 max-w-md text-center px-6">
-                    Folders mirror real directories on the AI VPS — your edits here are the same files your AI reads on the terminal.
-                  </div>
-                </div>
-              )}
-            </Card>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="project-tree" className="flex-1 mt-3 min-h-0">
-          <div className="px-4 pb-4 h-full flex flex-col gap-3">
-            {/* View-mode toggle: friendly Pages view by default, raw Files for power users */}
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="inline-flex rounded-md border border-zinc-800 bg-zinc-900/40 p-0.5">
-                <button
-                  onClick={() => setProjectMode("pages")}
-                  className={`px-3 py-1 text-xs rounded ${projectViewMode === "pages" ? "bg-amber-500/20 text-amber-100" : "text-zinc-400 hover:text-zinc-100"}`}
-                >
-                  🧭 Pages
-                </button>
-                <button
-                  onClick={() => setProjectMode("files")}
-                  className={`px-3 py-1 text-xs rounded ${projectViewMode === "files" ? "bg-amber-500/20 text-amber-100" : "text-zinc-400 hover:text-zinc-100"}`}
-                >
-                  📁 Files
-                </button>
-              </div>
-              <span className="text-[11px] text-zinc-600">
-                {projectViewMode === "pages"
-                  ? "Friendly view — pages, jobs, agents, and what's not built yet"
-                  : "Raw source code from GitHub — edit and delete open PRs for your review"}
-              </span>
+      <div className="h-[calc(100%-2.25rem)]">
+        {filter === "code" ? (
+          projectViewMode === "pages" ? (
+            <div className="h-full overflow-y-auto">
+              <PagesView
+                onOpenInTree={openInTree}
+                initialSelectRoute={pendingPageRoute}
+                onAutoSelected={() => setPendingPageRoute(null)}
+              />
             </div>
+          ) : (
+            <CodeTreeView
+              selectedPath={projectPath}
+              onSelect={(path, kind) => {
+                if (kind === "file") {
+                  setProjectPath(path)
+                  syncProjectUrl("files", path, null)
+                  if (isMobile) setPaneState("file")
+                } else {
+                  const next = `${path}/README.md`
+                  setProjectPath(next)
+                  syncProjectUrl("files", next, null)
+                  if (isMobile) setPaneState("file")
+                }
+              }}
+            />
+          )
+        ) : filter === "conversations" ? (
+          <ConversationsView />
+        ) : (
+          <TreeView
+            selectedPath={selectedPath}
+            onSelect={(p) => handleSelect(p)}
+          />
+        )}
+      </div>
+    </Card>
+  )
 
-            {projectViewMode === "pages" ? (
-              <div className="flex-1 min-h-0">
-                <PagesView
-                  onOpenInTree={openInTree}
-                  initialSelectRoute={pendingPageRoute}
-                  onAutoSelected={() => setPendingPageRoute(null)}
-                />
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-3 flex-1 min-h-0">
-                <Card className="overflow-hidden p-0">
-                  <div className="px-3 py-2 border-b border-zinc-800/60 text-xs text-zinc-500 uppercase tracking-wider">
-                    Source code
-                  </div>
-                  <div className="h-[calc(100%-2.5rem)]">
-                    <CodeTreeView
-                      selectedPath={projectPath}
-                      onSelect={(path, kind) => {
-                        if (kind === "file") {
-                          setProjectPath(path)
-                          syncProjectUrl("files", path, null)
-                        } else {
-                          const next = `${path}/README.md`
-                          setProjectPath(next)
-                          syncProjectUrl("files", next, null)
-                        }
-                      }}
-                    />
-                  </div>
-                </Card>
-                <Card className="overflow-hidden p-0">
-                  {projectPath ? (
-                    <CodeFileViewer
-                      key={projectPath}
-                      path={projectPath}
-                      onSegmentClick={(segPath) => {
-                        const next = `${segPath}/README.md`
-                        setProjectPath(next)
-                        syncProjectUrl("files", next, null)
-                      }}
-                      onOpenInPages={openInPages}
-                      onDeleted={() => {
-                        setProjectPath(null)
-                        syncProjectUrl("files", null, null)
-                      }}
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-sm">
-                      <Code2 className="w-8 h-8 mb-3 text-zinc-700" />
-                      <div>Pick a file to view its code.</div>
-                      <div className="text-xs text-zinc-600 mt-2 max-w-md text-center px-6">
-                        Folders show the project README when clicked. Each top-level
-                        folder is a different project — pulled from GitHub, syntax-highlighted, read-only.
-                      </div>
-                    </div>
-                  )}
-                </Card>
-              </div>
-            )}
+  const filePane = (
+    <div className={cn("h-full flex flex-col bg-mem-bg", dimmed && "opacity-70 pointer-events-auto")}>
+      <div className={cn("flex-1 min-h-0 overflow-hidden", dimmed && "pointer-events-none")}>
+        {filter === "code" ? (
+          projectPath ? (
+            <CodeFileViewer
+              key={projectPath}
+              path={projectPath}
+              onSegmentClick={(segPath) => {
+                const next = `${segPath}/README.md`
+                setProjectPath(next)
+                syncProjectUrl("files", next, null)
+              }}
+              onOpenInPages={openInPages}
+              onDeleted={() => {
+                setProjectPath(null)
+                syncProjectUrl("files", null, null)
+              }}
+            />
+          ) : (
+            <EmptyPane icon={Code2} title="Pick a code file" body="Browse the source tree on the left or switch to Pages mode for the friendly view." />
+          )
+        ) : selectedPath ? (
+          <FileEditor key={selectedPath} path={selectedPath} onPathChange={setSelectedPath} />
+        ) : (
+          <EmptyPane icon={FileText} title="Pick a file from the tree" body="Folders mirror real directories on the AI VPS — your edits here are the same files your AI reads on the terminal." />
+        )}
+      </div>
+      <TimeMachine />
+    </div>
+  )
+
+  const railPane = (
+    <RightRail path={selectedPath} businessId={businessId} />
+  )
+
+  // ── Header (shared) ───────────────────────────────────────────────────
+  const header = (
+    <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-4 px-3 sm:px-6 pt-3 sm:pt-4 pb-3 border-b border-border shrink-0">
+      <div className="flex items-center gap-2 min-w-0">
+        <Brain className="w-5 h-5 text-mem-accent shrink-0" />
+        <h1 className="text-[18px] sm:text-[22px] font-semibold tracking-[-0.01em] text-foreground leading-none truncate">
+          Memory
+        </h1>
+        <span className="hidden md:inline text-[12px] text-muted-foreground">— what your AI knows</span>
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <FilterChips
+          value={filter}
+          onChange={handleFilter}
+        />
+        {filter === "code" && (
+          <div className="inline-flex rounded-md border border-mem-border bg-mem-surface-2 p-0.5">
+            <button
+              onClick={() => setProjectMode("pages")}
+              className={cn(
+                "px-2 py-1 text-[11px] rounded transition-colors",
+                projectViewMode === "pages"
+                  ? "bg-mem-accent/20 text-mem-accent"
+                  : "text-mem-text-secondary hover:text-mem-text-primary"
+              )}
+            >
+              Pages
+            </button>
+            <button
+              onClick={() => setProjectMode("files")}
+              className={cn(
+                "px-2 py-1 text-[11px] rounded transition-colors",
+                projectViewMode === "files"
+                  ? "bg-mem-accent/20 text-mem-accent"
+                  : "text-mem-text-secondary hover:text-mem-text-primary"
+              )}
+            >
+              Files
+            </button>
           </div>
-        </TabsContent>
+        )}
+        <div className="hidden sm:flex items-center gap-1.5">
+          <VpsStatusBadge />
+          {filter === "code" && <GitHubStatusBadge />}
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={openTerminals}
+          className="text-muted-foreground hover:text-mem-accent hover:bg-mem-accent/10 h-8 w-8 p-0"
+          title="Open Terminals — run multiple persistent Claude sessions in parallel"
+        >
+          <TerminalSquare className="w-4 h-4" />
+        </Button>
+        <InboxBell />
+        <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <DialogTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground h-8 w-8 p-0"
+              title="Memory settings (token budget, MCP keys, default persona, import/export, health-scan)"
+            >
+              <SettingsIcon className="w-4 h-4" />
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>Memory settings</DialogTitle>
+            </DialogHeader>
+            <SettingsPanel personas={personas} memories={memories} businessId={businessId} />
+          </DialogContent>
+        </Dialog>
+      </div>
+    </header>
+  )
 
-        <TabsContent value="api-keys" className="flex-1 mt-3 min-h-0">
-          <div className="px-4 pb-4 h-full">
-            <Card className="h-full overflow-hidden p-0">
-              <ApiKeysView />
-            </Card>
-          </div>
-        </TabsContent>
+  // ── Layout: 4-pane on lg+, 2-pane on sm-lg, pane-stack on <sm ─────────
+  return (
+    <div className="h-[calc(100vh-3.5rem)] md:h-screen flex flex-col bg-background overflow-hidden -mt-16 md:-mt-6 -mx-4 md:-mx-6 -mb-20 md:-mb-6 pt-16 md:pt-0">
+      {/* InboxBell floating fallback for narrow viewports where header bell is not reachable */}
+      <InboxBell floating />
 
-        <TabsContent value="conversations" className="flex-1 mt-3 min-h-0">
-          <div className="px-4 pb-4 h-full">
-            <Card className="h-full overflow-hidden">
-              <ConversationsView />
-            </Card>
-          </div>
-        </TabsContent>
+      <ContinueCard onSelect={handleSelect} />
+      <WelcomeBanner />
+      {header}
+      <TimeMachineBanner at={at} />
 
-        <TabsContent value="agent-workflows" className="flex-1 mt-3 min-h-0">
-          <AgentWorkflowsTabs />
-        </TabsContent>
-      </Tabs>
+      <div className="flex-1 min-h-0 flex">
+        {isMobile ? (
+          <PaneStack
+            state={paneState}
+            onBack={() => setPaneState((s) => (s === "rail" ? "file" : "tree"))}
+            onOpenRail={() => setPaneState("rail")}
+            selectedPath={selectedPath}
+            treePane={treePane}
+            filePane={filePane}
+            railPane={railPane}
+          />
+        ) : (
+          <>
+            <div className="hidden md:block w-[260px] xl:w-[280px] shrink-0 border-r border-mem-border bg-mem-surface-1">
+              {treePane}
+            </div>
+            <div className="flex-1 min-w-0 flex flex-col">
+              {filePane}
+            </div>
+            <div className="hidden xl:block">
+              {railPane}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 }
+
+function EmptyPane({
+  icon: Icon, title, body,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  title: string
+  body: string
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-mem-text-secondary text-sm px-6">
+      <Icon className="w-8 h-8 mb-3 text-mem-text-muted" />
+      <div className="text-mem-text-primary text-[14px]">{title}</div>
+      <div className="text-[12px] text-mem-text-muted mt-2 max-w-md text-center">
+        {body}
+      </div>
+    </div>
+  )
+}
+
+// Lazy-loaded variants kept for future code-splitting (PagesView etc.)
+const _LazyConversations = dynamic(
+  () => import("@/components/memory-tree/conversations-view").then((m) => m.ConversationsView),
+  { ssr: false }
+)
+void _LazyConversations
+void Search
+void MessageSquare
+void Link

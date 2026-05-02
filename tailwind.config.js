@@ -22,11 +22,41 @@ module.exports = {
         'neon-green': '#22c55e',
         'neon-pink': '#ec4899',
         'neon-cyan': '#06b6d4',
+        // Memory v2 palette — additive tokens used by /agency/memory + /agency/agents 4-pane shell.
+        // Color values track the prototype 1:1 so ports of those components work without rewrite.
+        'mem-bg': '#0A0A0B',
+        'mem-surface-1': '#111113',
+        'mem-surface-2': '#17171A',
+        'mem-surface-3': '#1F1F23',
+        'mem-border': 'rgba(255,255,255,0.08)',
+        'mem-border-strong': 'rgba(255,255,255,0.14)',
+        'mem-text-primary': '#EDEDED',
+        'mem-text-secondary': '#A1A1A6',
+        'mem-text-muted': '#6E6E78',
+        'mem-accent': '#7C5CFF',
+        'mem-status-working': '#34D399',
+        'mem-status-thinking': '#FBBF24',
+        'mem-status-needs': '#60A5FA',
+        'mem-status-stuck': '#F87171',
+        'mem-status-idle': '#71717A',
+        'mem-status-done': '#C084FC',
       },
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
+      },
+      transitionTimingFunction: {
+        'mem-spring': 'cubic-bezier(0.32, 0.72, 0, 1)',
+      },
+      keyframes: {
+        'mem-stream-caret': {
+          '0%, 50%': { opacity: '1' },
+          '51%, 100%': { opacity: '0' },
+        },
+      },
+      animation: {
+        'mem-stream-caret': 'mem-stream-caret 1s steps(2) infinite',
       },
     },
   },
