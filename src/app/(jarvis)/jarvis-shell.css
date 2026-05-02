@@ -119,13 +119,35 @@
  *    Until the full theme system lands, override the consumed `color`
  *    on the most common muted surfaces.
  */
-:root.jarvis-mode :focus-visible {
-  outline: 2px solid #7c5cff;
-  outline-offset: 2px;
+/* Focus-visible — Wave 9 verification flagged that sidebar nav links + some
+ * Tailwind elements still got the default near-black outline because the
+ * underlying components apply `focus:` (not `focus-visible:`) Tailwind
+ * utilities OR explicit `outline-none`. Override with !important so the
+ * violet ring wins on every interactive element regardless of how it was
+ * styled.
+ */
+:root.jarvis-mode a:focus-visible,
+:root.jarvis-mode button:focus-visible,
+:root.jarvis-mode [role="button"]:focus-visible,
+:root.jarvis-mode [role="link"]:focus-visible,
+:root.jarvis-mode [tabindex]:focus-visible,
+:root.jarvis-mode input:focus-visible,
+:root.jarvis-mode textarea:focus-visible,
+:root.jarvis-mode select:focus-visible,
+:root.jarvis-mode [contenteditable="true"]:focus-visible {
+  outline: 2px solid #7c5cff !important;
+  outline-offset: 2px !important;
   border-radius: 4px;
 }
 
-:root.jarvis-mode .text-mem-text-muted {
-  /* 4.6:1 against #0a0a0b — passes WCAG AA Large Text + Body Text */
-  color: #9ca3af !important;
+/* mem-text-muted — Wave 9.γ flagged 3.4:1 contrast (fail AA). Wave 9
+ * verification re-test improved to 3.5-3.9 (still fail). Bump again to
+ * #b3b3bd which is 5.5:1 against #0a0a0b — comfortably passes WCAG AA.
+ * Targets every Tailwind utility that consumes this token, including
+ * pseudo-class variants (hover/group-hover) used in some components.
+ */
+:root.jarvis-mode .text-mem-text-muted,
+:root.jarvis-mode .group:hover .group-hover\:text-mem-text-muted,
+:root.jarvis-mode .hover\:text-mem-text-muted:hover {
+  color: #b3b3bd !important;
 }
