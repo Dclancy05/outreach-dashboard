@@ -23,6 +23,8 @@ import { ReplayAutomationDialog } from "@/components/replay-automation-dialog"
 import { RetryQueueWidget } from "@/components/retry-queue-widget"
 import { NudgeBanners } from "@/components/nudge-banners"
 import PlatformLoginModal from "@/components/platform-login-modal"
+import { SparklineChart } from "@/components/automations/sparkline-chart"
+import type { DailySparklinePoint } from "@/lib/api/automations"
 import { useBusinessId } from "@/lib/use-business"
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.08 } } }
@@ -1293,6 +1295,7 @@ function OverviewTab() {
   const [successRate, setSuccessRate] = useState<number | null>(null)
   const [runs, setRuns] = useState<DbAutomationRun[]>([])
   const [automations, setAutomations] = useState<DbAutomation[]>([])
+  const [sparkline, setSparkline] = useState<DailySparklinePoint[]>([])
 
   const load = useCallback(async () => {
     try {
@@ -1303,6 +1306,7 @@ function OverviewTab() {
       setSuccessRate(typeof data.success_rate === "number" ? data.success_rate : null)
       setRuns(data.runs || [])
       setAutomations(data.data || [])
+      setSparkline(Array.isArray(data.sparkline) ? data.sparkline : [])
     } catch {} finally { setLoading(false) }
   }, [])
 
@@ -1376,6 +1380,30 @@ function OverviewTab() {
           hint={successRate === null ? "No finished runs" : "Passed + auto-healed"}
         />
       </div>
+
+      {/* 14-Day Health Trend sparkline (W4B Slice 1) */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+        className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-4 shadow-lg"
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-emerald-400" />
+            14-Day Health Trend
+          </h3>
+          <span className="text-[10px] text-muted-foreground">Daily pass rate</span>
+        </div>
+        {loading ? (
+          <div className="h-[60px] flex items-center justify-center text-xs text-muted-foreground">
+            <RefreshCw className="h-3 w-3 animate-spin mr-1.5" />
+            Loading…
+          </div>
+        ) : (
+          <SparklineChart data={sparkline} height={60} />
+        )}
+      </motion.div>
 
       {/* Recent runs list */}
       <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg overflow-hidden">

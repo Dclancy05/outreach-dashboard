@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { aggregateRunsByDay } from "@/lib/api/automations"
 
 // CRITICAL: Next.js extends global fetch with response caching. The
 // supabase-js client uses fetch internally, so without `cache: "no-store"`
@@ -102,7 +103,13 @@ export async function GET(req: NextRequest) {
     dashQuery = dashQuery.eq("tag", tagFilter)
   }
 
-  const [dashRes, extRes, stepsRes, runsRes] = await Promise.all([
+  // 14-day window for sparkline aggregation. Run alongside the main
+  // queries so the Overview tab gets everything in one round-trip.
+  const fourteenDaysAgo = new Date(
+    Date.now() - 14 * 24 * 60 * 60 * 1000
+  ).toISOString()
+
+  const [dashRes, extRes, stepsRes, runsRes, sparkRes] = await Promise.all([
     dashQuery,
     supabase
       .from("autobot_automations")
@@ -115,6 +122,11 @@ export async function GET(req: NextRequest) {
       .select("id, automation_id, run_type, status, started_at, finished_at, error, steps_completed")
       .order("started_at", { ascending: false })
       .limit(50),
+    supabase
+      .from("automation_runs")
+      .select("status, started_at")
+      .gte("started_at", fourteenDaysAgo)
+      .in("status", ["passed", "failed", "healed"]),
   ])
 
   const dashboardRows = dashRes.error ? [] : (dashRes.data || [])
@@ -226,17 +238,23 @@ export async function GET(req: NextRequest) {
     recent_runs: runs.length,
   }
 
+  // 14-day sparkline series for the Overview tab health-trend widget.
+  const sparkRows = sparkRes.error ? [] : (sparkRes.data || [])
+  const sparkline = aggregateRunsByDay(sparkRows as any)
+
   return NextResponse.json({
     data,
     runs,
     counts,
     success_rate,
     last_run,
+    sparkline,
     errors: {
       dashboard: dashRes.error?.message || null,
       extension: extRes.error?.message || null,
       extension_steps: stepsRes.error?.message || null,
       runs: runsRes.error?.message || null,
+      sparkline: sparkRes.error?.message || null,
     },
   })
 }
