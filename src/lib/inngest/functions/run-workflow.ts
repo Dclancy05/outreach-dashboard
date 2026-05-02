@@ -235,7 +235,7 @@ export const runWorkflow = inngest.createFunction(
   {
     id: "run-workflow",
     name: "Run a workflow",
-    concurrency: { limit: 25 }, // 25 simultaneous runs is plenty for one founder
+    concurrency: { limit: 5 }, // capped at 5 to fit Inngest free plan; bump after upgrading
     retries: 3,
   },
   { event: EVENT_RUN_QUEUED },
