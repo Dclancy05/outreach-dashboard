@@ -9,7 +9,7 @@
 3. **`/jarvis/audit`** — every change anyone (agent or human) has made. Search box, two facet filters, click any row to expand the JSON payload + IP + user-agent. Auto-refreshes every 30s.
 4. **`?` anywhere in /jarvis** — opens the keyboard cheatsheet, route-aware. The route-specific section at the bottom changes depending on which page you're on.
 5. **`g` then a letter** — Linear-style two-key nav. `g m` → Memory, `g c` → Cost, `g s` → Status, `g a` → Agents, etc. Press `?` for the full map.
-6. **`/agency/automations`** — 21 new platform tiles dropped today. Reddit, X, Snapchat, Pinterest, Email, SMS now appear in the Catalog. Email + SMS use API endpoints (Instantly + GHL) — no recording step needed.
+6. **`/automations`** — 21 new platform tiles dropped today. Reddit, X, Snapchat, Pinterest, Email, SMS now appear in the Catalog. Email + SMS use API endpoints (Instantly + GHL) — no recording step needed.
 7. **Inbox bell** — when an automation breaks during the daily maintenance run, it now shows up here. Used to be silent.
 
 ## 🛡️ What's still safe and untouched
