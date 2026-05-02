@@ -123,15 +123,38 @@ async function handle(req: NextRequest) {
     // Flag status: failure → needs_rerecording (unless it's already broken/draft).
     // Success from a previously flagged state → active (the site probably self-healed).
     const updates: Record<string, unknown> = { last_tested_at: new Date().toISOString() }
+    const wasActive = a.status === "active"
     if (overall === "passed" && a.status !== "active") {
       updates.status = "active"
       updates.last_error = null
     }
-    if (overall === "failed" && a.status === "active") {
+    if (overall === "failed" && wasActive) {
       updates.status = "needs_rerecording"
       updates.last_error = lastError || "Replay failed during maintenance"
     }
     await supabase.from("automations").update(updates).eq("id", a.id)
+
+    // Notification bell wiring (Automations spec, audit item: notification
+    // bell exists but no automation-failure path writes to it). Surface only
+    // on first transition active → needs_rerecording, not every subsequent
+    // maintenance pass — otherwise the inbox spams once per day per broken
+    // automation. Idempotency: dedupe on source_id=automation_id with
+    // unique partial index installed by 20260502_inbox_seeders.sql.
+    if (overall === "failed" && wasActive) {
+      try {
+        await supabase.from("notifications").insert({
+          type: "automation_failed",
+          title: `Automation ${a.name || a.id} needs re-recording`,
+          message: lastError
+            ? `Maintenance replay failed: ${lastError.slice(0, 240)}`
+            : "Maintenance replay failed — selector drift on the target platform.",
+          source_kind: "automation",
+          source_id: a.id,
+        })
+      } catch (e) {
+        console.warn("[automations-maintenance] notify insert failed:", e)
+      }
+    }
 
     results.push({ automation_id: a.id, overall, detail: lastError || undefined })
   }
