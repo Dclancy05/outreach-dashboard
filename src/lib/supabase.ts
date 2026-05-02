@@ -3089,6 +3089,11 @@ export async function handleAction(action: string, body: Record<string, unknown>
     }
 
     // ── CREATE ACCOUNT (full setup with profile/cookies) ─────────────────
+    // Mirrors src/lib/api/accounts.ts create_account. Drops the
+    // recording-service-era fields (chrome_profile_name/path, created_at)
+    // that don't exist on the live `accounts` table — kept dropping them
+    // here too so future callers that route through this legacy path
+    // don't trip the same schema-cache 500 fixed 2026-05-02.
     case "create_account": {
       const accountId = body.account_id || `acct_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
       const row: Record<string, unknown> = {
@@ -3100,12 +3105,9 @@ export async function handleAction(action: string, body: Record<string, unknown>
         daily_limit: String(body.daily_limit || "30"),
         sends_today: "0",
         session_cookie: String(body.session_cookie || ""),
-        chrome_profile_name: String(body.chrome_profile_name || ""),
-        chrome_profile_path: String(body.chrome_profile_path || ""),
         profile_url: String(body.profile_url || ""),
         notes: String(body.notes || ""),
         business_id: (body.business_id as string) || "default",
-        created_at: new Date().toISOString(),
       }
       const { error } = await supabase.from("accounts").upsert(row)
       if (error) return { success: false, error: error.message }

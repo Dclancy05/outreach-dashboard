@@ -49,11 +49,21 @@ function randomString(len: number): string {
 // Body shape (all fields optional except `platform`):
 //   {
 //     platform, username, display_name, password,
-//     twofa_backup_codes?, recovery_email?,
-//     email_login_username?, email_login_password?,
+//     tfa_codes? | twofa_backup_codes?,    // either name accepted
+//     recovery_email?,
+//     email_username? | email_login_username?,
+//     email_password? | email_login_password?,
 //     proxy_group_id?, daily_limit?, warmup_sequence_id?, notes?,
 //     business_id?
 //   }
+//
+// Note on field names: the legacy route docs called these
+// `email_login_username/password` and `twofa_backup_codes`, but the
+// actual columns in the deployed `accounts` table are `email_username`,
+// `email_password`, and `tfa_codes`. This route now accepts both shapes
+// (the form sends the canonical names; the old docs sent the legacy
+// names) and writes the canonical column names. Fixed 2026-05-02 after
+// real-browser tests caught schema-cache 500s.
 //
 // Server-side enforces the "one platform per proxy group" invariant from
 // migration 20260427_one_platform_per_group.sql — same proxy_group_id +
@@ -83,16 +93,18 @@ export async function POST(req: NextRequest) {
     typeof body.business_id === "string" && body.business_id ? body.business_id : "default"
 
   // 2FA backup codes can arrive as a textarea string ("\n"-delimited) or
-  // already-split array. Normalize to a single newline-joined string so the
-  // existing schema (TEXT column) keeps working for the rest of the app.
-  let twofa_backup_codes = ""
-  if (Array.isArray(body.twofa_backup_codes)) {
-    twofa_backup_codes = body.twofa_backup_codes
+  // already-split array, under either `tfa_codes` (canonical column) or
+  // `twofa_backup_codes` (legacy field name from old route docs).
+  // Normalize to a single newline-joined string for the TEXT column.
+  const rawCodes = body.tfa_codes ?? body.twofa_backup_codes
+  let tfa_codes = ""
+  if (Array.isArray(rawCodes)) {
+    tfa_codes = rawCodes
       .map((s: unknown) => (typeof s === "string" ? s.trim() : ""))
       .filter(Boolean)
       .join("\n")
-  } else if (typeof body.twofa_backup_codes === "string") {
-    twofa_backup_codes = body.twofa_backup_codes
+  } else if (typeof rawCodes === "string") {
+    tfa_codes = rawCodes
   }
 
   // Platform-uniqueness check — only if a proxy_group_id was actually
@@ -155,6 +167,22 @@ export async function POST(req: NextRequest) {
   const warmupSequenceId =
     typeof body.warmup_sequence_id === "string" ? body.warmup_sequence_id : ""
 
+  // Accept both canonical (`email_username`/`email_password`) and legacy
+  // (`email_login_username`/`email_login_password`) field names; write the
+  // canonical column names that actually exist on the `accounts` table.
+  const emailUsername =
+    typeof body.email_username === "string"
+      ? body.email_username
+      : typeof body.email_login_username === "string"
+        ? body.email_login_username
+        : ""
+  const emailPassword =
+    typeof body.email_password === "string"
+      ? body.email_password
+      : typeof body.email_login_password === "string"
+        ? body.email_login_password
+        : ""
+
   const row: Record<string, unknown> = {
     account_id,
     platform,
@@ -162,12 +190,10 @@ export async function POST(req: NextRequest) {
     display_name: display_name || username,
     password,
     twofa_secret: typeof body.twofa_secret === "string" ? body.twofa_secret : "",
-    twofa_backup_codes,
+    tfa_codes,
     email: typeof body.recovery_email === "string" ? body.recovery_email : "",
-    email_login_username:
-      typeof body.email_login_username === "string" ? body.email_login_username : "",
-    email_login_password:
-      typeof body.email_login_password === "string" ? body.email_login_password : "",
+    email_username: emailUsername,
+    email_password: emailPassword,
     proxy_group_id: proxyGroupId,
     daily_limit: dailyLimit,
     sends_today: "0",
