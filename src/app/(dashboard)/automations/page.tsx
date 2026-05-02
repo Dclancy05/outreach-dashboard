@@ -24,6 +24,7 @@ import { RetryQueueWidget } from "@/components/retry-queue-widget"
 import { NudgeBanners } from "@/components/nudge-banners"
 import PlatformLoginModal from "@/components/platform-login-modal"
 import { SparklineChart } from "@/components/automations/sparkline-chart"
+import { VariableAutocomplete } from "@/components/automations/variable-autocomplete"
 import type { DailySparklinePoint } from "@/lib/api/automations"
 import { useBusinessId } from "@/lib/use-business"
 
@@ -647,13 +648,13 @@ function AddAutomationModal({
               <div>
                 <label className="text-sm font-medium mb-1.5 block">Steps</label>
                 <p className="text-[11px] text-muted-foreground mb-1.5">
-                  One step per line, in order. Use {"{variable}"} for anything that changes per lead (e.g. {"{target_handle}"}, {"{message_body}"}).
+                  One step per line, in order. Type <code className="font-mono">{"{{"}</code> to insert a variable like {"{{target_url}}"} or {"{{message}}"}.
                 </p>
-                <textarea
+                <VariableAutocomplete
                   value={steps}
-                  onChange={e => setSteps(e.target.value)}
+                  onChange={setSteps}
                   rows={6}
-                  placeholder={"Navigate to {target_profile_url}\nClick the Message button\nType {message_body}\nPress Enter"}
+                  placeholder={"Navigate to {{target_url}}\nClick the Message button\nType {{message}}\nPress Enter"}
                   className="w-full rounded-xl border border-border/50 bg-muted/20 px-3 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-orange-500 resize-none"
                 />
               </div>
