@@ -45,6 +45,10 @@ const NAV_ACTIONS: StaticAction[] = [
   { id: "go-terminals", kind: "nav", title: "Open Terminals", hint: "Persistent Claude sessions", icon: "terminals", href: "/jarvis/terminals" },
   { id: "go-inbox", kind: "nav", title: "Open Inbox", icon: "inbox", href: "/jarvis/inbox" },
   { id: "go-mcps", kind: "nav", title: "Open MCP servers", icon: "mcps", href: "/jarvis/mcps" },
+  { id: "go-observability", kind: "nav", title: "Open Observability", hint: "Live VNC viewer of senders", icon: "terminals", href: "/jarvis/observability" },
+  { id: "go-status", kind: "nav", title: "Open System Status", hint: "VPS · services · crons · DB", icon: "settings", href: "/jarvis/status" },
+  { id: "go-cost", kind: "nav", title: "Open Cost dashboard", hint: "Daily AI spend vs cap", icon: "settings", href: "/jarvis/cost" },
+  { id: "go-audit", kind: "nav", title: "Open Audit log", hint: "Every change ever made", icon: "settings", href: "/jarvis/audit" },
   { id: "go-settings", kind: "nav", title: "Open Settings", icon: "settings", href: "/jarvis/settings" },
 ]
 
