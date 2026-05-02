@@ -176,14 +176,19 @@ const handlers: Record<string, ActionHandler> = {
   },
 
   create_account: async (action, body) => {
+    // Legacy /api/dashboard action — kept for callers that still POST
+    // {action:"create_account",...}. Used to write `chrome_profile_name`,
+    // `chrome_profile_path`, and `created_at`, none of which exist on the
+    // deployed `accounts` table (they were recording-service-era columns).
+    // Dropped 2026-05-02 after a real-browser test surfaced the
+    // schema-cache 500. Modern callers should use POST /api/accounts.
     const accountId = body.account_id || `acct_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
     const row: Record<string, unknown> = {
       account_id: String(accountId), platform: String(body.platform || "instagram"),
       display_name: String(body.display_name || ""), username: String(body.username || ""),
       status: String(body.status || "active"), daily_limit: String(body.daily_limit || "30"), sends_today: "0",
-      session_cookie: String(body.session_cookie || ""), chrome_profile_name: String(body.chrome_profile_name || ""),
-      chrome_profile_path: String(body.chrome_profile_path || ""), profile_url: String(body.profile_url || ""),
-      notes: String(body.notes || ""), business_id: (body.business_id as string) || "default", created_at: new Date().toISOString(),
+      session_cookie: String(body.session_cookie || ""), profile_url: String(body.profile_url || ""),
+      notes: String(body.notes || ""), business_id: (body.business_id as string) || "default",
     }
     const { error } = await supabase.from("accounts").upsert(row)
     if (error) return { success: false, error: error.message }
