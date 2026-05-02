@@ -30,22 +30,32 @@ import { JarvisBottomDock } from "@/components/jarvis/shell/jarvis-bottom-dock"
 import { MotionShell } from "@/components/jarvis/motion/motion-shell"
 import { useSidebarCollapse } from "@/components/jarvis/shell/jarvis-shell-providers"
 import { WelcomeWizardTrigger } from "@/components/jarvis/onboarding/welcome-wizard-trigger"
+import { InboxDrawerProvider } from "@/components/inbox/inbox-drawer-provider"
+import { InboxDrawer } from "@/components/inbox/inbox-drawer"
 
 interface JarvisLayoutProps {
   children: ReactNode
 }
 
 export default function JarvisLayout({ children }: JarvisLayoutProps) {
+  // InboxDrawerProvider wraps everything that uses useInboxDrawer (the
+  // header InboxBell calls it). Sibling route groups don't inherit from
+  // (dashboard)/layout.tsx, so we mount our own copy here. Without this,
+  // every /jarvis/* page crashed at hydration with
+  // "useInboxDrawer must be used inside <InboxDrawerProvider>".
   return (
-    <JarvisShellProviders>
-      <JarvisCmdkProvider>
-        <JarvisModeClass />
-        <JarvisSidebar />
-        <JarvisShellMain>{children}</JarvisShellMain>
-        <JarvisBottomDock />
-        <WelcomeWizardTrigger />
-      </JarvisCmdkProvider>
-    </JarvisShellProviders>
+    <InboxDrawerProvider>
+      <JarvisShellProviders>
+        <JarvisCmdkProvider>
+          <JarvisModeClass />
+          <JarvisSidebar />
+          <JarvisShellMain>{children}</JarvisShellMain>
+          <JarvisBottomDock />
+          <WelcomeWizardTrigger />
+          <InboxDrawer />
+        </JarvisCmdkProvider>
+      </JarvisShellProviders>
+    </InboxDrawerProvider>
   )
 }
 
