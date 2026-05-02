@@ -101,7 +101,7 @@ export function JarvisStatusBar() {
       aria-label="Jarvis status"
       className="sticky bottom-0 z-30 flex h-6 items-center gap-0 border-t border-mem-border bg-mem-surface-1/90 px-3 backdrop-blur-sm"
     >
-      <div className="flex flex-1 items-center gap-0 overflow-x-auto whitespace-nowrap">
+      <div className="flex flex-1 min-w-0 items-center gap-0 overflow-x-auto whitespace-nowrap">
         <StatusSegment
           href="/jarvis/settings#model"
           ariaLabel={`Model ${model}. Click to change.`}
