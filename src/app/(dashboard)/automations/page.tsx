@@ -26,6 +26,7 @@ import PlatformLoginModal from "@/components/platform-login-modal"
 import { SparklineChart } from "@/components/automations/sparkline-chart"
 import { VariableAutocomplete } from "@/components/automations/variable-autocomplete"
 import { DryRunResultModal, type DryRunResultPayload } from "@/components/automations/dry-run-result-modal"
+import { ReplayViewerModal } from "@/components/automations/replay-viewer-modal"
 import type { DailySparklinePoint } from "@/lib/api/automations"
 import { useBusinessId } from "@/lib/use-business"
 
@@ -518,6 +519,10 @@ interface DbAutomationRun {
   finished_at: string | null
   error: string | null
   steps_completed: number | null
+  // Populated by /api/automations/list when the recording-service has
+  // captured per-step shots. Optional because older runs predate that
+  // column being persisted from the VPS replay endpoint.
+  screenshot_urls?: string[] | null
 }
 
 /* ─── Add Automation Modal ───
@@ -1298,6 +1303,8 @@ function OverviewTab() {
   const [runs, setRuns] = useState<DbAutomationRun[]>([])
   const [automations, setAutomations] = useState<DbAutomation[]>([])
   const [sparkline, setSparkline] = useState<DailySparklinePoint[]>([])
+  // Slice 5: which run is being viewed in the carousel modal.
+  const [selectedRun, setSelectedRun] = useState<DbAutomationRun | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -1429,22 +1436,39 @@ function OverviewTab() {
                 : run.status === "failed" ? "bg-red-500/20 text-red-400 border-red-500/30"
                 : "bg-amber-500/20 text-amber-400 border-amber-500/30"
               return (
-                <li key={run.id} className="flex items-center justify-between px-4 py-2.5 text-xs hover:bg-muted/10 transition-colors">
-                  <div className="min-w-0">
-                    <p className="font-medium truncate">{runById.get(run.automation_id) || run.automation_id.slice(0, 8)}</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {run.run_type || "run"} · {new Date(run.started_at).toLocaleString()}
-                    </p>
-                  </div>
-                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold border ${tone}`}>
-                    {run.status}
-                  </span>
+                <li key={run.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRun(run)}
+                    className="w-full flex items-center justify-between px-4 py-2.5 text-xs hover:bg-muted/10 transition-colors text-left"
+                    aria-label={`Open replay viewer for run ${run.id}`}
+                  >
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{runById.get(run.automation_id) || run.automation_id.slice(0, 8)}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {run.run_type || "run"} · {new Date(run.started_at).toLocaleString()}
+                      </p>
+                    </div>
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold border ${tone}`}>
+                      {run.status}
+                    </span>
+                  </button>
                 </li>
               )
             })}
           </ul>
         )}
       </div>
+
+      {/* Replay viewer modal (W4B Slice 5) — opens when a run row is clicked. */}
+      <ReplayViewerModal
+        open={!!selectedRun}
+        run={selectedRun ? {
+          ...selectedRun,
+          automation_name: runById.get(selectedRun.automation_id) || null,
+        } : null}
+        onClose={() => setSelectedRun(null)}
+      />
     </div>
   )
 }

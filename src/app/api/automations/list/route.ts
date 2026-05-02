@@ -119,7 +119,9 @@ export async function GET(req: NextRequest) {
       .select("automation_id, sort_order, type, description, selector, url, value"),
     supabase
       .from("automation_runs")
-      .select("id, automation_id, run_type, status, started_at, finished_at, error, steps_completed")
+      // `screenshot_urls` is included so the Replay Viewer modal (W4B Slice 5)
+      // can render a step-by-step carousel without an extra round-trip.
+      .select("id, automation_id, run_type, status, started_at, finished_at, error, steps_completed, screenshot_urls")
       .order("started_at", { ascending: false })
       .limit(50),
     supabase
