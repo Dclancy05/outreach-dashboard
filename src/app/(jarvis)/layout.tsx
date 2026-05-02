@@ -34,6 +34,8 @@ import { InboxDrawerProvider } from "@/components/inbox/inbox-drawer-provider"
 import { InboxDrawer } from "@/components/inbox/inbox-drawer"
 import { JarvisHelpOverlayProvider } from "@/components/jarvis/help/jarvis-help-overlay"
 import { JarvisGoNavListener } from "@/components/jarvis/help/jarvis-go-nav-listener"
+import { JarvisVoiceEverywhere } from "@/components/jarvis/voice/jarvis-voice-everywhere"
+import { JarvisNetworkStatus } from "@/components/jarvis/shell/jarvis-network-status"
 
 interface JarvisLayoutProps {
   children: ReactNode
@@ -57,6 +59,8 @@ export default function JarvisLayout({ children }: JarvisLayoutProps) {
             <WelcomeWizardTrigger />
             <InboxDrawer />
             <JarvisGoNavListener />
+            <JarvisVoiceEverywhere />
+            <JarvisNetworkStatus />
           </JarvisHelpOverlayProvider>
         </JarvisCmdkProvider>
       </JarvisShellProviders>
