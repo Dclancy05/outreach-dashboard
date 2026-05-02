@@ -741,6 +741,14 @@ export default function OutreachPage() {
   // collapsed otherwise (so the picker stays scannable on big accounts).
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set())
   const [pickerGroupsHydrated, setPickerGroupsHydrated] = useState(false)
+
+  // P7 — readiness filters. Default ON (skip the bad accounts) so we keep
+  // today's safe behaviour: Dylan never picks an account that's guaranteed
+  // to fail at launch. Toggling them off lets him surface a problematic
+  // account if he genuinely needs to inspect or unblock it from the picker.
+  const [skipNoProxyGroup, setSkipNoProxyGroup] = useState(true)
+  const [skipExpiredCookies, setSkipExpiredCookies] = useState(true)
+  const [skipPausedWarmup, setSkipPausedWarmup] = useState(true)
   // P5.3 — "all tiles at once" view is on when there are >6 proxy groups.
   const [vncGridView, setVncGridView] = useState(false)
   const [vncHoverTile, setVncHoverTile] = useState<string | null>(null)
@@ -1276,6 +1284,42 @@ export default function OutreachPage() {
                 <Input placeholder="e.g. NYC Restaurants April" value={campaignName} onChange={e => setCampaignName(e.target.value)} className="rounded-xl max-w-md" />
               </div>
 
+              {/* P7 — Readiness filters. Default ON so the picker only shows
+                  accounts that can actually send right now. Toggle off to
+                  inspect / pick an account that's currently parked. */}
+              <div className="mb-4 p-3 rounded-xl bg-muted/10 border border-border/30 space-y-2">
+                <p className="text-xs font-medium text-muted-foreground uppercase">Skip accounts with</p>
+                <div className="flex flex-wrap gap-4">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={skipNoProxyGroup}
+                      onChange={e => setSkipNoProxyGroup(e.target.checked)}
+                      className="w-4 h-4 rounded border-border accent-violet-500"
+                    />
+                    <span className="text-muted-foreground">No proxy group</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={skipExpiredCookies}
+                      onChange={e => setSkipExpiredCookies(e.target.checked)}
+                      className="w-4 h-4 rounded border-border accent-violet-500"
+                    />
+                    <span className="text-muted-foreground">Expired cookies</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={skipPausedWarmup}
+                      onChange={e => setSkipPausedWarmup(e.target.checked)}
+                      className="w-4 h-4 rounded border-border accent-violet-500"
+                    />
+                    <span className="text-muted-foreground">Paused warmup</span>
+                  </label>
+                </div>
+              </div>
+
               <Label className="mb-2 block">Sending Accounts</Label>
               {(() => {
                 // P3.B — folder-grouped picker. Filter accounts that *can*
@@ -1283,12 +1327,20 @@ export default function OutreachPage() {
                 // Email/SMS accounts don't need a proxy, so they always pass
                 // the proxy gate and live in the "No Group (direct API)" bucket.
                 const sendable = accounts.filter(a => {
+                  // Hard filters — these are non-negotiable. Inactive
+                  // accounts can't send; Google booster accounts aren't
+                  // senders by design.
                   if (a.status !== "active") return false
                   if (a.platform === "google") return false
-                  if (a.session_status === "expired" || a.session_status === "needs_signin") return false
-                  if (a.warmup_paused === true) return false
+                  // Soft filters — Dylan can toggle these off to inspect a
+                  // problematic account. Default behaviour skips them so a
+                  // launch never queues guaranteed failures.
+                  if (skipExpiredCookies && (a.session_status === "expired" || a.session_status === "needs_signin")) return false
+                  if (skipPausedWarmup && a.warmup_paused === true) return false
                   const isDirectApi = a.platform === "email" || a.platform === "sms"
-                  if (!isDirectApi && !a.proxy_group_id) return false
+                  // Email / SMS never need a proxy, so the no-proxy filter
+                  // simply doesn't apply to them.
+                  if (skipNoProxyGroup && !isDirectApi && !a.proxy_group_id) return false
                   return true
                 })
 
