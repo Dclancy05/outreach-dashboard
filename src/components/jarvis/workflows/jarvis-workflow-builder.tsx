@@ -143,10 +143,10 @@ export function JarvisWorkflowBuilder({
 
   const activeCount = workflows.filter((w) => w.status !== "archived").length
 
+  // Wave 9.α fix: min-h-dvh inside main's overflow-y-auto produced 0px canvas.
+  // Use deterministic h-[calc(100dvh-80px)] (header 56 + status bar 24) so
+  // flex-1 children inside have computable height for ReactFlow.
   return (
-    {/* Wave 9.α fix: min-h-dvh inside main's overflow-y-auto produced 0px canvas.
-        Use deterministic h-[calc(100dvh-80px)] (header 56 + status bar 24) so
-        flex-1 children inside have computable height for ReactFlow. */}
     <div className="flex flex-col h-[calc(100dvh-80px)] bg-mem-bg -mx-4 sm:-mx-8 -mt-6 -mb-12">
       {/* Sub-tab strip */}
       <div className="flex items-center gap-2 px-4 sm:px-6 pt-4 shrink-0">
