@@ -82,6 +82,11 @@ export async function GET(req: Request) {
       status: 'sent',
       message_preview: s.message_text?.substring(0, 80) || '',
       template_id: s.template_id,
+      // Slice 6 — surface account_id + campaign_id so the calendar UI
+      // can filter by proxy group (looked up client-side via accounts)
+      // and by campaign without a second round-trip.
+      account_id: s.account_id || null,
+      campaign_id: s.campaign_id || null,
       type: 'sent'
     })),
     ...queued.map((q: any) => ({
@@ -92,6 +97,8 @@ export async function GET(req: Request) {
       action: q.action_type || 'dm',
       status: q.status,
       message_preview: q.message_text?.substring(0, 80) || '',
+      account_id: q.account_id || null,
+      campaign_id: q.campaign_id || null,
       type: 'queued'
     })),
     ...projected
