@@ -15,7 +15,8 @@
     "lint": "next lint",
     "migrate": "npx tsx scripts/migrate-to-supabase.ts",
     "seed:workflows": "tsx scripts/seed-workflow-templates.ts",
-    "seed:schedules": "tsx scripts/seed-schedules.ts"
+    "seed:schedules": "tsx scripts/seed-schedules.ts",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -79,6 +80,7 @@
     "dotenv": "^17.2.3",
     "eslint": "^8.56.0",
     "eslint-config-next": "^14.1.0",
+    "patch-package": "^8.0.1",
     "pg": "^8.18.0",
     "postcss": "^8.4.33",
     "tailwindcss": "^3.4.1",

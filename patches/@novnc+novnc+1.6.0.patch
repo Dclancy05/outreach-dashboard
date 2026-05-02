@@ -1,0 +1,17 @@
+diff --git a/node_modules/@novnc/novnc/lib/util/browser.js b/node_modules/@novnc/novnc/lib/util/browser.js
+index 8121bc1..75fb65e 100644
+--- a/node_modules/@novnc/novnc/lib/util/browser.js
++++ b/node_modules/@novnc/novnc/lib/util/browser.js
+@@ -176,7 +176,11 @@ function _checkWebCodecsH264DecodeSupport2() {
+   }));
+   return _checkWebCodecsH264DecodeSupport2.apply(this, arguments);
+ }
+-exports.supportsWebCodecsH264Decode = supportsWebCodecsH264Decode = await _checkWebCodecsH264DecodeSupport();
++// Patched (outreach-dashboard): replaced top-level `await` with a synchronous
++// `false` so this CJS module compiles under Next.js's webpack5 (which forbids
++// top-level await in non-ESM modules). H264 hardware decode is not used by
++// any of our VNC servers, so losing the runtime probe is harmless.
++exports.supportsWebCodecsH264Decode = supportsWebCodecsH264Decode = false;
+ 
+ /*
+  * The functions for detection of platforms and browsers below are exported
