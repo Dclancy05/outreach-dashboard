@@ -176,8 +176,12 @@ const ACTION_BLOCKS = [
   { id: "li_msg", platform: "linkedin", action: "message", label: "LI Message", hasMessage: true, hasSubject: false, category: "DM" },
   { id: "li_connect", platform: "linkedin", action: "connect", label: "LI Connect", hasMessage: true, hasSubject: false, category: "Connect" },
   { id: "ig_follow", platform: "instagram", action: "follow", label: "IG Follow", hasMessage: false, hasSubject: false, category: "Connect" },
-  { id: "email", platform: "email", action: "message", label: "Email", hasMessage: true, hasSubject: true, category: "Email" },
-  { id: "sms", platform: "sms", action: "message", label: "SMS", hasMessage: true, hasSubject: false, category: "Email" },
+  { id: "email", platform: "email", action: "message", label: "Email (Generic)", hasMessage: true, hasSubject: true, category: "Email" },
+  // Backend integration: send-email route routes to Instantly when action="message_instantly".
+  { id: "email_instantly", platform: "email", action: "message_instantly", label: "Email via Instantly", hasMessage: true, hasSubject: true, category: "Email" },
+  { id: "sms", platform: "sms", action: "message", label: "SMS (Generic)", hasMessage: true, hasSubject: false, category: "Email" },
+  // Backend integration: send-sms route routes to GHL when action="message_ghl".
+  { id: "sms_ghl", platform: "sms", action: "message_ghl", label: "SMS via GHL", hasMessage: true, hasSubject: false, category: "Email" },
 ]
 
 const VARIABLE_CHIPS = ["{{name}}", "{{niche}}", "{{business}}"]
