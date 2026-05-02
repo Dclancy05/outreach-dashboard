@@ -11,11 +11,14 @@
 // jarvis-shell.css so we don't duplicate inline SVG data URIs in JS.
 
 import {
+  Activity,
   Bell,
   Bot,
   Brain,
   ChevronLeft,
+  DollarSign,
   Eye,
+  FileText,
   PanelLeft,
   PlayCircle,
   Plug,
@@ -62,6 +65,9 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/jarvis/inbox", label: "Inbox", icon: Bell },
   { href: "/jarvis/mcps", label: "MCPs", icon: Plug },
   { href: "/jarvis/observability", label: "Observability", icon: Eye },
+  { href: "/jarvis/cost", label: "Cost", icon: DollarSign },
+  { href: "/jarvis/status", label: "Status", icon: Activity },
+  { href: "/jarvis/audit", label: "Audit", icon: FileText },
 ]
 
 /* -------------------------------------------------------------------------- */

@@ -7,14 +7,30 @@
 //
 // On mobile (< lg) the back-pill collapses to an icon and the wordmark hides.
 
-import { ArrowLeft, ChevronRight, User } from "lucide-react"
+import { ArrowLeft, ChevronRight, HelpCircle, User } from "lucide-react"
 import Link from "next/link"
 import { motion, useReducedMotion } from "framer-motion"
 import { JarvisCmdkOpener } from "@/components/jarvis/shell/jarvis-cmdk-stub"
 import { useJarvisVersion } from "@/components/jarvis/shell/jarvis-shell-providers"
 import { statusPulse } from "@/components/jarvis/motion/presets"
 import { InboxBell } from "@/components/inbox/inbox-bell"
+import { useJarvisHelp } from "@/components/jarvis/help/jarvis-help-overlay"
 import { cn } from "@/lib/utils"
+
+function JarvisHelpButton() {
+  const { toggle } = useJarvisHelp()
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label="Keyboard shortcuts (press ?)"
+      title="Keyboard shortcuts — press ?"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-mem-border bg-mem-surface-1 text-mem-text-secondary transition-colors hover:border-mem-border-strong hover:text-mem-text-primary"
+    >
+      <HelpCircle className="h-4 w-4" />
+    </button>
+  )
+}
 
 interface JarvisHeaderProps {
   /** Whether a workflow run is active. Drives the live status dot animation.
@@ -64,8 +80,9 @@ export function JarvisHeader({ liveActivity = false }: JarvisHeaderProps) {
         <JarvisCmdkOpener />
       </div>
 
-      {/* Right: inbox bell + live status + account */}
+      {/* Right: help · inbox bell + live status + account */}
       <div className="flex items-center gap-2">
+        <JarvisHelpButton />
         {/* Wave 9.α fix: Inbox bell was sidebar-only; add to header for parity with /agency. */}
         <InboxBell />
         <div
