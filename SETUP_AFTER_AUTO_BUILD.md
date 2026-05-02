@@ -4,13 +4,17 @@
 
 ## 🎬 60-second tour
 
-1. **`/jarvis/status`** — every part of the system on one screen. CPU/memory/load on the VPS, every microservice with a green/red dot + latency, MCP daemon health, all 15 cron jobs in a table, last 5 deploys with click-through to GitHub. Refreshes every 10s.
-2. **`/jarvis/cost`** — what AI is costing you. Headline cards (today vs daily cap, 30-day total, total tokens), 30-day spend area chart, top agents and workflows ranked. The cap is enforced — when it hits, runs auto-pause until midnight UTC.
-3. **`/jarvis/audit`** — every change anyone (agent or human) has made. Search box, two facet filters, click any row to expand the JSON payload + IP + user-agent. Auto-refreshes every 30s.
-4. **`?` anywhere in /jarvis** — opens the keyboard cheatsheet, route-aware. The route-specific section at the bottom changes depending on which page you're on.
-5. **`g` then a letter** — Linear-style two-key nav. `g m` → Memory, `g c` → Cost, `g s` → Status, `g a` → Agents, etc. Press `?` for the full map.
-6. **`/automations`** — 21 new platform tiles dropped today. Reddit, X, Snapchat, Pinterest, Email, SMS now appear in the Catalog. Email + SMS use API endpoints (Instantly + GHL) — no recording step needed.
-7. **Inbox bell** — when an automation breaks during the daily maintenance run, it now shows up here. Used to be silent.
+1. **`/jarvis`** — new home dashboard with 90-day activity heatmap, surface tile grid, and welcome strip. Was a redirect; now real.
+2. **`/jarvis/status`** — every part of the system on one screen. CPU/memory/load on the VPS, every microservice with a green/red dot + latency, MCP daemon health, all 15 cron jobs in a table, last 5 deploys with click-through to GitHub. Refreshes every 10s.
+3. **`/jarvis/cost`** — what AI is costing you. Headline cards (today vs daily cap, 30-day total, total tokens), 30-day spend area chart, top agents and workflows ranked. The cap is enforced — when it hits, runs auto-pause until midnight UTC.
+4. **`/jarvis/audit`** — every change anyone (agent or human) has made. Search box, two facet filters, click any row to expand the JSON payload + IP + user-agent. Auto-refreshes every 30s.
+5. **`?` anywhere in /jarvis** — opens the keyboard cheatsheet, route-aware. The route-specific section at the bottom changes depending on which page you're on.
+6. **`g` then a letter** — Linear-style two-key nav. `g m` → Memory, `g c` → Cost, `g s` → Status, `g a` → Agents, etc. Press `?` for the full map.
+7. **`⌘⇧V` voice dictation** — press anywhere in /jarvis. Streams transcript into the focused input/textarea/contentEditable. Floating mic FAB at bottom-right also triggers it.
+8. **`/automations` 53 tiles** — Reddit, X, Snapchat, Pinterest, Email, SMS added. Email + SMS use API endpoints (Instantly + GHL) — no recording step. Each automation tile has a 14-day pass-rate sparkline and a daily auto-computed health score.
+9. **`/automations` step builder** — type `{{` in any step value field to autocomplete `{{username}}`, `{{message}}`, `{{first_name}}`, etc. Smart variable autocomplete is wired across all step kinds.
+10. **`/outreach` campaign wizard** — Step 1 accounts grouped by proxy_group (collapsible folders); 3 readiness filter checkboxes (skip no-proxy/expired-cookie/paused-warmup); GHL SMS + Instantly Email are real action types in the sequence builder; Step 2 hard-stops on missing-platform leads with a modal forcing "Remove leads / Go back"; Step 3 shows pre-flight per-day cap warnings before launch. Calendar drag-to-reschedule + Group filter dropdown.
+11. **Inbox bell** — when an automation breaks during the daily maintenance run, it now shows up here. /jarvis/inbox is now also a full-page route (was 404).
 
 ## 🛡️ What's still safe and untouched
 
@@ -38,8 +42,12 @@ Open these URLs to see the new work. PIN: `122436`.
 | **/jarvis/status** 🆕 | Live operations overview — VPS metrics, services, MCP health, DB row counts, 15 cron schedules, last 5 deploys. 10-second auto-refresh. |
 | **/jarvis/cost** 🆕 | Token spend dashboard — today vs daily cap, 30-day spark chart, top agents + workflows. |
 | **/jarvis/audit** 🆕 | Filterable audit log — every change made by any agent or user. Search + 2 facets. |
+| **/jarvis/inbox** 🆕 | Full-page inbox with Unread/All filters + Mark-all-read + 30s autorefresh. |
+| **/jarvis/settings** 🆕 | Settings hub — personas/MCPs/cost/audit/status tiles + read-only keyboard shortcut list + theme placeholder. |
 | `/agency/memory` | Original page still works (no regression) |
 | `/agency/agents` | Original works |
+| `/automations` | 53 platform tiles + 14-day sparkline per automation + smart variable autocomplete in step editor |
+| `/outreach` | 6-step wizard with grouped accounts + readiness filters + hard-stop dialog + pre-flight cap check + calendar group filter |
 
 ## ⌨️ New keyboard shortcuts (try these first)
 
@@ -59,6 +67,8 @@ Inside `/jarvis/*`:
 | **`g s`** | Go to System Status |
 | **`g i`** | Go to Integrations |
 | **`g .`** | Go to Settings |
+| **`⌘⇧V`** | Start/stop voice dictation (streams to focused input) |
+| **`F2`** | Rename selected vault file (Memory page) |
 
 (`g X` is two-key — press `g`, then within 1.2s press the destination letter.)
 
