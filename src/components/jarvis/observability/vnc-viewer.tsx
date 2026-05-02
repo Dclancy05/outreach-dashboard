@@ -280,9 +280,19 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
         }
 
         const handleCredentialsRequired = () => {
-          const msg = "VNC server requires credentials we don't have."
+          // noVNC fires this when the RFB security step demands a password we
+          // didn't pass in. Without transitioning state, the viewer would sit
+          // at "connecting" forever (errorMsg is set but only renders when
+          // state === "error"). Surface the failure so the parent's
+          // onStateChange flips to "error" and any "connecting" overlay clears.
+          const msg = "VNC server requires a password — set NEXT_PUBLIC_VNC_PASSWORD or pass `password` prop."
           setErrorMsg(msg)
           onError?.(msg)
+          updateState("error")
+          // Tear down the RFB so we don't leak the half-open WS while the user
+          // sees the error. Reconnect button on the parent re-mounts cleanly.
+          try { rfbRef.current?.disconnect() } catch {}
+          rfbRef.current = null
         }
 
         const handleSecurityFailure = (ev: CustomEvent) => {
@@ -292,6 +302,7 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
           const msg = detail?.reason ?? "VNC security handshake failed"
           setErrorMsg(msg)
           onError?.(msg)
+          updateState("error")
         }
 
         const handleDesktopName = (ev: CustomEvent) => {
