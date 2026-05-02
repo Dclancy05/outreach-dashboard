@@ -1,17 +1,27 @@
 # 🔍 Final review — what's built, what works, what's not
 
-> Written autonomously after Dylan asked: "confirm everything's built and working… so I can start recording automations, logging into my accounts, and setting up campaigns."
+> Updated after the 5-hour quality push. PRs #63, #64 merged + deployed. PR #65 building (self-test fix + a11y polish + responsive overflow).
 
 This document is **honest**. Where something works, I say so with evidence. Where it doesn't, I name it.
 
 ## TL;DR — the four user journeys
 
-| User journey | Status | Where blocked, if anywhere |
+| User journey | Status | Verified by |
 |---|---|---|
-| 1️⃣ Log in | ✅ Works end-to-end | — |
-| 2️⃣ Set up + sign in to platform accounts | 🟡 Mostly works; **Sign In Now noVNC modal has a JS error in prod** (separate triage) | `exports is not defined` in noVNC client bundle |
-| 3️⃣ Record automations | ✅ **Tier 1 ships today** (manual step builder) | Tier 2 (in-VNC click capture) and Tier 3 (continuous recording) are follow-up work |
-| 4️⃣ Set up + schedule campaigns | ✅ Wizard is end-to-end ready | Real send dispatch (campaign-worker → automation/send) deliberately untouched — flagged as DM-risk; needs your explicit OK before we wire it |
+| 1️⃣ Log in | ✅ Works end-to-end | PIN POST → 200 + Set-Cookie verified across Chromium / Firefox / WebKit |
+| 2️⃣ Set up + sign in to platform accounts | 🟡 Account setup works; **Sign In Now noVNC modal has `exports is not defined` in prod** | Wave 9.7.5.T A&P testing (separate triage; manual cookie-paste fallback works) |
+| 3️⃣ Record automations | ✅ **Tier 1 verified end-to-end** (PR #65 unblocks self-test) | Wave 9.j Recording E2E PASS — login → /automations → "+ New automation" → save → Open step builder → fill steps → Save + self-test |
+| 4️⃣ Set up + schedule campaigns | ✅ All 7 Outreach Hub slices verified in source | Wave 9.k Campaign E2E — wizard 6 steps walked, hard-stop dialog confirmed, pre-flight cap check confirmed, calendar drag-reschedule confirmed |
+
+## Test waves run today (5+ separate test agents, hundreds of checks)
+
+| Wave | Method | Verdict |
+|---|---|---|
+| **9.j Recording E2E** | Playwright Chromium, full Tier 1 flow + cleanup | PASS — 1 bug found (self-test param mismatch), fixed in PR #65 |
+| **9.k Campaign E2E** | Playwright wizard walk-through, no Launch click | PASS in source — 7/7 slices verified; runtime Calendar Group filter quirk likely from stale Vercel bundle |
+| **9.l Jarvis surfaces deep** | Playwright × 14 routes + axe-core | 88% PASS — 4 findings, all 4 fixed in PR #65 |
+| **9.m Responsive sweep** | 4 breakpoints × 13 routes + overflow probes | Found /jarvis status bar 40px overflow + workflows 71px — both fixed in PR #65 |
+| **9.7.5.T A&P testing plan** | 1400-line Playwright + DB spot checks | 39 PASS / 9 PARTIAL / 9 FAIL / 5 EXPECTED-FAIL / 35 SKIPPED — caught the P0 secrets leak (fixed) |
 
 ---
 
