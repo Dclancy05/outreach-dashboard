@@ -56,6 +56,7 @@ import {
   EVENT_RUN_RESUMED,
   EVENT_RUN_ABORTED,
 } from "@/lib/inngest/client"
+import { saveToVault } from "@/lib/vault/save"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -89,6 +90,7 @@ type ParsedCommand =
   | { kind: "terminal_list" }
   | { kind: "terminal_spawn"; task: string }
   | { kind: "terminal_kill"; id: string }
+  | { kind: "clear_conversation"; tone: "clear" | "exit" }
 
 function parseCommand(rawText: string): ParsedCommand {
   const text = rawText.trim()
@@ -160,6 +162,12 @@ function parseCommand(rawText: string): ParsedCommand {
         "",
         "🛑 */kill <id>*",
         "Stop a terminal. ID = first 8 chars from `/terminals`.",
+        "",
+        "🧹 */clear*",
+        "Save recent chat to the Memory Vault and wipe the buffer.",
+        "",
+        "👋 */exit*",
+        "Same as /clear with a goodbye.",
         "",
         "*Web workspace:* outreach-github.vercel.app/agency/terminals",
       ].join("\n"),
@@ -274,6 +282,16 @@ function parseCommand(rawText: string): ParsedCommand {
     return { kind: "terminal_kill", id: arg }
   }
 
+  // /clear — wipe conversation history (save to vault first)
+  if (/^\/clear(?:\s|$|@)/i.test(text)) {
+    return { kind: "clear_conversation", tone: "clear" }
+  }
+
+  // /exit — same as /clear but with a goodbye tone
+  if (/^\/exit(?:\s|$|@)/i.test(text)) {
+    return { kind: "clear_conversation", tone: "exit" }
+  }
+
   // Unknown slash command
   if (text.startsWith("/")) {
     const tried = text.split(/\s/)[0]
@@ -350,6 +368,113 @@ function formatTerminalsList(sessions: TerminalSession[], cap?: { active: number
     return `${status} \`${id8}\` *${s.title}*${cost}\n  └ ${s.branch || ""}`
   })
   return `🖥️ *${sessions.length} terminal${sessions.length === 1 ? "" : "s"}*${cap ? ` — ${cap_line}` : "\n\n"}${lines.join("\n")}\n\n_Stop one with_ \`/kill <id>\``
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// /clear and /exit — save recent telegram exchanges to the Memory Vault then
+// "wipe" Dylan's conversation buffer. We don't actually keep a session-state
+// row right now; what we DO have is the history of workflow_runs triggered
+// from his chat_id, which is the de-facto conversation log. We snapshot the
+// most recent N runs into Conversations/telegram-<chat>-<ts>.md so the next
+// session can be fresh without losing context.
+// ──────────────────────────────────────────────────────────────────────────
+
+interface ConversationRun {
+  id: string
+  created_at: string
+  status: string
+  input: Record<string, unknown> | null
+  output: Record<string, unknown> | null
+  summary: string | null
+}
+
+const CONVERSATION_HISTORY_LIMIT = 20
+
+function pickMessage(input: Record<string, unknown> | null): string {
+  if (!input) return ""
+  const m = input.message
+  if (typeof m === "string") return m
+  return ""
+}
+
+function pickReply(run: ConversationRun): string {
+  if (run.summary) return run.summary
+  const out = run.output
+  if (!out) return `(run ${run.status})`
+  if (typeof out === "string") return out
+  for (const k of ["reply", "answer", "text", "draft", "content", "result"]) {
+    const v = (out as Record<string, unknown>)[k]
+    if (typeof v === "string" && v.trim()) return v
+  }
+  // Strip _meta and stringify what's left as a fallback.
+  try {
+    const { _meta: _omit, ...rest } = out as { _meta?: unknown } & Record<string, unknown>
+    void _omit
+    const s = JSON.stringify(rest)
+    return s === "{}" ? `(run ${run.status})` : s.slice(0, 500)
+  } catch {
+    return `(run ${run.status})`
+  }
+}
+
+function fmtDateForFilename(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}-${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`
+}
+
+async function snapshotConversationToVault(
+  chatId: number | string,
+): Promise<{ saved: boolean; count: number; path?: string; error?: string }> {
+  // Pull recent runs that originated from this chat. The chat_id sits inside
+  // input._meta.telegram_chat_id (mixed string/number depending on caller —
+  // we coerce to string for the OR query).
+  const cid = String(chatId)
+  // PostgREST json filter — works for both string and numeric chat ids that
+  // got serialized into input._meta.
+  const { data, error } = await supabase
+    .from("workflow_runs")
+    .select("id, created_at, status, input, output, summary")
+    .or(`input->_meta->>telegram_chat_id.eq.${cid},input->_meta->telegram_chat_id.eq.${cid}`)
+    .order("created_at", { ascending: false })
+    .limit(CONVERSATION_HISTORY_LIMIT)
+
+  if (error) {
+    return { saved: false, count: 0, error: `db query failed: ${error.message}` }
+  }
+  const runs = (data || []) as ConversationRun[]
+  if (runs.length === 0) {
+    return { saved: false, count: 0 }
+  }
+
+  const now = new Date()
+  const pathSlug = `telegram-${cid}-${fmtDateForFilename(now)}.md`
+  const path = `Conversations/${pathSlug}`
+
+  const lines: string[] = []
+  lines.push(`# Telegram conversation — chat ${cid} — ${now.toISOString()}`)
+  lines.push("")
+  lines.push(`Snapshot of the most recent ${runs.length} run${runs.length === 1 ? "" : "s"} from this chat, taken when the user ran /clear or /exit.`)
+  lines.push("")
+  // Oldest first reads naturally as a transcript.
+  for (const run of runs.slice().reverse()) {
+    const ts = run.created_at
+    const msg = pickMessage(run.input).trim() || "(no message)"
+    const reply = pickReply(run).trim() || "(no reply)"
+    lines.push(`### ${ts} · run \`${run.id.slice(0, 8)}\` · ${run.status}`)
+    lines.push("")
+    lines.push(`**You:** ${msg}`)
+    lines.push("")
+    lines.push(`**Jarvis:** ${reply}`)
+    lines.push("")
+    lines.push("---")
+    lines.push("")
+  }
+
+  const result = await saveToVault(path, lines.join("\n"))
+  if (!result.ok) {
+    return { saved: false, count: runs.length, error: result.error }
+  }
+  return { saved: true, count: runs.length, path }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -733,6 +858,38 @@ export async function POST(req: NextRequest) {
         replyToMessageId: message.message_id,
       })
       return NextResponse.json({ ok: true, kind: "terminal_kill" })
+    }
+
+    // /clear — save recent conversation to vault, then "wipe" the buffer.
+    // /exit — same as /clear, but with a goodbye tone.
+    if (cmd.kind === "clear_conversation") {
+      const snapshot = await snapshotConversationToVault(chatId)
+      const isExit = cmd.tone === "exit"
+      const headline = isExit
+        ? "👋 *Goodbye for now.*"
+        : "🧹 *Conversation history cleared.*"
+      const detail = snapshot.saved
+        ? `Saved the last ${snapshot.count} exchange${snapshot.count === 1 ? "" : "s"} to the Memory Vault at \`${snapshot.path}\` so we can pick this back up later.`
+        : snapshot.count === 0
+          ? "Nothing to save — no past runs from this chat."
+          : `Tried to save your recent exchanges but the Memory Vault said: \`${snapshot.error}\`. The conversation is still cleared.`
+      const closing = isExit
+        ? "Send any message to start a fresh session."
+        : "I'll start fresh on the next message."
+      await sendTelegram(`${headline}\n\n${detail}\n\n${closing}`, {
+        chatId,
+        parseMode: "Markdown",
+        replyToMessageId: message.message_id,
+        disableWebPagePreview: true,
+      })
+      return NextResponse.json({
+        ok: true,
+        kind: "clear_conversation",
+        tone: cmd.tone,
+        saved: snapshot.saved,
+        count: snapshot.count,
+        path: snapshot.path,
+      })
     }
 
     // Workflow execution.

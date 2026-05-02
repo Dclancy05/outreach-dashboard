@@ -7,6 +7,10 @@ const PUBLIC_ROUTES = [
   "/api/auth/verify-pin",
   "/api/auth/va-login",
   "/api/cron/",
+  // Vercel cron also schedules /api/retry-queue/process daily — the cron
+  // headers don't carry an admin cookie, so we whitelist this path the same
+  // way as /api/cron/. Handler does its own work and accepts GET.
+  "/api/retry-queue/",
   "/api/ai-agent/",
   "/api/docs/",
   "/security",
@@ -73,6 +77,7 @@ export async function middleware(req: NextRequest) {
   if (
     pathname.startsWith("/api/") &&
     !pathname.startsWith("/api/cron/") &&
+    !pathname.startsWith("/api/retry-queue/") &&
     !pathname.startsWith("/api/ai-agent/") &&
     !pathname.startsWith("/api/auth/")
   ) {

@@ -29,6 +29,7 @@
 // try/catch and never throw — a Telegram outage must not fail a real run.
 
 import { createClient } from "@supabase/supabase-js"
+import * as Sentry from "@sentry/nextjs"
 import { inngest, EVENT_RUN_QUEUED, EVENT_RUN_APPROVAL, EVENT_RUN_ABORTED, type RunQueuedEvent } from "@/lib/inngest/client"
 import {
   type WorkflowGraph, type WorkflowNode, findEntry, getNode, getOutgoing,
@@ -367,6 +368,24 @@ export const runWorkflow = inngest.createFunction(
         return { ok: false, run_id, budget: err.layer, error: err.message }
       }
       logger.error("Workflow run failed", { run_id, workflow_id, err: (err as Error).message })
+      // Surface to Sentry so silent worker failures stop being silent. Tagged
+      // by run_id + workflow_id so traces group sensibly. Wrapped in a tiny
+      // try/catch — Sentry transport errors must not mask the original.
+      try {
+        Sentry.captureException(err, {
+          tags: {
+            workflow_id,
+            run_id,
+            source: meta.source ? String(meta.source) : "unknown",
+          },
+          extra: {
+            workflow_name,
+            inngest_event_id: event.id ?? null,
+          },
+        })
+      } catch (sentryErr) {
+        console.error("[run-workflow] Sentry.captureException threw:", (sentryErr as Error).message)
+      }
       await step.run("mark-failed", async () => {
         await supabase.from("workflow_runs").update({
           status: "failed",

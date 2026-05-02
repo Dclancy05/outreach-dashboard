@@ -211,13 +211,29 @@ async function checkRuns24h(): Promise<CheckResult> {
     }
   }
 
+  const total = data?.length || 0
+  const failed = byStatus.failed || 0
+  // Failed-rate guard: if more than half of the last 24h's runs failed, that's
+  // a real signal something's broken (agent-runner down, prompt template
+  // regression, exhausted budget, etc.) — surface ok:false even when nothing
+  // is "stuck" right now. Keep ok:true when total=0 (idle is not failure).
+  const tooManyFailed = total > 0 && failed / total > 0.5
+
+  if (tooManyFailed) {
+    return {
+      ok: false,
+      detail: `${failed}/${total} runs failed in 24h — investigate`,
+      meta: { total, by_status: byStatus, stuck, failed },
+    }
+  }
+
   return {
     ok: stuck === 0,
     detail:
       stuck === 0
-        ? `${data?.length || 0} runs in last 24h`
+        ? `${total} runs in last 24h`
         : `${stuck} run(s) stuck — sweeper will clean them up next cycle`,
-    meta: { total: data?.length || 0, by_status: byStatus, stuck },
+    meta: { total, by_status: byStatus, stuck, failed },
   }
 }
 
