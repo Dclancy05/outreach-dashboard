@@ -5,16 +5,12 @@ import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { RefreshCw } from "lucide-react"
 
-type LoginResult = { platform: string; loggedIn: boolean | null; loginUrl?: string; reason?: string | null }
 type Health = {
   chrome: boolean
   xvfb: boolean
   proxy: boolean
   queueProcessor: boolean
   recording?: boolean
-  accountsLoggedIn?: boolean
-  loginResults?: LoginResult[]
-  loggedOutCount?: number
 }
 
 export function SystemPulse() {
@@ -36,7 +32,12 @@ export function SystemPulse() {
 
   useEffect(() => {
     load()
-    const i = setInterval(load, 30000)
+    // 5 min cadence. Was 30s — combined with the now-removed /login-status
+    // probe inside /api/recordings/health, that hammered Chrome through every
+    // platform every 30s and put real Instagram cookies at ban risk. We never
+    // need infra status fresher than 5 min; an outage will surface within
+    // that window.
+    const i = setInterval(load, 5 * 60 * 1000)
     return () => clearInterval(i)
   }, [])
 
@@ -81,24 +82,16 @@ export function SystemPulse() {
   const okCount = checks.filter(c => c.ok).length
   const total = checks.length || 4
   const failing = checks.filter(c => !c.ok).map(c => c.label)
-  const loggedOut = (health?.loginResults || []).filter(r => r.loggedIn === false)
-  const hasLoggedOut = loggedOut.length > 0
 
-  // Logged-out accounts are a harder failure than a flaky Xvfb check — even when
-  // all infra checks pass, an account that isn't signed in means automations
-  // can't actually run. Surface this in red before infra problems.
-  const color = hasLoggedOut
-    ? "bg-red-500"
-    : okCount === total ? "bg-emerald-500" : okCount >= total / 2 ? "bg-amber-500" : "bg-red-500"
+  // Login-state UI was removed alongside the /login-status probe in
+  // /api/recordings/health (ban-risk fix). Per-account login state now lives
+  // on /accounts and /automations as user-triggered probes only.
+  const color = okCount === total
+    ? "bg-emerald-500"
+    : okCount >= total / 2 ? "bg-amber-500" : "bg-red-500"
 
   let label: string
-  if (hasLoggedOut) {
-    if (loggedOut.length === 1) {
-      label = `${loggedOut[0].platform} needs login`
-    } else {
-      label = `${loggedOut.length} accounts need login`
-    }
-  } else if (okCount === total) {
+  if (okCount === total) {
     label = "All systems operational"
   } else if (failing.length >= 3) {
     // Most-failures case: the recording-service infra (Chrome/Xvfb/proxy/queue)

@@ -63,7 +63,7 @@ export function auditLogAsync(entry: AuditEntry): void {
   })
 }
 
-function extractAdminId(cookieHeader: string | null | undefined): string | null {
+export function extractAdminId(cookieHeader: string | null | undefined): string | null {
   if (!cookieHeader) return null
   const parts = cookieHeader.split(/;\s*/)
   const admin = parts.find(p => p.startsWith("admin_session="))

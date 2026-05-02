@@ -109,6 +109,18 @@ Per `cron-jobs-todo.md`, **NOT YET BUILT:** account health monitor, sends_today 
 
 This system messages real social media accounts at scale. Meta and TikTok actively detect and ban automation. The system mitigates with: residential proxies, cookie persistence, warmup ramps, daily caps, send delays, send windows, account-lead affinity, reply auto-pause, account health auto-pause. **Don't bypass these.** Don't suggest "send faster" or "skip warmup." Per principle 2.10, build the BEST version — and the best version doesn't get banned.
 
+### Chrome navigation is a regulated resource
+
+Any endpoint that drives the VPS Chrome — `/api/platforms/goto`, `/api/platforms/login-status?refresh=1`, anything that calls the VPS's `/login-status*`, `/goto`, `/start`, `/replay` — counts. Rules:
+
+1. **Every Chrome-driving endpoint is rate-limited.** Use `rateLimitDb` from `src/lib/rate-limit.ts`. Default `goto`-style: 5 per 30s per admin. Default cache-busting refresh: 1 per 60s per admin.
+2. **Never poll a Chrome-driving endpoint on a tight timer.** Default cadence for any background `setInterval` that touches `/api/platforms/*` or `/api/recordings/*` is **5+ minutes**. Tighter requires explicit user approval.
+3. **`/api/recordings/health` is infra-only.** It used to also pull `/login-status`, which silently rotated Chrome through every platform every cache-miss. That's been removed. Do not re-add it. Login state is queried explicitly via `/api/platforms/login-status` (user-initiated only).
+4. **Tests must verify backend behavior.** A passing UI test is not enough. Every PR that touches Chrome-driving code must (a) count `/goto` calls during a 60s idle window — must be zero, (b) run `popup-e2e-runner.mjs` with the rotation assertions, (c) not introduce new `setInterval`s on `/api/platforms/*` or `/api/recordings/*` without rate-limit + audit-log integration.
+5. **The audit log catches everything.** All non-GET API routes wrap `withAudit()` from `src/lib/audit.ts`, so `audit_log` already records every Chrome navigation. Use `/api/observability/chrome-goto` (when added) to read it back from a UI or test.
+
+The 2026-05-02 incident — silent Chrome rotation through IG/FB/LI/TikTok every 30s for weeks because `system-pulse.tsx` polled `/api/recordings/health` and that endpoint pulled `/login-status` — is the canonical example of why these rules exist.
+
 ## When you start a session
 
 1. Check `git status` — see what was in flight
