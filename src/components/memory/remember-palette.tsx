@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState, useRef } from "react"
+import { usePathname } from "next/navigation"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -30,16 +31,38 @@ export function RememberPalette() {
   const [saving, setSaving] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Cmd-K / Ctrl-K to open
+  const pathname = usePathname()
+
+  // Cmd-K / Ctrl-K to open — but ONLY outside /jarvis. Inside /jarvis the
+  // Jarvis command palette owns ⌘K and this palette is reachable via ⌘⇧K
+  // (handled below) or programmatically via the "jarvis:open-remember-palette"
+  // custom event (fired by the Jarvis cmdk's static "Quick remember" action).
   useEffect(() => {
+    const isJarvis = (pathname || "").startsWith("/jarvis")
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      if (!(e.metaKey || e.ctrlKey)) return
+      const k = e.key.toLowerCase()
+      if (k !== "k") return
+      // ⌘⇧K opens RememberPalette anywhere (global escape hatch).
+      if (e.shiftKey) {
         e.preventDefault()
         setOpen(true)
+        return
       }
+      // Plain ⌘K only when NOT in /jarvis — avoid conflict with Jarvis cmdk.
+      if (isJarvis) return
+      e.preventDefault()
+      setOpen(true)
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
+  }, [pathname])
+
+  // Listen for programmatic opens (e.g. from Jarvis cmdk "Quick remember").
+  useEffect(() => {
+    const open = () => setOpen(true)
+    window.addEventListener("jarvis:open-remember-palette", open)
+    return () => window.removeEventListener("jarvis:open-remember-palette", open)
   }, [])
 
   useEffect(() => {
