@@ -3,22 +3,18 @@
 /**
  * VNC viewer — embeds the live VPS Chrome browser into /jarvis/observability.
  *
- * Wraps the @novnc/novnc RFB client. The host page owns *which* WS URL/password
- * to connect to (read from NEXT_PUBLIC_VNC_WS_URL); this component owns:
- *   - the canvas container
- *   - RFB lifecycle (instantiate → events → disconnect)
- *   - connection state machine (idle / connecting / connected / error)
- *   - reconnect with linear backoff (2s, then 4s, then 6s — capped 6s)
- *   - debounced resize on viewport changes
- *   - keyboard pass-through when canvas is focused
- *
- * Connection is NEVER auto-initiated on mount. The parent toolbar's `Connect`
- * button calls the imperative `connect()` we expose via ref. This is to avoid
- * accidental traffic against the senders' real Chrome (ban-risk policy).
- *
- * RFB import: noVNC ships untyped CommonJS at `@novnc/novnc/lib/rfb`. We treat
- * it as an unknown shape and narrow with a tiny ambient interface below — no
- * `any` leaks across the module boundary.
+ * v2 (Phase 1 — bulletproofing 2026-05-03):
+ *   - Reconnect v2: 8 attempts (was 3), exponential backoff capped at 30s,
+ *     attempt counter resets after 60s of stable connection so a long session
+ *     that drops once isn't penalized for the next drop.
+ *   - Lifecycle handlers: beforeunload + visibilitychange — closes WS cleanly
+ *     when user nukes the tab; pauses when tab is backgrounded >5min;
+ *     reconnects on visibility return.
+ *   - Adaptive quality: rolling p95 ping → auto-adjusts qualityLevel.
+ *   - Telemetry: every 5s, POST {fps, ping, freezeMs, sessionId} to
+ *     /api/observability/vnc so we can chart VNC health.
+ *   - Reconnect overlay shows attempt N of M so user isn't staring at a
+ *     frozen screen during Tailscale Funnel 1001 closes.
  */
 
 import {
@@ -26,6 +22,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from "react"
@@ -49,7 +46,6 @@ interface RfbOptions {
 }
 
 interface RfbInstance {
-  // settable props we touch
   scaleViewport: boolean
   resizeSession: boolean
   clipViewport: boolean
@@ -59,12 +55,10 @@ interface RfbInstance {
   compressionLevel: number
   viewOnly: boolean
   focusOnClick: boolean
-  // methods
   disconnect(): void
   sendCtrlAltDel(): void
   focus(): void
   blur(): void
-  // EventTarget surface
   addEventListener(type: string, listener: (ev: CustomEvent) => void): void
   removeEventListener(type: string, listener: (ev: CustomEvent) => void): void
 }
@@ -89,13 +83,9 @@ export type VncConnectionState =
   | "reconnecting"
 
 export interface VncStats {
-  /** Active resolution e.g. "1920x1080" — only after framebuffer arrives. */
   resolution: string | null
-  /** Best-effort frames per second computed from frame events. */
   fps: number
-  /** Round-trip latency in ms (rough — measured on every framebuffer rect). */
   ping: number | null
-  /** Desktop name reported by the server (when known). */
   desktopName: string | null
 }
 
@@ -104,28 +94,42 @@ export interface VncViewerHandle {
   disconnect(): void
   reconnect(): void
   sendCtrlAltDel(): void
-  /** Returns a PNG data URL of the current canvas, or null if unavailable. */
   screenshot(): string | null
   focus(): void
 }
 
 interface VncViewerProps {
-  /** WebSocket URL — e.g. wss://host:6080/websockify. */
   wsUrl: string | null
-  /** Optional VNC password (RFB credentials.password). */
   password?: string
-  /** Image quality 0-9 (higher = better). Default 4 — tuned for Tailscale Funnel public TCP relay (~50-200ms). LAN test rigs that want sharper text can override to 6+. */
+  /** Initial quality 0-9. May be auto-adjusted if `adaptiveQuality`. Default 4. */
   quality?: number
-  /** Compression 0-9 (higher = more CPU, less bandwidth). Default 7 — same Tailscale-Funnel rationale. */
   compression?: number
-  /** Render at 1:1 (false) or scale-to-fit (true). Default true. */
   scaleViewport?: boolean
-  /** Stream stats updates back to parent for the status strip. */
+  /** Auto-tune quality based on rolling p95 ping. Default true. */
+  adaptiveQuality?: boolean
+  /** Account this VNC is for — sent with telemetry. */
+  accountId?: string | null
+  /** Session id — opaque, sent with telemetry. Generated if absent. */
+  sessionId?: string
+  /** When true, POST stats to /api/observability/vnc every 5s. Default true. */
+  telemetryEnabled?: boolean
   onStateChange?: (state: VncConnectionState) => void
   onStatsChange?: (stats: VncStats) => void
   onError?: (message: string) => void
   className?: string
 }
+
+/* -------------------------------------------------------------------------- */
+/*                                 Constants                                  */
+/* -------------------------------------------------------------------------- */
+
+const MAX_RECONNECT_ATTEMPTS = 8
+const RECONNECT_CAP_MS = 30_000
+const STABLE_CONNECT_RESET_MS = 60_000
+const HIDDEN_DISCONNECT_MS = 5 * 60_000
+const TELEMETRY_INTERVAL_MS = 5_000
+const ADAPTIVE_DOWN_THRESHOLD_MS = 300
+const ADAPTIVE_UP_THRESHOLD_MS = 80
 
 /* -------------------------------------------------------------------------- */
 /*                                 Component                                  */
@@ -139,6 +143,10 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
       quality = 4,
       compression = 7,
       scaleViewport = true,
+      adaptiveQuality = true,
+      accountId = null,
+      sessionId,
+      telemetryEnabled = true,
       onStateChange,
       onStatsChange,
       onError,
@@ -150,11 +158,21 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
     const rfbRef = useRef<RfbInstance | null>(null)
     const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const reconnectAttemptsRef = useRef(0)
+    const lastStableAtRef = useRef<number | null>(null)
     const [state, setState] = useState<VncConnectionState>("idle")
+    const [reconnectAttempt, setReconnectAttempt] = useState(0)
     const stateRef = useRef<VncConnectionState>("idle")
     const [errorMsg, setErrorMsg] = useState<string | null>(null)
+    const stoppedByUserRef = useRef(false)
+    const currentQualityRef = useRef(quality)
 
-    // Stats — kept in refs so we can mutate without re-rendering on every frame.
+    // Stable session id — generated once.
+    const sid = useMemo(
+      () => sessionId || `vnc_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`,
+      [sessionId]
+    )
+
+    // Stats — kept in refs so we can mutate without re-rendering.
     const statsRef = useRef<VncStats>({
       resolution: null,
       fps: 0,
@@ -162,6 +180,10 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
       desktopName: null,
     })
     const frameTimesRef = useRef<number[]>([])
+    const pingHistoryRef = useRef<number[]>([])
+    const bytesInRef = useRef(0)
+    const freezeMsRef = useRef(0)
+    const lastFrameAtRef = useRef<number>(performance.now())
 
     /* ------------------------------ helpers ------------------------------ */
 
@@ -207,20 +229,14 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
         return
       }
       if (!containerRef.current) return
-      if (rfbRef.current) {
-        // Already connecting/connected — caller should disconnect first.
-        return
-      }
+      if (rfbRef.current) return // already connecting/connected
 
+      stoppedByUserRef.current = false
       setErrorMsg(null)
       updateState(reconnectAttemptsRef.current > 0 ? "reconnecting" : "connecting")
 
-      // Lazy-load noVNC. The lib reaches for window/document during module init,
-      // so we cannot import it at the top of a file that might run on the server.
       let RFB: RfbConstructor
       try {
-        // @novnc/novnc ships no types; resolved as implicit any due to
-        // skipLibCheck. The dynamic import keeps it out of SSR.
         const mod = (await import("@novnc/novnc/lib/rfb")) as {
           default?: RfbConstructor
         }
@@ -240,30 +256,20 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
           credentials: password ? { password } : undefined,
         })
 
-        // Sensible defaults for an embedded viewer.
         rfb.scaleViewport = scaleViewport
         rfb.resizeSession = false
-        // clipViewport=false means: when the framebuffer is bigger than the
-        // canvas container, scale it down (combined with scaleViewport=true)
-        // rather than crop. Without this explicit set, some noVNC builds
-        // default to a clip-leaning behavior that produces a "zoomed in" view
-        // where the user can't see the bottom of the page.
         rfb.clipViewport = false
         rfb.showDotCursor = true
-        rfb.background = "rgb(11, 11, 13)" // matches mem-bg
-        rfb.qualityLevel = quality
+        rfb.background = "rgb(11, 11, 13)"
+        rfb.qualityLevel = currentQualityRef.current
         rfb.compressionLevel = compression
         rfb.viewOnly = false
         rfb.focusOnClick = true
 
         const handleConnect = () => {
-          reconnectAttemptsRef.current = 0
+          lastStableAtRef.current = Date.now()
           updateState("connected")
-          // ResizeObserver fires too late on initial mount — by the time it
-          // runs, noVNC has already computed the canvas at 1:1 framebuffer
-          // size, leaving the user with a "zoomed in / cropped" view. Force
-          // a scale recompute now that the canvas is mounted by toggling
-          // scaleViewport off and back on.
+          // Force scale recompute (see comment in v1 for why).
           setTimeout(() => {
             const r = rfbRef.current
             if (!r) return
@@ -271,24 +277,39 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
               r.scaleViewport = false
               r.scaleViewport = scaleViewport
             } catch {
-              // older noVNC builds may not let us set this twice — fall through
+              // older noVNC builds may not let us set this twice
             }
           }, 80)
+          // Reset attempt counter only after STABLE_CONNECT_RESET_MS of uptime
+          setTimeout(() => {
+            if (
+              stateRef.current === "connected" &&
+              lastStableAtRef.current &&
+              Date.now() - lastStableAtRef.current >= STABLE_CONNECT_RESET_MS
+            ) {
+              reconnectAttemptsRef.current = 0
+              setReconnectAttempt(0)
+            }
+          }, STABLE_CONNECT_RESET_MS + 100)
         }
 
-        const handleDisconnect = (ev: CustomEvent) => {
+        const handleDisconnect = (_ev: CustomEvent) => {
           rfbRef.current = null
-          // detail.clean === true used to mean "user clicked Disconnect" but
-          // Tailscale Funnel produces clean closes (code 1001 "Going Away")
-          // every 10-40s as a known relay quirk. Treating clean closes as
-          // "user wanted to disconnect" leaves the modal hanging on idle.
-          // Instead: ALWAYS try to reconnect a few times; only give up after
-          // we've burned through the attempt budget. Parent components that
-          // really want to stop the connection should call disconnect()
-          // explicitly (which sets reconnectAttemptsRef to 99 — see below).
-          if (reconnectAttemptsRef.current < 3) {
+          if (stoppedByUserRef.current) {
+            updateState("idle")
+            return
+          }
+          // Reconnect with exponential backoff. Tailscale Funnel sends close
+          // code 1001 every 10–40s as a known relay quirk → previously 3
+          // attempts wasn't enough for sessions over 5 min. Now 8 attempts
+          // with exp backoff capped at 30s.
+          if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttemptsRef.current += 1
-            const delay = Math.min(6000, 2000 * reconnectAttemptsRef.current)
+            setReconnectAttempt(reconnectAttemptsRef.current)
+            const delay = Math.min(
+              RECONNECT_CAP_MS,
+              Math.pow(2, reconnectAttemptsRef.current) * 1000
+            )
             updateState("reconnecting")
             reconnectTimerRef.current = setTimeout(() => {
               void connect()
@@ -302,17 +323,11 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
         }
 
         const handleCredentialsRequired = () => {
-          // noVNC fires this when the RFB security step demands a password we
-          // didn't pass in. Without transitioning state, the viewer would sit
-          // at "connecting" forever (errorMsg is set but only renders when
-          // state === "error"). Surface the failure so the parent's
-          // onStateChange flips to "error" and any "connecting" overlay clears.
           const msg = "VNC server requires a password — set NEXT_PUBLIC_VNC_PASSWORD or pass `password` prop."
           setErrorMsg(msg)
           onError?.(msg)
           updateState("error")
-          // Tear down the RFB so we don't leak the half-open WS while the user
-          // sees the error. Reconnect button on the parent re-mounts cleanly.
+          stoppedByUserRef.current = true // don't auto-reconnect — auth issue
           try { rfbRef.current?.disconnect() } catch {}
           rfbRef.current = null
         }
@@ -333,9 +348,6 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
           emitStats()
         }
 
-        // Frame callback — noVNC fires "framebufferupdate" or, in newer builds,
-        // emits no public event for every frame. We approximate FPS by polling
-        // the canvas size + rendering loop (see effect below).
         rfb.addEventListener("connect", handleConnect)
         rfb.addEventListener("disconnect", handleDisconnect)
         rfb.addEventListener("credentialsrequired", handleCredentialsRequired)
@@ -353,7 +365,6 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
     }, [
       wsUrl,
       password,
-      quality,
       compression,
       scaleViewport,
       onError,
@@ -364,7 +375,9 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
     /* --------------------------- disconnect/reconnect -------------------- */
 
     const disconnect = useCallback(() => {
-      reconnectAttemptsRef.current = 99 // prevent auto-reconnect
+      stoppedByUserRef.current = true
+      reconnectAttemptsRef.current = 0
+      setReconnectAttempt(0)
       teardown()
       updateState("idle")
     }, [teardown, updateState])
@@ -372,18 +385,15 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
     const reconnect = useCallback(() => {
       teardown()
       reconnectAttemptsRef.current = 0
-      // Slight delay to let the WebSocket close cleanly
+      setReconnectAttempt(0)
+      stoppedByUserRef.current = false
       reconnectTimerRef.current = setTimeout(() => {
         void connect()
       }, 100)
     }, [connect, teardown])
 
     const sendCtrlAltDel = useCallback(() => {
-      try {
-        rfbRef.current?.sendCtrlAltDel()
-      } catch {
-        // No-op — only valid when connected.
-      }
+      try { rfbRef.current?.sendCtrlAltDel() } catch {}
     }, [])
 
     const screenshot = useCallback((): string | null => {
@@ -391,30 +401,17 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
       if (!root) return null
       const canvas = root.querySelector("canvas")
       if (!canvas) return null
-      try {
-        return canvas.toDataURL("image/png")
-      } catch {
-        return null
-      }
+      try { return canvas.toDataURL("image/png") } catch { return null }
     }, [])
 
     const focus = useCallback(() => {
-      try {
-        rfbRef.current?.focus()
-      } catch {
-        // No-op
-      }
+      try { rfbRef.current?.focus() } catch {}
     }, [])
 
     useImperativeHandle(
       ref,
       (): VncViewerHandle => ({
-        connect,
-        disconnect,
-        reconnect,
-        sendCtrlAltDel,
-        screenshot,
-        focus,
+        connect, disconnect, reconnect, sendCtrlAltDel, screenshot, focus,
       }),
       [connect, disconnect, reconnect, sendCtrlAltDel, screenshot, focus]
     )
@@ -427,7 +424,6 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
       const ro = new ResizeObserver(() => {
         cancelAnimationFrame(raf)
         raf = requestAnimationFrame(() => {
-          // Track resolution from the underlying canvas (noVNC creates one).
           const root = containerRef.current
           if (!root) return
           const canvas = root.querySelector("canvas")
@@ -459,11 +455,14 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
       const tick = () => {
         if (!alive) return
         const now = performance.now()
-        frameTimesRef.current.push(now)
-        // keep last 60 frames (~1s at 60fps)
-        if (frameTimesRef.current.length > 60) {
-          frameTimesRef.current.shift()
+        // Track gaps for freeze detection
+        const gap = now - lastFrameAtRef.current
+        if (gap > 1000) {
+          freezeMsRef.current += gap
         }
+        lastFrameAtRef.current = now
+        frameTimesRef.current.push(now)
+        if (frameTimesRef.current.length > 60) frameTimesRef.current.shift()
         const times = frameTimesRef.current
         if (times.length >= 2) {
           const span = times[times.length - 1] - times[0]
@@ -497,30 +496,147 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
         try {
           await fetch(httpUrl, { method: "HEAD", mode: "no-cors" })
         } catch {
-          // No-cors HEAD may resolve as opaque; we still measured the round trip.
+          // opaque ok
         }
         const dur = Math.round(performance.now() - start)
         if (!cancelled) {
           statsRef.current.ping = dur
+          pingHistoryRef.current.push(dur)
+          if (pingHistoryRef.current.length > 24) pingHistoryRef.current.shift() // last 2 min
           emitStats()
         }
       }
       void sample()
-      const id = setInterval(() => {
-        void sample()
-      }, 5000)
+      const id = setInterval(() => { void sample() }, 5000)
       return () => {
         cancelled = true
         clearInterval(id)
       }
     }, [state, wsUrl, emitStats])
 
+    /* ---------------------- adaptive quality controller ------------------ */
+
+    useEffect(() => {
+      if (!adaptiveQuality || state !== "connected") return
+      const id = setInterval(() => {
+        const hist = pingHistoryRef.current
+        if (hist.length < 6) return // need ~30s of samples
+        const sorted = [...hist].sort((a, b) => a - b)
+        const p95 = sorted[Math.floor(sorted.length * 0.95)]
+        const cur = currentQualityRef.current
+        let next = cur
+        if (p95 > ADAPTIVE_DOWN_THRESHOLD_MS && cur > 1) next = cur - 1
+        else if (p95 < ADAPTIVE_UP_THRESHOLD_MS && cur < 8) next = cur + 1
+        if (next !== cur) {
+          currentQualityRef.current = next
+          const r = rfbRef.current
+          if (r) {
+            try { r.qualityLevel = next } catch {}
+          }
+        }
+      }, 10_000)
+      return () => clearInterval(id)
+    }, [adaptiveQuality, state])
+
+    /* --------------------------- telemetry POST -------------------------- */
+
+    useEffect(() => {
+      if (!telemetryEnabled || state !== "connected") return
+      const id = setInterval(() => {
+        const fps = statsRef.current.fps
+        const ping = statsRef.current.ping
+        const freezeMs = Math.round(freezeMsRef.current)
+        freezeMsRef.current = 0 // reset window
+        const body = JSON.stringify({
+          kind: "vnc_health",
+          session_id: sid,
+          account_id: accountId,
+          fps,
+          ping_ms: ping,
+          freeze_ms: freezeMs,
+          quality: currentQualityRef.current,
+          compression,
+        })
+        // Best-effort; ignore network failures so we never break the viewer.
+        fetch("/api/observability/vnc", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          keepalive: true,
+        }).catch(() => {})
+      }, TELEMETRY_INTERVAL_MS)
+      return () => clearInterval(id)
+    }, [telemetryEnabled, state, sid, accountId, compression])
+
+    /* --------------------- visibility + beforeunload --------------------- */
+
+    useEffect(() => {
+      let hiddenAt: number | null = null
+      let hiddenTimer: ReturnType<typeof setTimeout> | null = null
+
+      const onVisibility = () => {
+        if (document.visibilityState === "hidden") {
+          hiddenAt = Date.now()
+          hiddenTimer = setTimeout(() => {
+            // After HIDDEN_DISCONNECT_MS hidden, drop the connection to free
+            // VPS websockify slot. Reconnect on visible again.
+            if (stateRef.current === "connected") {
+              stoppedByUserRef.current = false
+              teardown()
+              updateState("idle")
+            }
+          }, HIDDEN_DISCONNECT_MS)
+        } else {
+          if (hiddenTimer) { clearTimeout(hiddenTimer); hiddenTimer = null }
+          if (hiddenAt && stateRef.current === "idle" && !stoppedByUserRef.current) {
+            // Came back from background after we tore down — reconnect
+            void connect()
+          }
+          hiddenAt = null
+        }
+      }
+      const onBeforeUnload = () => {
+        try { rfbRef.current?.disconnect() } catch {}
+      }
+      document.addEventListener("visibilitychange", onVisibility)
+      window.addEventListener("beforeunload", onBeforeUnload)
+      return () => {
+        document.removeEventListener("visibilitychange", onVisibility)
+        window.removeEventListener("beforeunload", onBeforeUnload)
+        if (hiddenTimer) clearTimeout(hiddenTimer)
+      }
+    }, [connect, teardown, updateState])
+
+    /* ---------------- per-account settings fetch (Wave 1.6) -------------- */
+
+    useEffect(() => {
+      if (!accountId) return
+      let cancelled = false
+      ;(async () => {
+        try {
+          const res = await fetch(`/api/accounts/${encodeURIComponent(accountId)}/vnc-settings`)
+          if (!res.ok) return
+          const json = await res.json().catch(() => null)
+          if (!json?.settings || cancelled) return
+          const s = json.settings
+          if (typeof s.quality === "number" && s.quality !== currentQualityRef.current) {
+            currentQualityRef.current = s.quality
+            const r = rfbRef.current
+            if (r) {
+              try { r.qualityLevel = s.quality } catch {}
+            }
+          }
+          // Note: compression/adaptive change requires reconnect to apply
+          // (RFB negotiates encodings at handshake). User must Refresh manually.
+        } catch {}
+      })()
+      return () => { cancelled = true }
+    }, [accountId])
+
     /* --------------------------- cleanup on unmount ----------------------- */
 
     useEffect(() => {
-      return () => {
-        teardown()
-      }
+      return () => { teardown() }
     }, [teardown])
 
     /* -------------------------------- render ----------------------------- */
@@ -532,21 +648,14 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
           className
         )}
       >
-        {/* Container noVNC mounts its <canvas> into. tabIndex makes it focusable
-            so keyboard input (arrows, WASD, etc.) routes through. */}
         <div
           ref={containerRef}
           tabIndex={0}
           aria-label="VNC canvas — click to capture keyboard input"
           className="h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-mem-accent/60"
-          onClick={() => {
-            // Focus container so noVNC keyboard handler is active.
-            containerRef.current?.focus()
-          }}
+          onClick={() => containerRef.current?.focus()}
         />
 
-        {/* Connection-state overlay (only when not yet connected and not in the
-            empty-state region the parent owns). */}
         {state === "connecting" || state === "reconnecting" ? (
           <div
             role="status"
@@ -558,7 +667,9 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
               className="h-8 w-8 animate-spin rounded-full border-2 border-mem-border border-t-mem-accent motion-reduce:animate-none"
             />
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mem-text-secondary">
-              {state === "reconnecting" ? "Reconnecting…" : "Connecting…"}
+              {state === "reconnecting"
+                ? `Reconnecting… (attempt ${reconnectAttempt} of ${MAX_RECONNECT_ATTEMPTS})`
+                : "Connecting…"}
             </p>
           </div>
         ) : null}
