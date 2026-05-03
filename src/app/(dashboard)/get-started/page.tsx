@@ -186,11 +186,25 @@ export default function GetStartedPage() {
             local_storage: capData?.data?.localStorage || null,
             session_id: vncSession.id,
             captured_by: "user_login",
+            platform: selectedAccount.platform,
           }),
         }
       )
       const snapData = await snap.json()
       if (!snap.ok) throw new Error(snapData?.error || "Could not save")
+
+      // Bust the recording-service login-status cache for THIS platform only —
+      // single-platform on purpose (the multi-platform refresh was the 2026-05-02
+      // Chrome-rotation incident). The probe is now cookie-based and silent, so
+      // this is a sub-second cookie read, not a Chrome navigation.
+      if (selectedAccount.platform) {
+        await fetch(
+          `/api/platforms/login-status?refresh=1&platforms=${encodeURIComponent(
+            selectedAccount.platform
+          )}`,
+          { cache: "no-store" }
+        ).catch(() => {})
+      }
 
       // Mark onboarding complete locally + optionally in Supabase
       localStorage.setItem(LS_KEY, new Date().toISOString())
