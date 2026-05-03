@@ -121,5 +121,7 @@ async function handle(req: NextRequest) {
   return NextResponse.json({ ok: true, ran_at: now, fired_count: fired.length, fired })
 }
 
-export async function POST(req: NextRequest) { return handle(req) }
-export async function GET(req: NextRequest)  { return handle(req) }
+import { wrapCron } from "@/lib/cron-handler"
+const wrapped = wrapCron("workflow-tick", handle)
+export async function POST(req: NextRequest) { return wrapped(req) }
+export async function GET(req: NextRequest)  { return wrapped(req) }

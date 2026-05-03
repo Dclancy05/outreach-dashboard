@@ -79,7 +79,7 @@ function fmtUsd(n: number): string {
   return `$${n.toFixed(2)}`
 }
 
-export async function GET(req: NextRequest) {
+async function handle(req: NextRequest) {
   const auth = req.headers.get("authorization") || ""
   const expected = process.env.CRON_SECRET || ""
   if (!expected) {
@@ -211,3 +211,8 @@ export async function GET(req: NextRequest) {
     telegram_sent: !!sent,
   })
 }
+
+import { wrapCron } from "@/lib/cron-handler"
+const wrapped = wrapCron("morning-digest", handle)
+export async function GET(req: NextRequest) { return wrapped(req) }
+export async function POST(req: NextRequest) { return wrapped(req) }

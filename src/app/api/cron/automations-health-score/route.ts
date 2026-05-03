@@ -204,9 +204,7 @@ async function handle(req: NextRequest) {
 }
 
 // Vercel cron sends GET; allow POST for manual trigger via curl.
-export async function GET(req: NextRequest) {
-  return handle(req)
-}
-export async function POST(req: NextRequest) {
-  return handle(req)
-}
+import { wrapCron } from "@/lib/cron-handler"
+const wrapped = wrapCron("automations-health-score", handle)
+export async function GET(req: NextRequest) { return wrapped(req) }
+export async function POST(req: NextRequest) { return wrapped(req) }
