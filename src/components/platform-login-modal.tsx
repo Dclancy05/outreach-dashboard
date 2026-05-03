@@ -421,16 +421,58 @@ export default function PlatformLoginModal({
     try {
       // Re-probe login status across the common platforms so the dashboard
       // banners flip from red to green without a manual refresh.
-      const probe = await fetch(
-        `/api/platforms/login-status?refresh=1&platforms=${encodeURIComponent(
-          ["instagram", "facebook", "linkedin", "tiktok"].join(",")
-        )}`
+      //
+      // Rate-limit handling: /api/platforms/login-status?refresh=1 is rate
+      // limited (3/60s per admin) to prevent runaway pollers from rotating
+      // Chrome through every platform. If the user clicks "I'm Logged In"
+      // faster than that — e.g., they tried twice while Instagram was loading
+      // — we get back a 429 with no `results` field. Treating that as
+      // "results = []" makes the modal say "still logged out" even though the
+      // user is clearly logged in. Instead: fall back to a non-refresh probe
+      // (cached, never navigates Chrome) and surface the rate-limit to the
+      // user as info, not failure.
+      const platformQuery = encodeURIComponent(
+        ["instagram", "facebook", "linkedin", "tiktok"].join(",")
       )
-      const data = await probe.json().catch(() => ({} as unknown))
+      const probe = await fetch(
+        `/api/platforms/login-status?refresh=1&platforms=${platformQuery}`
+      )
+      let data: unknown = {}
+      let probeWasRateLimited = false
+      if (probe.status === 429) {
+        probeWasRateLimited = true
+        // Fall back to the cached probe — same data the recording-service
+        // last saw, no Chrome navigation. Tells the user the truth without
+        // gaslighting them into thinking the login failed.
+        const cached = await fetch(
+          `/api/platforms/login-status?platforms=${platformQuery}`,
+          { cache: "no-store" }
+        )
+        if (cached.ok) {
+          data = await cached.json().catch(() => ({}))
+        }
+        toast.info(
+          `${info.label} login probe is rate-limited — using cached status. Click again in 60s for a fresh check.`
+        )
+      } else if (probe.ok) {
+        data = await probe.json().catch(() => ({}))
+      } else {
+        // Non-429 server error — try the cached probe as a last resort.
+        const cached = await fetch(
+          `/api/platforms/login-status?platforms=${platformQuery}`,
+          { cache: "no-store" }
+        )
+        if (cached.ok) data = await cached.json().catch(() => ({}))
+      }
       const results: Array<{ platform: string; loggedIn: boolean }> =
         Array.isArray((data as { results?: unknown })?.results)
           ? (data as { results: Array<{ platform: string; loggedIn: boolean }> }).results
           : []
+      // When rate-limited AND the cached probe also returned nothing, don't
+      // show "still logged out" — that's misleading. Instead, leave lastResult
+      // null and rely on the toast above to communicate the rate-limit state.
+      const probeProducedAnswer = results.length > 0
+      void probeWasRateLimited // (kept for future telemetry)
       const thisPlatform = results.find(r => r.platform === currentPlatform.toLowerCase())
       const stillLoggedOut = results.filter(r => r.loggedIn === false).map(r => r.platform)
 
@@ -491,6 +533,14 @@ export default function PlatformLoginModal({
       if (thisPlatform?.loggedIn) {
         setLastResult("ok")
         toast.success(`${info.label} is now logged in!`)
+      } else if (!probeProducedAnswer && capturedHere === "saved_persistent") {
+        // The login probe couldn't give us a fresh answer (rate-limited, cache
+        // empty, or transient error) BUT cookies for this platform were
+        // captured into Supabase. Trust the cookie capture: if there's a
+        // sessionid/c_user/li_at cookie, the user is logged in. Don't gaslight
+        // them with "still logged out" when we just saved their session.
+        setLastResult("ok")
+        toast.success(`${info.label} session saved! (Login probe was busy — refreshing in the background.)`)
       } else {
         setLastResult("still_logged_out")
         toast.error(
@@ -871,7 +921,13 @@ export default function PlatformLoginModal({
               </Button>
             </div>
 
-            <div className="relative flex-1">
+            <div className="relative flex-1 min-h-0 min-w-0">
+              {/* min-h-0/min-w-0 lets the flex child shrink below its
+                  intrinsic content size — required so noVNC's canvas can
+                  scale DOWN to fit the pane. Without this, flex parents
+                  with children that have explicit content (like a
+                  1280x720 canvas) refuse to shrink, producing the
+                  "zoomed in / cropped" view the user reported. */}
               <VncViewer
                 ref={viewerRef}
                 wsUrl={vncWsUrl}
