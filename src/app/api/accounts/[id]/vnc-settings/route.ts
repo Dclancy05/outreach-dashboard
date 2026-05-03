@@ -30,8 +30,13 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     .select("quality, compression, adaptive")
     .eq("account_id", id)
     .maybeSingle()
+  // Soft-fail on schema mismatch / type errors. The codebase uses TEXT slugs
+  // for account_id (e.g. "facebook_mo4wk9by") in some tables and UUIDs in
+  // others; this endpoint should never 500 on a valid request — it should
+  // just return defaults so the viewer can still mount.
   if (error && error.code !== "PGRST116") {
-    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    console.warn("[vnc-settings] read error, returning defaults:", error.message)
+    return NextResponse.json({ ok: true, settings: DEFAULTS, _note: "fallback_defaults" })
   }
   return NextResponse.json({ ok: true, settings: data || DEFAULTS })
 }
@@ -50,7 +55,10 @@ async function patchHandler(req: Request, ctx: { params: Promise<{ id: string }>
   if (typeof body.adaptive === "boolean") update.adaptive = body.adaptive
 
   const { error } = await supabase.from("account_vnc_settings").upsert(update, { onConflict: "account_id" })
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+  if (error) {
+    console.warn("[vnc-settings] write error:", error.message)
+    return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+  }
   return NextResponse.json({ ok: true })
 }
 
