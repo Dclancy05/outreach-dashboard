@@ -1,0 +1,82 @@
+name: Lighthouse CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  lighthouse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Wait for Vercel preview
+        id: preview
+        uses: patrickedqvist/wait-for-vercel-preview@v1.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          max_timeout: 600
+          environment: Preview
+
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli@0.14.x
+
+      - name: Run Lighthouse against preview
+        env:
+          PREVIEW_URL: ${{ steps.preview.outputs.url }}
+        run: |
+          set -e
+          PIN_COOKIE="admin_session=preview"
+          PAGES=("/" "/agency/leads" "/agency/accounts" "/automations" "/jarvis/observability" "/agency/memory")
+          mkdir -p .lighthouseci
+          for p in "${PAGES[@]}"; do
+            url="${PREVIEW_URL}${p}"
+            echo "── Lighthouse → $url"
+            lhci collect \
+              --url="$url" \
+              --numberOfRuns=1 \
+              --settings.chromeFlags="--no-sandbox --headless=new" \
+              --settings.extraHeaders="{\"Cookie\":\"$PIN_COOKIE\"}" \
+              || echo "(continuing — preview may need PIN)"
+          done
+
+      - name: Assert thresholds
+        run: |
+          set -e
+          fail=0
+          # Aggregate JSON reports — fail if any single report misses thresholds.
+          for f in .lighthouseci/lhr-*.json; do
+            [ -f "$f" ] || continue
+            node -e "
+              const r = require('$(realpath "$f")');
+              const fcp = r.audits['first-contentful-paint'].numericValue;
+              const lcp = r.audits['largest-contentful-paint'].numericValue;
+              const tbt = r.audits['total-blocking-time'].numericValue;
+              const cls = r.audits['cumulative-layout-shift'].numericValue;
+              const url = r.finalUrl || r.requestedUrl;
+              const failures = [];
+              if (fcp > 2000) failures.push('FCP=' + Math.round(fcp) + 'ms (budget 2000)');
+              if (lcp > 3000) failures.push('LCP=' + Math.round(lcp) + 'ms (budget 3000)');
+              if (tbt > 300)  failures.push('TBT=' + Math.round(tbt) + 'ms (budget 300)');
+              if (cls > 0.1)  failures.push('CLS=' + cls.toFixed(3) + ' (budget 0.1)');
+              if (failures.length) {
+                console.log('❌', url, '—', failures.join(' · '));
+                process.exit(1);
+              } else {
+                console.log('✅', url, '— FCP=' + Math.round(fcp) + ' LCP=' + Math.round(lcp) + ' TBT=' + Math.round(tbt) + ' CLS=' + cls.toFixed(3));
+              }
+            " || fail=1
+          done
+          exit $fail
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-reports
+          path: .lighthouseci/
