@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js"
 import { nextRetryDelay } from "@/lib/retry-queue"
 import { vpsFetch } from "@/lib/vps-fetch"
 import { withCircuit } from "@/lib/circuit-breaker"
+import { recordHealthSignal, classifyHealthSignal } from "@/lib/account-health-monitor"
 
 // Default per-account daily cap when no campaign_safety_settings row + no
 // account.daily_limit is configured. Conservative on purpose — better to
@@ -12,6 +13,25 @@ const DEFAULT_DAILY_CAP = 40
 // can be slow; 25s is well above typical browser-action latency without
 // blowing past the 60s Vercel Hobby maxDuration.
 const SEND_TIMEOUT_MS = 25_000
+
+// Wave 4.1 — default jitter window between sends when campaign has no safety
+// settings row. 30s..90s mirrors the conservative defaults documented in
+// SYSTEM.md. Anything tighter looks like a bot.
+const DEFAULT_DELAY_MIN_S = 30
+const DEFAULT_DELAY_MAX_S = 90
+
+// Wave 4.1 — total sleep budget per batch. Vercel Hobby caps cron functions
+// at 60s. We leave 20s headroom for actual work, so up to ~40s can go to
+// inter-send delays. Rows that don't get a delay this tick stay queued and
+// will inherit the delay next time the cron fires.
+const BATCH_DELAY_BUDGET_MS = 40_000
+
+// Wave 4.2 — default send window when no safety_settings row exists. Used
+// to be 24/7 (true on null config) — that's a textbook bot signature.
+// Default to US Eastern business hours; users can override via campaign UI.
+const DEFAULT_ACTIVE_START = "09:00"
+const DEFAULT_ACTIVE_END = "21:00"
+const DEFAULT_TIMEZONE = "America/New_York"
 
 // Statuses we consider "live" so the worker only acts on rows that are truly
 // waiting. send_queue has no DB-level CHECK constraint so we filter defensively.
@@ -54,6 +74,7 @@ interface AccountRow {
   sends_today?: number | string | null
   status?: string | null
   cooldown_until?: string | null
+  timezone?: string | null
 }
 
 export interface ProcessBatchResult {
@@ -81,17 +102,60 @@ function toInt(v: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback
 }
 
-function withinActiveHours(settings: SafetySettings | null, now: Date): boolean {
-  if (!settings?.active_hours_start || !settings?.active_hours_end) return true
-  const [sH, sM] = settings.active_hours_start.split(":").map((x) => parseInt(x))
-  const [eH, eM] = settings.active_hours_end.split(":").map((x) => parseInt(x))
+function withinActiveHours(
+  settings: SafetySettings | null,
+  now: Date,
+  accountTz?: string | null
+): boolean {
+  // Wave 4.2 — default-DENY ban-risk fix. Previously: null config → 24/7.
+  // Now: null config → default 09:00-21:00 in account's timezone (or ET).
+  const startStr = settings?.active_hours_start || DEFAULT_ACTIVE_START
+  const endStr = settings?.active_hours_end || DEFAULT_ACTIVE_END
+  const tz = accountTz || DEFAULT_TIMEZONE
+
+  const [sH, sM] = startStr.split(":").map((x) => parseInt(x))
+  const [eH, eM] = endStr.split(":").map((x) => parseInt(x))
   if ([sH, sM, eH, eM].some((x) => Number.isNaN(x))) return true
+
+  // Compute "now" in the account's timezone using Intl. Fallback to local
+  // time if Intl rejects the timezone string.
+  let nowMin: number
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+    const parts = fmt.formatToParts(now)
+    const h = parseInt(parts.find((p) => p.type === "hour")?.value || "0")
+    const m = parseInt(parts.find((p) => p.type === "minute")?.value || "0")
+    // 24:xx → 0:xx wrap (some Intl impls emit 24)
+    const hh = h === 24 ? 0 : h
+    nowMin = hh * 60 + m
+  } catch {
+    nowMin = now.getHours() * 60 + now.getMinutes()
+  }
+
   const startMin = sH * 60 + sM
   const endMin = eH * 60 + eM
-  const nowMin = now.getHours() * 60 + now.getMinutes()
   if (startMin <= endMin) return nowMin >= startMin && nowMin <= endMin
   // Overnight window (e.g. 22:00–02:00)
   return nowMin >= startMin || nowMin <= endMin
+}
+
+// Wave 4.1 — randomized inter-send delay.
+function nextDelayMs(settings: SafetySettings | null): number {
+  const min = toInt(settings?.delay_between_dms_min ?? null, DEFAULT_DELAY_MIN_S)
+  const max = toInt(settings?.delay_between_dms_max ?? null, DEFAULT_DELAY_MAX_S)
+  const lo = Math.max(0, Math.min(min, max))
+  const hi = Math.max(lo, Math.max(min, max))
+  if (hi === 0) return 0
+  return Math.round((lo + Math.random() * (hi - lo)) * 1000)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
 }
 
 // Only mark a row as terminally failed for non-retryable conditions. Network
@@ -148,7 +212,7 @@ export async function processBatch(opts: ProcessBatchOptions): Promise<ProcessBa
 
   const [accountsRes, safetyRes] = await Promise.all([
     accountIds.length
-      ? supabase.from("accounts").select("account_id, platform, daily_limit, sends_today, status, cooldown_until").in("account_id", accountIds)
+      ? supabase.from("accounts").select("account_id, platform, daily_limit, sends_today, status, cooldown_until, timezone").in("account_id", accountIds)
       : Promise.resolve({ data: [], error: null } as { data: AccountRow[]; error: null }),
     campaignIds.length
       ? supabase.from("campaign_safety_settings").select("*").in("campaign_id", campaignIds)
@@ -165,6 +229,10 @@ export async function processBatch(opts: ProcessBatchOptions): Promise<ProcessBa
 
   // Track in-batch increments so we don't blow past daily caps mid-batch.
   const sendsTodayDelta = new Map<string, number>()
+
+  // Wave 4.1 — track total time spent in inter-send sleeps so we don't
+  // bust Vercel's 60s function timeout mid-batch.
+  let sleepBudgetUsedMs = 0
 
   for (const row of queued) {
     try {
@@ -194,8 +262,9 @@ export async function processBatch(opts: ProcessBatchOptions): Promise<ProcessBa
       const account = row.account_id ? accounts.get(row.account_id) : undefined
       const safety = row.campaign_id ? safetyByCampaignPlatform.get(`${row.campaign_id}:${platform}`) : undefined
 
-      // Active-hours check (only if explicitly configured)
-      if (!withinActiveHours(safety || null, now)) {
+      // Active-hours check — Wave 4.2 default-DENY: null config = 09:00-21:00
+      // in account.timezone (or ET fallback).
+      if (!withinActiveHours(safety || null, now, account?.timezone)) {
         await supabase
           .from("send_queue")
           .update({ status: QUEUED_STATUS, updated_at: now.toISOString() }) // bounce back to queued for next minute
@@ -380,7 +449,32 @@ export async function processBatch(opts: ProcessBatchOptions): Promise<ProcessBa
         if (username) { /* no-op — automation/send already updates leads.status */ }
 
         result.sent++
-      } else if (isRetryable(httpStatus, errMsg)) {
+
+        // Wave 4.1 — inter-send delay. Sleep BEFORE next iteration so
+        // sends don't fire back-to-back. Skip when we'd bust the budget;
+        // remaining rows stay queued and the next cron tick handles them
+        // (with a fresh budget). Skip on the very last row in the batch
+        // since there's nothing to space against.
+        const isLastRow = queued.indexOf(row) === queued.length - 1
+        if (!isLastRow && sleepBudgetUsedMs < BATCH_DELAY_BUDGET_MS) {
+          const delayMs = nextDelayMs(safety || null)
+          const remaining = BATCH_DELAY_BUDGET_MS - sleepBudgetUsedMs
+          const actualDelay = Math.min(delayMs, remaining)
+          if (actualDelay > 0) {
+            sleepBudgetUsedMs += actualDelay
+            await sleep(actualDelay)
+          }
+        }
+      } else if (true) {
+        // Wave 4.3 — record health signal BEFORE branching to retry/terminal,
+        // so 429s + login_required + shadowban trigger auto-pause regardless
+        // of retryability. Always fires on !ok.
+        const signal = classifyHealthSignal(httpStatus, errMsg)
+        if (signal && row.account_id) {
+          recordHealthSignal(row.account_id, signal).catch(() => {})
+        }
+        // Now branch by retryability
+        if (isRetryable(httpStatus, errMsg)) {
         // Send into retry_queue and revert the source row to queued so it
         // doesn't sit in 'processing' forever.
         const delaySec = nextRetryDelay(0)
@@ -437,6 +531,7 @@ export async function processBatch(opts: ProcessBatchOptions): Promise<ProcessBa
         } catch {}
         result.failed++
         result.errors.push({ id: row.id, error: errMsg })
+        }
       }
     } catch (e) {
       // Last-resort guard so one rogue row can't kill the whole batch.
