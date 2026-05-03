@@ -13,10 +13,12 @@ export const maxDuration = 60
 // rotation pattern that put us at ban risk on 2026-05-02. Cached probes
 // (without refresh=1) never navigate Chrome, so they stay free.
 //
-// Limit: 1 refresh per 60s per admin. A real user clicking "Verify Now" on
-// the accounts page or "Recheck" in the modal does this at most once or twice
-// per minute. Anything tighter is a bug.
-const REFRESH_LIMIT = 1
+// Limit: 3 refreshes per 60s per admin. A real user clicking "Verify Now" on
+// the accounts page or "I'm Logged In" in the modal might fire 1-3 times in
+// a row if Instagram is slow to confirm. 3/60s gives them headroom while
+// still killing any rogue setInterval pattern. Was 1/60s but that 429'd
+// legitimate user clicks and produced "still logged out" misreports.
+const REFRESH_LIMIT = 3
 const REFRESH_WINDOW_MS = 60 * 1000
 
 export async function GET(req: Request) {

@@ -52,6 +52,7 @@ interface RfbInstance {
   // settable props we touch
   scaleViewport: boolean
   resizeSession: boolean
+  clipViewport: boolean
   showDotCursor: boolean
   background: string
   qualityLevel: number
@@ -242,6 +243,12 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
         // Sensible defaults for an embedded viewer.
         rfb.scaleViewport = scaleViewport
         rfb.resizeSession = false
+        // clipViewport=false means: when the framebuffer is bigger than the
+        // canvas container, scale it down (combined with scaleViewport=true)
+        // rather than crop. Without this explicit set, some noVNC builds
+        // default to a clip-leaning behavior that produces a "zoomed in" view
+        // where the user can't see the bottom of the page.
+        rfb.clipViewport = false
         rfb.showDotCursor = true
         rfb.background = "rgb(11, 11, 13)" // matches mem-bg
         rfb.qualityLevel = quality
@@ -252,6 +259,21 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
         const handleConnect = () => {
           reconnectAttemptsRef.current = 0
           updateState("connected")
+          // ResizeObserver fires too late on initial mount — by the time it
+          // runs, noVNC has already computed the canvas at 1:1 framebuffer
+          // size, leaving the user with a "zoomed in / cropped" view. Force
+          // a scale recompute now that the canvas is mounted by toggling
+          // scaleViewport off and back on.
+          setTimeout(() => {
+            const r = rfbRef.current
+            if (!r) return
+            try {
+              r.scaleViewport = false
+              r.scaleViewport = scaleViewport
+            } catch {
+              // older noVNC builds may not let us set this twice — fall through
+            }
+          }, 80)
         }
 
         const handleDisconnect = (ev: CustomEvent) => {
