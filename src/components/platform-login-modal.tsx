@@ -45,6 +45,7 @@ import {
   type VncViewerHandle,
   type VncConnectionState,
 } from "@/components/jarvis/observability/vnc-viewer"
+import PopupTrustBar from "@/components/popup-trust-bar"
 import { PLATFORM_LOGIN_URLS } from "@/lib/platform-login-urls"
 
 // VNC WebSocket URL composition. Mirrors the legacy NoVncViewer default so
@@ -920,6 +921,13 @@ export default function PlatformLoginModal({
                 Reload login page
               </Button>
             </div>
+
+            {/* Identity / trust bar — proxy IP + location + Chrome profile
+                + live connection status. Patterned after Browserbase /
+                GoLogin / AdsPower's session header so the user can verify
+                they're typing real credentials into the right Chrome
+                before doing it. */}
+            <PopupTrustBar accountId={accountId} vncState={vncState} />
 
             <div className="relative flex-1 min-h-0 min-w-0">
               {/* min-h-0/min-w-0 lets the flex child shrink below its
