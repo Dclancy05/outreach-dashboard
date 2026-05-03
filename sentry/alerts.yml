@@ -1,0 +1,79 @@
+# Wave 3.6 — Sentry alert rules versioned in repo.
+#
+# Sentry doesn't natively read alert config from a repo — this file is the
+# INTENT doc + input for scripts/setup-sentry-alerts.mjs which uses the
+# Sentry API to create/update alert rules to match.
+#
+# Run:
+#   SENTRY_AUTH_TOKEN=... SENTRY_ORG_SLUG=... node scripts/setup-sentry-alerts.mjs
+
+alerts:
+  - name: "Cron handler errors (3+ in 5min)"
+    project_slug: outreach-dashboard
+    conditions:
+      - type: event_frequency
+        value: 3
+        interval: "5m"
+    filters:
+      - type: tagged_event
+        key: context
+        match: "eq"
+        value: "cron"
+    actions:
+      - type: telegram
+        message: |
+          🚨 3+ cron errors in 5min — context=cron
+          {{ event.title }}
+          {{ event.url }}
+
+  - name: "Send route failure (any error)"
+    project_slug: outreach-dashboard
+    conditions:
+      - type: first_seen_event
+    filters:
+      - type: tagged_event
+        key: scope
+        match: "eq"
+        value: "send"
+    actions:
+      - type: telegram
+        message: |
+          🚨 /api/automation/send error
+          {{ event.title }}
+          {{ event.url }}
+
+  - name: "VNC errors (5+ in 10min)"
+    project_slug: outreach-dashboard
+    conditions:
+      - type: event_frequency
+        value: 5
+        interval: "10m"
+    filters:
+      - type: tagged_event
+        key: context
+        match: "eq"
+        value: "vnc"
+    actions:
+      - type: telegram
+        message: |
+          📺 5+ VNC errors in 10min
+          {{ event.title }}
+          {{ event.url }}
+
+  - name: "Cron P95 latency > 30s"
+    project_slug: outreach-dashboard
+    conditions:
+      - type: performance_threshold
+        metric: transaction.duration
+        threshold_ms: 30000
+        percentile: 95
+    filters:
+      - type: tagged_event
+        key: context
+        match: "eq"
+        value: "cron"
+    actions:
+      - type: telegram
+        message: |
+          🐢 Cron P95 latency over 30s
+          {{ transaction }}: {{ duration }}ms
