@@ -423,18 +423,22 @@ export default function PlatformLoginModal({
       // Re-probe login status across the common platforms so the dashboard
       // banners flip from red to green without a manual refresh.
       //
+      // 🚨 SINGLE-PLATFORM PROBE — only ask the VPS to re-probe THE platform
+      // the user is currently logging into. Not all four (instagram, facebook,
+      // linkedin, tiktok). This was the root cause of the "tabs flipping"
+      // ban-risk pattern: when the user clicked I'm Logged In for one
+      // platform, the modal asked for all four, the VPS opened a new Chrome
+      // tab for each, navigated through every platform sequentially over 60+
+      // seconds, and the user watched their warm session get cycled through
+      // unrelated properties. See /root/.claude/plans/funnel-restored-goofy-stearns.md
+      // and the popup-deep-diagnostic harness for the evidence.
+      //
       // Rate-limit handling: /api/platforms/login-status?refresh=1 is rate
-      // limited (3/60s per admin) to prevent runaway pollers from rotating
-      // Chrome through every platform. If the user clicks "I'm Logged In"
-      // faster than that — e.g., they tried twice while Instagram was loading
-      // — we get back a 429 with no `results` field. Treating that as
-      // "results = []" makes the modal say "still logged out" even though the
-      // user is clearly logged in. Instead: fall back to a non-refresh probe
-      // (cached, never navigates Chrome) and surface the rate-limit to the
-      // user as info, not failure.
-      const platformQuery = encodeURIComponent(
-        ["instagram", "facebook", "linkedin", "tiktok"].join(",")
-      )
+      // limited (3/60s per admin). If the user clicks faster, the route
+      // returns 429 with no `results` field. We fall back to a non-refresh
+      // cached probe (never navigates Chrome) and surface the rate-limit
+      // to the user as info, not failure.
+      const platformQuery = encodeURIComponent(currentPlatform.toLowerCase())
       const probe = await fetch(
         `/api/platforms/login-status?refresh=1&platforms=${platformQuery}`
       )
@@ -551,19 +555,16 @@ export default function PlatformLoginModal({
 
       onComplete?.({ stillLoggedOut })
 
-      // Advance to the next platform the caller queued up, if any. We prefer
-      // platforms that are still logged out per the fresh probe.
-      const nextFromRemaining = remaining.find(p => p.toLowerCase() !== currentPlatform.toLowerCase())
-      const nextFromProbe = stillLoggedOut.find(
-        p => p.toLowerCase() !== currentPlatform.toLowerCase()
-      )
-      const next = nextFromRemaining || nextFromProbe
-      if (thisPlatform?.loggedIn && next) {
-        // Jump to the next one without closing the modal.
-        setRemaining(r => r.filter(p => p.toLowerCase() !== next.toLowerCase()))
-        navigateTo(next).catch(() => {})
-      } else if (thisPlatform?.loggedIn) {
-        // All done — close after a short victory moment.
+      // 🚨 NO AUTO-ADVANCE. After the user successfully logs in to ONE
+      // platform, close the modal. Chaining navigation events ("now log into
+      // the next platform") is what gave the user a "rotation" feel — Chrome
+      // would visibly hop from Facebook → Instagram → LinkedIn → TikTok
+      // without their intent. Each platform login is now an explicit user
+      // action: they click Sign In Now on the next account row when they're
+      // ready. Cleaner UX, predictable Chrome state, no accidental rotation.
+      const success = thisPlatform?.loggedIn ||
+        (!probeProducedAnswer && capturedHere === "saved_persistent")
+      if (success) {
         setTimeout(() => onClose(), 900)
       }
     } catch (e: unknown) {
