@@ -1,5 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js"
 import { nextRetryDelay } from "@/lib/retry-queue"
+import { vpsFetch } from "@/lib/vps-fetch"
+import { withCircuit } from "@/lib/circuit-breaker"
 
 // Default per-account daily cap when no campaign_safety_settings row + no
 // account.daily_limit is configured. Conservative on purpose — better to
@@ -258,8 +260,15 @@ export async function processBatch(opts: ProcessBatchOptions): Promise<ProcessBa
       let respBody: { success?: boolean; error?: string; queue_id?: string; log_id?: string } = {}
       let networkError = ""
 
-      try {
-        const res = await fetchImpl(`${opts.baseUrl}/api/automation/send`, {
+      // Wave 2.4 + 2.5 — keep-alive + circuit breaker. Use the caller's
+      // fetchImpl when provided (tests inject one). When not, route through
+      // vpsFetch which shares a keep-alive Agent across calls. Circuit
+      // breaker key is the baseUrl so each VPS is tracked independently.
+      const breakerKey = `vps:${opts.baseUrl}`
+      const useShared = !opts.fetchImpl
+      const breakerResult = await withCircuit(breakerKey, async () => {
+        const fImpl = opts.fetchImpl || vpsFetch
+        const fetchOpts = {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -268,11 +277,49 @@ export async function processBatch(opts: ProcessBatchOptions): Promise<ProcessBa
           },
           body: JSON.stringify(sendPayload),
           signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-        })
-        httpStatus = res.status
-        respBody = await res.json().catch(() => ({}))
-      } catch (e) {
-        networkError = e instanceof Error ? e.message : String(e)
+        }
+        const res = useShared
+          ? await fImpl(`${opts.baseUrl}/api/automation/send`, fetchOpts as any)
+          : await (fImpl as typeof fetch)(`${opts.baseUrl}/api/automation/send`, fetchOpts)
+        const body = await res.json().catch(() => ({}))
+        if (res.status >= 500) throw new Error(`HTTP ${res.status}`)
+        return { status: res.status, body }
+      }, {
+        onOpen: () => {
+          console.warn(`[campaign-worker] circuit OPEN for ${breakerKey} — VPS likely overloaded`)
+        },
+      })
+
+      if (breakerResult.shortCircuited) {
+        // VPS is in cooldown; mark this row for delayed retry instead of
+        // failing/erroring. The retry-queue tick will pick it up.
+        try {
+          await supabase.from("retry_queue").insert({
+            action_type: "send",
+            payload: sendPayload,
+            max_attempts: 5,
+            attempt_count: 0,
+            next_retry_at: new Date(now.getTime() + 5 * 60_000).toISOString(),
+            account_id: row.account_id || null,
+            lead_id: row.lead_id,
+            error_message: "circuit_open: VPS in cooldown",
+            status: "pending",
+          })
+        } catch {}
+        await supabase
+          .from("send_queue")
+          .update({ status: "queued", processed_at: null, updated_at: now.toISOString() })
+          .eq("id", row.id)
+        result.retried++
+        result.errors.push({ id: row.id, error: "circuit_open" })
+        continue
+      }
+
+      if (breakerResult.ok && breakerResult.value) {
+        httpStatus = breakerResult.value.status
+        respBody = breakerResult.value.body as typeof respBody
+      } else if (breakerResult.error) {
+        networkError = breakerResult.error instanceof Error ? breakerResult.error.message : String(breakerResult.error)
       }
 
       const ok = httpStatus >= 200 && httpStatus < 300 && !respBody.error
@@ -306,20 +353,27 @@ export async function processBatch(opts: ProcessBatchOptions): Promise<ProcessBa
           console.warn("[campaign-worker] send_log insert failed:", e)
         }
 
-        // Increment sends_today atomically-ish: read-modify-write on the
-        // freshest value we have, plus our in-batch delta.
+        // Wave 2.2 — atomic sends_today increment via stored function.
+        // Closes the read-modify-write race that blew daily caps under
+        // parallel cron ticks. The function does the cap check inline and
+        // returns NULL if exceeded.
         if (row.account_id) {
           const acct = accounts.get(row.account_id)
-          const fresh = toInt(acct?.sends_today ?? baseSends, 0) + (sendsTodayDelta.get(row.account_id) || 0) + 1
+          // Try uuid variant first; if it errors with a type mismatch,
+          // fall back to text variant. Both are deployed by migration
+          // 20260503_scaling_phase_2.sql.
+          let rpcRes = await supabase.rpc("increment_sends_today", { p_account_id: row.account_id })
+          if (rpcRes.error && /uuid|invalid input syntax/i.test(rpcRes.error.message || "")) {
+            rpcRes = await supabase.rpc("increment_sends_today_text", { p_account_id: row.account_id })
+          }
+          const newCount = typeof rpcRes.data === "number" ? rpcRes.data : null
+          if (newCount === null) {
+            // Cap was exceeded between scan and atomic check; revert this
+            // row to skipped so we don't double-count via the legacy update.
+            console.warn(`[campaign-worker] cap_exceeded at atomic increment for ${row.account_id}`)
+          }
           sendsTodayDelta.set(row.account_id, (sendsTodayDelta.get(row.account_id) || 0) + 1)
-          await supabase
-            .from("accounts")
-            .update({
-              sends_today: fresh,
-              last_used_at: now.toISOString(),
-            })
-            .eq("account_id", row.account_id)
-          if (acct) acct.sends_today = fresh
+          if (acct && newCount !== null) acct.sends_today = newCount
         }
 
         // Username field — only stamp lead.last_dm_at if it's a real lead row.
