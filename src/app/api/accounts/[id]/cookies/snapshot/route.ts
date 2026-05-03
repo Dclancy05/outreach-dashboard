@@ -68,13 +68,17 @@ export async function POST(
     return NextResponse.json({ error: insertErr.message }, { status: 500 })
   }
 
-  // 2. Bump accounts.cookies_updated_at (+ mirror cookies onto accounts.session_cookie
-  // so existing code paths that already read session_cookie stay in sync)
+  // 2. Bump accounts.cookies_updated_at + mirror cookies onto accounts.session_cookie.
+  // The dashboard's get_accounts handler (src/lib/api/accounts.ts:81-134) computes
+  // has_auth_cookie LIVE at read time from session_cookie or account_sessions.cookies,
+  // so we don't write that column directly — just keeping session_cookie fresh +
+  // bumping cookies_health is enough to flip the badge green on next refetch.
+  const { health } = scoreCookies(cookies)
   const { error: updateErr } = await supabase
     .from("accounts")
     .update({
       cookies_updated_at: now,
-      cookies_health: computeHealthFromCookies(cookies),
+      cookies_health: health,
       cookies_last_check: now,
       last_successful_login: now,
       session_cookie: JSON.stringify(cookies),
@@ -98,15 +102,23 @@ export async function POST(
   })
 }
 
-function computeHealthFromCookies(cookies: any[]): string {
-  if (!Array.isArray(cookies) || cookies.length === 0) return "expired"
+function scoreCookies(cookies: any[]): { health: string; hasAuthCookie: boolean } {
+  if (!Array.isArray(cookies) || cookies.length === 0) {
+    return { health: "expired", hasAuthCookie: false }
+  }
   const hasSession = cookies.some(
     (c) =>
       c &&
       (c.name === "sessionid" ||
         c.name === "c_user" ||
         c.name === "li_at" ||
-        c.name === "auth_token")
+        c.name === "auth_token" ||
+        c.name === "ds_user_id" ||
+        c.name === "xs" ||
+        c.name === "JSESSIONID" ||
+        c.name === "sid_tt") &&
+      typeof c.value === "string" &&
+      c.value.length > 0
   )
-  return hasSession ? "healthy" : "stale"
+  return { health: hasSession ? "healthy" : "stale", hasAuthCookie: hasSession }
 }
