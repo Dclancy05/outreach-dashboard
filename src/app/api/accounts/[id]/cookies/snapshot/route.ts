@@ -69,10 +69,6 @@ export async function POST(
   }
 
   // 2. Bump accounts.cookies_updated_at + mirror cookies onto accounts.session_cookie.
-  // The dashboard's get_accounts handler (src/lib/api/accounts.ts:81-134) computes
-  // has_auth_cookie LIVE at read time from session_cookie or account_sessions.cookies,
-  // so we don't write that column directly — just keeping session_cookie fresh +
-  // bumping cookies_health is enough to flip the badge green on next refetch.
   const { health } = scoreCookies(cookies)
   const { error: updateErr } = await supabase
     .from("accounts")
@@ -85,12 +81,37 @@ export async function POST(
     })
     .eq("account_id", account_id)
 
-  if (updateErr) {
-    // Non-fatal — snapshot still saved. Return a warning.
+  // 3. Refresh account_sessions: supersede the previous active row and insert a
+  // new one with last_verified_at=now. This is the row get_accounts reads to
+  // compute session_status (src/lib/api/accounts.ts:104-126) — without a fresh
+  // row the badge stays "expired" forever, even though session_cookie is fresh.
+  // Mirror what vnc-manager.captureSession does (server.js:1422-1442).
+  let sessionsErr: string | null = null
+  try {
+    await supabase
+      .from("account_sessions")
+      .update({ status: "superseded" })
+      .eq("account_id", account_id)
+      .eq("status", "active")
+    const { error: insErr } = await supabase
+      .from("account_sessions")
+      .insert({
+        account_id,
+        cookies,
+        local_storage: local_storage || {},
+        last_verified_at: now,
+        status: "active",
+      })
+    if (insErr) sessionsErr = insErr.message
+  } catch (e) {
+    sessionsErr = (e as Error).message
+  }
+
+  if (updateErr || sessionsErr) {
     return NextResponse.json({
       success: true,
       snapshot_id: snap.id,
-      warn: updateErr.message,
+      warn: [updateErr?.message, sessionsErr].filter(Boolean).join(" · "),
     })
   }
 

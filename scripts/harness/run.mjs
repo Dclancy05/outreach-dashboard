@@ -54,7 +54,8 @@ const args = parseArgs(process.argv);
 const scenarioName = args.scenario || args._[0];
 if (!scenarioName) {
   console.error("Usage: node scripts/harness/run.mjs --scenario <name> [--duration N] [--platform X]");
-  console.error("Scenarios: popup-login, idle-smoke, observability-vnc, automation-record");
+  console.error("Scenarios: popup-login, idle-smoke, observability-vnc, automation-record, login-flow-e2e");
+  console.error("Pass --no-video to skip the .webm recording (saves ~30 MB per run).");
   process.exit(2);
 }
 
@@ -82,7 +83,11 @@ console.log(`Harness — scenario=${scenarioName} duration=${duration}s out=${ou
 const timeline = createTimeline();
 const { ev, log, sec, t0 } = timeline;
 
-const { browser, ctx, page } = await launchChromium();
+const videoDir = path.join(outDir, "video");
+fs.mkdirSync(videoDir, { recursive: true });
+const { browser, ctx, page } = await launchChromium({
+  recordVideo: args["no-video"] ? null : { dir: videoDir },
+});
 
 // Wire instruments
 const instruments = [
@@ -124,6 +129,15 @@ for (const inst of instruments) {
 await visual.analyze().catch(() => {});
 await audit.scrape({ minutes: Math.max(2, Math.ceil(duration / 60) + 1) }).catch(() => {});
 
+// Resolve video file path BEFORE closing context — Playwright finalizes the
+// .webm only after the page that owns it closes. We close the page first,
+// grab the path, then close the browser.
+let videoPath = null;
+try {
+  videoPath = await page.video()?.path();
+} catch {}
+await page.close().catch(() => {});
+await ctx.close().catch(() => {});
 await browser.close().catch(() => {});
 
 // Write reports
@@ -164,5 +178,8 @@ console.log(`\nOutput:`);
 console.log(`  ${txtFile}`);
 console.log(`  ${jsonFile}`);
 console.log(`  ${htmlFile}`);
+if (videoPath && fs.existsSync(videoPath)) {
+  console.log(`  ${videoPath}  (video — open in any browser)`);
+}
 
 process.exit(crashed ? 2 : (allOk ? 0 : 1));
