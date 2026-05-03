@@ -306,6 +306,30 @@ export default function PlatformLoginModal({
   // doesn't see a fresh string every render (its connect callback depends on
   // wsUrl, and a new identity would force unnecessary teardown).
   const vncWsUrl = useMemo(() => buildWsUrlForSession("main"), [])
+  // Wave 1.3 + 1.5 — stable telemetry session id per modal-open. Used by
+  // VncViewer's telemetry POST and by the URL-transition audit log so all
+  // events for one popup session join cleanly.
+  const telemetrySessionId = useMemo(
+    () => `popup_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`,
+    [open] // eslint-disable-line react-hooks/exhaustive-deps -- intentional: new id per open
+  )
+
+  // Wave 1.5 — fire-and-forget audit POST. Used for URL transitions + state
+  // changes so /agency/observability events tab shows the full session trail.
+  const postVncAudit = useCallback((payload: Record<string, unknown>) => {
+    try {
+      fetch("/api/observability/vnc", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          session_id: telemetrySessionId,
+          account_id: accountId || null,
+          ...payload,
+        }),
+        keepalive: true,
+      }).catch(() => {})
+    } catch {}
+  }, [telemetrySessionId, accountId])
 
   const info = useMemo(() => instructionsFor(currentPlatform), [currentPlatform])
 
@@ -343,9 +367,25 @@ export default function PlatformLoginModal({
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
+        // Wave 1.5 — audit failed transition too (Dylan can debug from this)
+        postVncAudit({
+          kind: "vnc_url_transition",
+          requested_platform: platform,
+          expected_url: url,
+          actual_url: null,
+          detail: { ok: false, status: res.status, error: body?.error },
+        })
         throw new Error(body?.error || `goto failed (${res.status})`)
       }
       setCurrentPlatform(platform)
+      // Wave 1.5 — audit successful transition
+      postVncAudit({
+        kind: "vnc_url_transition",
+        requested_platform: platform,
+        expected_url: url,
+        actual_url: url,
+        detail: { ok: true },
+      })
       toast.success(`Opened ${info.label} login`)
     } catch (e: unknown) {
       // Non-fatal — the viewer is still showing the VPS Chrome. Surface the
@@ -414,7 +454,13 @@ export default function PlatformLoginModal({
   const handleVncState = useCallback((next: VncConnectionState) => {
     vncStateRef.current = next
     setVncState(next)
-  }, [])
+    // Wave 1.5 — audit every state change.
+    postVncAudit({
+      kind: "vnc_state_change",
+      vnc_state: next,
+      requested_platform: currentPlatform,
+    })
+  }, [postVncAudit, currentPlatform])
 
   async function confirmLogin() {
     setVerifying(true)
@@ -942,6 +988,8 @@ export default function PlatformLoginModal({
                 wsUrl={vncWsUrl}
                 password={VNC_PASSWORD || undefined}
                 onStateChange={handleVncState}
+                accountId={accountId}
+                sessionId={telemetrySessionId}
                 className="h-full w-full"
               />
               {/* While the viewer is connecting (or waiting for RFB to finish
