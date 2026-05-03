@@ -1,0 +1,88 @@
+name: Supabase Cold Backup
+
+# Wave 5.2 — daily encrypted Supabase dump pushed to S3 with 14-day retention.
+#
+# Required GitHub secrets:
+#   SUPABASE_DB_URL    postgres://postgres:[password]@db.<ref>.supabase.co:5432/postgres
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+#   AWS_S3_BUCKET      e.g. dc-outreach-backups
+#   AWS_REGION         e.g. us-east-1
+#   BACKUP_GPG_PASS    GPG symmetric password (NEVER commit a public key — symmetric is simpler for restore)
+
+on:
+  schedule:
+    - cron: "0 4 * * *"   # daily at 04:00 UTC (~midnight ET)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install pg_dump 16
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client-16
+
+      - name: Dump
+        env:
+          PGCONNECT_TIMEOUT: 30
+        run: |
+          set -euo pipefail
+          pg_dump --no-owner --no-acl --format=custom \
+            --file=/tmp/supabase.dump \
+            "${{ secrets.SUPABASE_DB_URL }}"
+
+      - name: Encrypt
+        run: |
+          set -euo pipefail
+          gpg --batch --yes --passphrase "${{ secrets.BACKUP_GPG_PASS }}" \
+              --symmetric --cipher-algo AES256 \
+              --output /tmp/supabase.dump.gpg \
+              /tmp/supabase.dump
+          ls -lh /tmp/supabase.dump /tmp/supabase.dump.gpg
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Upload to S3
+        run: |
+          set -euo pipefail
+          STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+          aws s3 cp /tmp/supabase.dump.gpg \
+            "s3://${{ secrets.AWS_S3_BUCKET }}/supabase/$STAMP.dump.gpg" \
+            --storage-class STANDARD_IA
+
+      - name: Prune old backups (>14 days)
+        run: |
+          set -euo pipefail
+          aws s3 ls "s3://${{ secrets.AWS_S3_BUCKET }}/supabase/" \
+            | awk '{print $1, $2, $4}' \
+            | while read -r DATE TIME FILE; do
+                AGE_DAYS=$(( ( $(date -u +%s) - $(date -u -d "$DATE $TIME" +%s) ) / 86400 ))
+                if [ "$AGE_DAYS" -gt 14 ]; then
+                  echo "Pruning $FILE (age=${AGE_DAYS}d)"
+                  aws s3 rm "s3://${{ secrets.AWS_S3_BUCKET }}/supabase/$FILE"
+                fi
+              done
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          TG_BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "${TG_BOT:-}" ] && [ -n "${TG_CHAT:-}" ]; then
+            curl -fsSL "https://api.telegram.org/bot$TG_BOT/sendMessage" \
+              -d "chat_id=$TG_CHAT" \
+              -d "text=🚨 Supabase cold backup FAILED — see GitHub Actions"
+          fi
