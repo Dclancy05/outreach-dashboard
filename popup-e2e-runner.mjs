@@ -175,6 +175,21 @@ await page.waitForTimeout(8000);
 await page.screenshot({ path: `${SHOTS}/03-after-8s.png` });
 log(`📸 03-after-8s.png`);
 
+// Take a tight crop of the top of the modal so the trust bar is legible
+try {
+  const dialog = await page.$('[role="dialog"]');
+  if (dialog) {
+    const box = await dialog.boundingBox();
+    if (box) {
+      await page.screenshot({
+        path: `${SHOTS}/05-trust-bar.png`,
+        clip: { x: box.x + 340, y: box.y, width: Math.min(box.width - 340, 1100), height: 80 },
+      });
+      log(`📸 05-trust-bar.png (cropped)`);
+    }
+  }
+} catch (e) { log(`crop screenshot skipped: ${e.message}`); }
+
 // Probe state via JS
 const state = await page.evaluate(() => {
   const dialog = document.querySelector('[role="dialog"]');
