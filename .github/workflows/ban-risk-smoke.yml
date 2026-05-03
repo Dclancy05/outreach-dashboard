@@ -1,0 +1,44 @@
+name: Ban-Risk Smoke
+
+# Catches the 2026-05-02-class regression: any setInterval polling
+# /api/platforms/* or /api/recordings/* on a tight timer that drives Chrome
+# to navigate. Runs scripts/ban-risk-smoke.mjs against the Vercel preview.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: |
+          npm i playwright@1.49.x --no-save
+          npx playwright install --with-deps chromium
+
+      - name: Wait for Vercel preview
+        id: preview
+        uses: patrickedqvist/wait-for-vercel-preview@v1.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          max_timeout: 600
+          environment: Preview
+
+      - name: Run idle-smoke (ban-risk regression check)
+        env:
+          DASHBOARD_URL: ${{ steps.preview.outputs.url }}
+          ADMIN_PIN: ${{ secrets.ADMIN_PIN }}
+          IDLE_SECONDS: 60
+        run: node scripts/ban-risk-smoke.mjs
