@@ -114,9 +114,9 @@ interface VncViewerProps {
   wsUrl: string | null
   /** Optional VNC password (RFB credentials.password). */
   password?: string
-  /** Image quality 0-9 (higher = better). Default 6. */
+  /** Image quality 0-9 (higher = better). Default 4 — tuned for Tailscale Funnel public TCP relay (~50-200ms). LAN test rigs that want sharper text can override to 6+. */
   quality?: number
-  /** Compression 0-9 (higher = more CPU, less bandwidth). Default 2. */
+  /** Compression 0-9 (higher = more CPU, less bandwidth). Default 7 — same Tailscale-Funnel rationale. */
   compression?: number
   /** Render at 1:1 (false) or scale-to-fit (true). Default true. */
   scaleViewport?: boolean
@@ -136,8 +136,8 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
     {
       wsUrl,
       password,
-      quality = 6,
-      compression = 2,
+      quality = 4,
+      compression = 7,
       scaleViewport = true,
       onStateChange,
       onStatsChange,
@@ -278,14 +278,14 @@ export const VncViewer = forwardRef<VncViewerHandle, VncViewerProps>(
 
         const handleDisconnect = (ev: CustomEvent) => {
           rfbRef.current = null
-          // detail.clean === true means a graceful close (user clicked Disconnect)
-          const detail = (ev as unknown as { detail?: { clean?: boolean } })
-            .detail
-          if (detail?.clean) {
-            updateState("idle")
-            return
-          }
-          // Unclean disconnects → schedule a reconnect (max 3 attempts).
+          // detail.clean === true used to mean "user clicked Disconnect" but
+          // Tailscale Funnel produces clean closes (code 1001 "Going Away")
+          // every 10-40s as a known relay quirk. Treating clean closes as
+          // "user wanted to disconnect" leaves the modal hanging on idle.
+          // Instead: ALWAYS try to reconnect a few times; only give up after
+          // we've burned through the attempt budget. Parent components that
+          // really want to stop the connection should call disconnect()
+          // explicitly (which sets reconnectAttemptsRef to 99 — see below).
           if (reconnectAttemptsRef.current < 3) {
             reconnectAttemptsRef.current += 1
             const delay = Math.min(6000, 2000 * reconnectAttemptsRef.current)
