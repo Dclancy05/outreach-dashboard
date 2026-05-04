@@ -19,6 +19,7 @@
 //   2  - scenario crashed
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createTimeline } from "./lib/timeline.mjs";
@@ -78,8 +79,18 @@ try {
 
 const duration = Number(args.duration || scenarioMod.meta?.defaultDuration || 60);
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-const outDir = args.outDir || `/tmp/harness/${scenarioName}-${stamp}`;
-fs.mkdirSync(outDir, { recursive: true });
+// Use os.tmpdir() + mkdtempSync so the output path has cryptographically-random
+// suffix instead of a predictable timestamp. CodeQL flags writes to predictable
+// /tmp/* paths (TOCTOU concern); mkdtempSync addresses that.
+let outDir;
+if (args.outDir) {
+  outDir = args.outDir;
+  fs.mkdirSync(outDir, { recursive: true });
+} else {
+  const baseDir = path.join(os.tmpdir(), "harness");
+  fs.mkdirSync(baseDir, { recursive: true });
+  outDir = fs.mkdtempSync(path.join(baseDir, `${scenarioName}-${stamp}-`));
+}
 
 console.log(`Harness — scenario=${scenarioName} duration=${duration}s out=${outDir}`);
 
