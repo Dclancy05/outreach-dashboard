@@ -194,7 +194,7 @@ function RunsRailTab({ agentSlug }: { agentSlug: string | null }) {
       {visible.map((r) => (
         <Link
           key={r.id}
-          href={`/agency/runs?run=${r.id}`}
+          href={`/agency/runs/${r.id}`}
           className="block px-3 py-2 border-b border-mem-border/50 hover:bg-mem-surface-2 transition-colors"
         >
           <div className="flex items-center gap-2 min-w-0">
