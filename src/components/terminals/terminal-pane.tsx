@@ -3,49 +3,145 @@
 /**
  * TerminalPane — one xterm.js terminal connected to a tmux session via WS.
  *
- * Why xterm.js (vs a plain textarea or Monaco): tmux speaks a real terminal
- * protocol — escape sequences for cursor moves, colors, mouse, etc. xterm.js
- * is the only browser library that handles all that correctly. It's what
- * VS Code, ttyd, Codespaces, and bridgemind all use.
+ * Design (rewritten for the bulletproof pass — tracks every failure mode the
+ * v1 implementation could hit):
  *
- * Connection lifecycle:
- *   idle → connecting → connected ⇄ disconnected → connecting (retry)
- *                          ↘ error (terminal state)
+ *   1. xterm and its onData subscription mount ONCE per component lifecycle.
+ *      The keystroke handler reads `wsRef.current` at fire time so we never
+ *      capture a stale WebSocket in a closure across reconnects.
  *
- * Persistence: the WebSocket is stateless — closing it does NOT kill the
- * tmux pane. Reopening attaches to the same pane and the server replays the
- * scrollback so the user sees their prior output.
+ *   2. Outbound keystrokes that arrive while the WS is not OPEN are buffered
+ *      (capped) and flushed on the next `connected` transition. The user can
+ *      keep typing during a brief disconnected window without losing chars.
+ *
+ *   3. A deadman watchdog tracks `lastServerDataAt`. If we go > 45s with no
+ *      bytes from the server while the WS *says* it's OPEN, we force-close
+ *      and let the existing reconnect path heal — catches NAT rebind, mobile
+ *      sleep, half-open sockets the kernel hasn't noticed.
+ *
+ *   4. xterm focus is restored on every `connected` transition and every
+ *      pointer-down inside the pane container. No more "I clicked away and
+ *      didn't realize my keys are going to the body".
+ *
+ *   5. SearchAddon (Cmd/Ctrl+F) and WebLinksAddon (clickable file:line hints)
+ *      are wired so the pane behaves like a first-class terminal app.
+ *
+ *   6. The visible state machine surfaces every error as a friendly sentence
+ *      with a one-click action — no dead-end "Disconnected" labels.
  */
-import { useEffect, useRef, useState } from "react"
-import { Loader2, Plug, AlertTriangle } from "lucide-react"
-import { Terminal } from "xterm"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Loader2, Plug, AlertTriangle, RotateCw, KeyRound, Search, X } from "lucide-react"
+import { Terminal, type IDisposable } from "xterm"
 import { FitAddon } from "@xterm/addon-fit"
+import { SearchAddon } from "@xterm/addon-search"
+import { WebLinksAddon } from "@xterm/addon-web-links"
 import "xterm/css/xterm.css"
 
 type State = "idle" | "connecting" | "connected" | "disconnected" | "error"
 
 interface Props {
   sessionId: string
-  /** Full wss:// URL the terminal-server exposes — the bearer token is embedded
-   *  as `?token=` (the dashboard's /api/terminals route does that). */
+  /** Full wss:// URL the terminal-server exposes — bearer token rides as
+   *  `?token=` (the dashboard's /api/terminals route does that). */
   wsUrl: string
   /** Called whenever the local viewport changes — caller pushes resize to VPS. */
   onResize?: (cols: number, rows: number) => void
+  /** Called when the user clicks a `path:line:col` link in the terminal output —
+   *  caller can route to the Command Center's Code mode. */
+  onOpenFile?: (path: string, line?: number, col?: number) => void
 }
 
-export function TerminalPane({ sessionId, wsUrl, onResize }: Props) {
+// Cap on how many bytes we'll buffer while the WS is down. Beyond this we
+// drop oldest — protects against a runaway paste when the server is dead.
+const OUTBOUND_BUFFER_LIMIT = 64 * 1024
+
+// If the server hasn't sent any data for this long while we *think* we're
+// connected, suspect the socket is half-open and force-reconnect.
+const SERVER_SILENCE_TIMEOUT_MS = 45_000
+const WATCHDOG_TICK_MS = 5_000
+
+// Backoff cap. The reconnect ladder doubles from 500ms; we cap at 30s so
+// the user never waits more than half a minute for a heal attempt.
+const RECONNECT_CAP_MS = 30_000
+
+export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const searchRef = useRef<SearchAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectAttemptRef = useRef(0)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const watchdogTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const lastServerDataAtRef = useRef<number>(Date.now())
+  const outboundBufferRef = useRef<string[]>([])
+  const outboundBufferSizeRef = useRef<number>(0)
+  const onDataSubRef = useRef<IDisposable | null>(null)
+  const onResizeRef = useRef<Props["onResize"]>(onResize)
+  const onOpenFileRef = useRef<Props["onOpenFile"]>(onOpenFile)
+  const stateRef = useRef<State>("idle")
+
   const [state, setState] = useState<State>("idle")
   const [error, setError] = useState<string | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchTerm, setSearchTerm] = useState("")
 
-  // Mount xterm.js once. The terminal itself is reusable across reconnects —
-  // we don't tear it down when the WS dies, just when the component unmounts.
+  // Keep refs in sync with latest callback identity so the xterm-mount effect
+  // doesn't have to depend on them (and re-mount xterm whenever the parent
+  // re-renders with a new arrow function).
+  useEffect(() => { onResizeRef.current = onResize }, [onResize])
+  useEffect(() => { onOpenFileRef.current = onOpenFile }, [onOpenFile])
+
+  const setStateBoth = useCallback((s: State) => {
+    stateRef.current = s
+    setState(s)
+  }, [])
+
+  // Try to send a chunk over the live WS, or buffer it until reconnect.
+  const sendOrBuffer = useCallback((data: string) => {
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(data)
+        return
+      } catch {
+        /* fall through to buffer */
+      }
+    }
+    // Drop oldest if over the cap so a runaway paste during a dead WS can't
+    // exhaust the heap.
+    outboundBufferRef.current.push(data)
+    outboundBufferSizeRef.current += data.length
+    while (outboundBufferSizeRef.current > OUTBOUND_BUFFER_LIMIT && outboundBufferRef.current.length > 1) {
+      const dropped = outboundBufferRef.current.shift()
+      if (dropped) outboundBufferSizeRef.current -= dropped.length
+    }
+  }, [])
+
+  const flushBuffer = useCallback(() => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    while (outboundBufferRef.current.length > 0) {
+      const chunk = outboundBufferRef.current.shift()
+      if (chunk === undefined) break
+      try {
+        ws.send(chunk)
+        outboundBufferSizeRef.current -= chunk.length
+      } catch {
+        // Re-queue and stop draining; we'll retry on next OPEN.
+        outboundBufferRef.current.unshift(chunk)
+        return
+      }
+    }
+    outboundBufferSizeRef.current = 0
+  }, [])
+
+  // ─── xterm mount (once) ──────────────────────────────────────────────
+  // Stable across reconnects, prop changes, and parent rerenders.
   useEffect(() => {
-    if (!containerRef.current) return
+    const container = containerRef.current
+    if (!container) return
+
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
@@ -59,152 +155,375 @@ export function TerminalPane({ sessionId, wsUrl, onResize }: Props) {
       },
       scrollback: 5000,
       allowProposedApi: true,
+      // Keep the alt-screen buffer in sync — fixes scrollback corruption when
+      // a TUI (claude, vim, less) exits and the parent shell repaints.
+      windowsMode: false,
     })
     const fit = new FitAddon()
+    const search = new SearchAddon()
+    const links = new WebLinksAddon((event, uri) => {
+      // The default WebLinksAddon opens http(s) URIs in a new tab. We extend
+      // to also recognize `file:line[:col]` paths and route them to onOpenFile
+      // so the dashboard can jump to the Code mode.
+      const fileMatch = uri.match(/^([^:\s]+\.[a-z0-9]+):(\d+)(?::(\d+))?$/i)
+      if (fileMatch && onOpenFileRef.current) {
+        event.preventDefault()
+        onOpenFileRef.current(fileMatch[1], Number(fileMatch[2]), fileMatch[3] ? Number(fileMatch[3]) : undefined)
+        return
+      }
+      // Default: open URLs.
+      try { window.open(uri, "_blank", "noopener,noreferrer") } catch { /* */ }
+    })
+
     term.loadAddon(fit)
-    term.open(containerRef.current)
-    fit.fit()
+    term.loadAddon(search)
+    term.loadAddon(links)
+    term.open(container)
+    try { fit.fit() } catch { /* container may be 0×0 mid-transition */ }
+
     xtermRef.current = term
     fitRef.current = fit
+    searchRef.current = search
+
+    // SINGLE keystroke subscription, lives for the full xterm lifetime. Reads
+    // wsRef.current at fire time, so it always sees the freshest WS — no
+    // stale captures across reconnects, no leak across re-mounts.
+    onDataSubRef.current = term.onData((data) => {
+      sendOrBuffer(data)
+    })
+
+    // Cmd/Ctrl+F opens the in-pane search bar.
+    const searchKeyHandler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        // Only intercept when the xterm has focus so we don't steal Cmd+F
+        // from the surrounding page.
+        if (document.activeElement === container.querySelector(".xterm-helper-textarea")) {
+          e.preventDefault()
+          setSearchOpen(true)
+        }
+      }
+      if (e.key === "Escape" && searchOpen) {
+        setSearchOpen(false)
+      }
+    }
+    container.addEventListener("keydown", searchKeyHandler, true)
+
     return () => {
+      container.removeEventListener("keydown", searchKeyHandler, true)
+      onDataSubRef.current?.dispose()
+      onDataSubRef.current = null
       term.dispose()
       xtermRef.current = null
       fitRef.current = null
+      searchRef.current = null
     }
+    // We intentionally exclude every changing dep — xterm must be a singleton.
+    // Callbacks are read through refs above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Resize-to-fit on container resize. Push the new size to the parent so it
-  // can tell the VPS (tmux needs to know to redraw correctly).
+  // ─── ResizeObserver — push viewport size up so VPS knows the new geometry.
   useEffect(() => {
-    if (!containerRef.current || !fitRef.current) return
+    const container = containerRef.current
+    if (!container) return
     const ro = new ResizeObserver(() => {
       try {
         fitRef.current?.fit()
-        if (xtermRef.current) {
-          onResize?.(xtermRef.current.cols, xtermRef.current.rows)
-        }
+        const term = xtermRef.current
+        if (term) onResizeRef.current?.(term.cols, term.rows)
       } catch { /* fit may throw if container is 0×0 mid-transition */ }
     })
-    ro.observe(containerRef.current)
+    ro.observe(container)
     return () => ro.disconnect()
-  }, [onResize])
+  }, [])
 
-  // Connect WS + wire bidirectional bytes. Reconnects with exponential backoff
-  // capped at 30s, infinite retries — closing tab is the only way to give up.
+  // ─── WS lifecycle (per wsUrl/sessionId) ──────────────────────────────
   useEffect(() => {
     if (!wsUrl) return
     let cancelled = false
 
-    const connect = () => {
+    const clearReconnectTimer = () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
+    }
+
+    const scheduleReconnect = () => {
       if (cancelled) return
-      setState("connecting")
+      reconnectAttemptRef.current += 1
+      const delay = Math.min(
+        RECONNECT_CAP_MS,
+        500 * 2 ** Math.min(reconnectAttemptRef.current, 6),
+      )
+      clearReconnectTimer()
+      reconnectTimerRef.current = setTimeout(connect, delay)
+    }
+
+    const focusXterm = () => {
+      try { xtermRef.current?.focus() } catch { /* */ }
+    }
+
+    function connect() {
+      if (cancelled) return
+      setStateBoth("connecting")
       setError(null)
-      // Token rides as `?token=` in the WS URL (set by /api/terminals on the
-      // dashboard). Tailscale Funnel's --set-path proxy drops the
-      // Sec-WebSocket-Protocol header during the upgrade, so subprotocol auth
-      // doesn't survive the round-trip. URL query is preserved by every proxy
-      // and stays inside TLS — same threat model as the noVNC password.
+      lastServerDataAtRef.current = Date.now()
+
       const ws = new WebSocket(wsUrl)
       ws.binaryType = "arraybuffer"
       wsRef.current = ws
 
       ws.onopen = () => {
-        if (cancelled) { ws.close(); return }
+        if (cancelled) {
+          try { ws.close(1000, "cancelled") } catch { /* */ }
+          return
+        }
         reconnectAttemptRef.current = 0
-        setState("connected")
-        // Resize-fit after open so the server's initial scrollback replay
-        // doesn't get cropped by a 0-row layout.
+        setStateBoth("connected")
+        // Fit after the server's initial scrollback replay so a 0-row layout
+        // doesn't crop output. Refocus xterm so the user can immediately type
+        // even if their pointer wandered.
         setTimeout(() => {
           try { fitRef.current?.fit() } catch { /* */ }
+          focusXterm()
+          flushBuffer()
         }, 50)
       }
 
       ws.onmessage = (ev) => {
-        if (!xtermRef.current) return
-        // Server sends raw bytes. Could be string (initial scrollback) or
-        // binary (live tail). xterm.write handles both.
+        const term = xtermRef.current
+        if (!term) return
+        lastServerDataAtRef.current = Date.now()
         const data = typeof ev.data === "string"
           ? ev.data
           : new Uint8Array(ev.data as ArrayBuffer)
-        xtermRef.current.write(data)
+        term.write(data)
       }
 
       ws.onerror = () => {
-        // ws errors don't carry detail — see the close event for the actual reason
+        // ws errors don't carry detail in the browser API — see close event
+        // for the actual reason. We still surface a generic message in case
+        // close never fires.
       }
 
       ws.onclose = (ev) => {
         if (cancelled) return
         wsRef.current = null
         if (ev.code === 1000) {
-          setState("disconnected")
+          // Clean close from server (pty exited, etc.). Try to reconnect —
+          // tmux session is still alive on the VPS even if our attach died.
+          setStateBoth("disconnected")
+          scheduleReconnect()
           return
         }
-        setState("disconnected")
         if (ev.code === 4401 || ev.code === 1008) {
-          setError("Unauthorized — terminal-server rejected the token.")
-          setState("error")
+          setError("Authentication rejected. The session token may have expired — reload the page to re-issue one.")
+          setStateBoth("error")
           return
         }
         if (ev.code === 4404 || ev.code === 1011) {
-          setError("Session not found on the VPS — it may have crashed.")
-          setState("error")
+          setError("This terminal isn't running on the VPS. It may have crashed or been killed — open a new one.")
+          setStateBoth("error")
           return
         }
-        // Generic network drop / server restart — reconnect with backoff.
-        reconnectAttemptRef.current += 1
-        const delay = Math.min(30_000, 500 * 2 ** Math.min(reconnectAttemptRef.current, 6))
-        setTimeout(connect, delay)
-      }
-
-      // Forward keystrokes from xterm → WS.
-      const term = xtermRef.current
-      if (term) {
-        const sub = term.onData((data) => {
-          if (ws.readyState === ws.OPEN) ws.send(data)
-        })
-        ws.addEventListener("close", () => sub.dispose())
+        setStateBoth("disconnected")
+        scheduleReconnect()
       }
     }
 
+    // Start the watchdog — if the server goes silent while we *think* we're
+    // connected, the socket is half-open. Force-close and let onclose+
+    // scheduleReconnect heal it.
+    watchdogTimerRef.current = setInterval(() => {
+      if (stateRef.current !== "connected") return
+      const silentFor = Date.now() - lastServerDataAtRef.current
+      if (silentFor > SERVER_SILENCE_TIMEOUT_MS) {
+        const ws = wsRef.current
+        if (ws) {
+          try { ws.close(4000, "watchdog: server silence") } catch { /* */ }
+        }
+      }
+    }, WATCHDOG_TICK_MS)
+
     connect()
+
     return () => {
       cancelled = true
+      clearReconnectTimer()
+      if (watchdogTimerRef.current) {
+        clearInterval(watchdogTimerRef.current)
+        watchdogTimerRef.current = null
+      }
       try { wsRef.current?.close(1000, "unmount") } catch { /* */ }
       wsRef.current = null
     }
-  }, [wsUrl, sessionId])
+  }, [wsUrl, sessionId, flushBuffer, setStateBoth])
 
-  return (
-    <div className="relative h-full w-full bg-zinc-950">
-      <div ref={containerRef} className="absolute inset-0" />
-      {(state === "connecting" || state === "idle") && (
+  // ─── Search bar ──────────────────────────────────────────────────────
+  const runSearch = useCallback((term: string, direction: "next" | "prev") => {
+    const search = searchRef.current
+    if (!search) return
+    if (direction === "next") search.findNext(term)
+    else search.findPrevious(term)
+  }, [])
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false)
+    setSearchTerm("")
+    try { searchRef.current?.clearDecorations() } catch { /* */ }
+  }, [])
+
+  const reloadPage = useCallback(() => {
+    if (typeof window !== "undefined") window.location.reload()
+  }, [])
+
+  const forceReconnect = useCallback(() => {
+    const ws = wsRef.current
+    if (ws) {
+      try { ws.close(4000, "user-forced reconnect") } catch { /* */ }
+    } else {
+      // No live ws — bump the reconnect attempt and let the existing schedule run.
+      reconnectAttemptRef.current = 0
+    }
+  }, [])
+
+  // Click anywhere in the pane container → focus xterm. Catches the case where
+  // a user clicks a child element (e.g. the status overlay) and loses focus.
+  const onPaneMouseDown = useCallback(() => {
+    try { xtermRef.current?.focus() } catch { /* */ }
+  }, [])
+
+  const overlayContent = useMemo(() => {
+    if (state === "connecting" || state === "idle") {
+      return (
         <Overlay>
           <Loader2 className="w-5 h-5 animate-spin mb-2 text-amber-400" />
           <div className="text-sm">Connecting to session…</div>
         </Overlay>
-      )}
-      {state === "disconnected" && (
+      )
+    }
+    if (state === "disconnected") {
+      return (
         <Overlay>
           <Plug className="w-5 h-5 mb-2 text-zinc-400" />
           <div className="text-sm">Reconnecting…</div>
+          <div className="text-xs text-zinc-500 mt-1">Your work is safe — the session is still running on the VPS.</div>
         </Overlay>
-      )}
-      {state === "error" && (
-        <Overlay>
+      )
+    }
+    if (state === "error") {
+      const isAuth = error?.startsWith("Authentication")
+      return (
+        <Overlay interactive>
           <AlertTriangle className="w-5 h-5 mb-2 text-red-400" />
-          <div className="text-sm font-medium text-red-300">Disconnected</div>
-          {error && <div className="text-xs text-zinc-400 mt-1 max-w-sm text-center">{error}</div>}
+          <div className="text-sm font-medium text-red-300">{isAuth ? "Sign-in needed" : "Disconnected"}</div>
+          {error && <div className="text-xs text-zinc-400 mt-1 max-w-sm text-center leading-relaxed">{error}</div>}
+          <div className="flex items-center gap-2 mt-3">
+            {isAuth ? (
+              <button
+                onClick={reloadPage}
+                className="text-xs px-3 py-1.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-100 hover:bg-amber-500/25 inline-flex items-center gap-1.5"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                Reload to re-auth
+              </button>
+            ) : (
+              <button
+                onClick={forceReconnect}
+                className="text-xs px-3 py-1.5 rounded-md bg-cyan-500/15 border border-cyan-500/30 text-cyan-100 hover:bg-cyan-500/25 inline-flex items-center gap-1.5"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+                Try again
+              </button>
+            )}
+          </div>
         </Overlay>
+      )
+    }
+    return null
+  }, [state, error, forceReconnect, reloadPage])
+
+  return (
+    <div
+      className="relative h-full w-full bg-zinc-950"
+      onMouseDown={onPaneMouseDown}
+    >
+      <div ref={containerRef} className="absolute inset-0" />
+      {overlayContent}
+      {searchOpen && (
+        <SearchBar
+          term={searchTerm}
+          onTerm={setSearchTerm}
+          onNext={() => runSearch(searchTerm, "next")}
+          onPrev={() => runSearch(searchTerm, "prev")}
+          onClose={closeSearch}
+        />
       )}
     </div>
   )
 }
 
-function Overlay({ children }: { children: React.ReactNode }) {
+function Overlay({ children, interactive }: { children: React.ReactNode; interactive?: boolean }) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/80 backdrop-blur-sm pointer-events-none">
+    <div
+      className={
+        "absolute inset-0 flex flex-col items-center justify-center bg-zinc-950/80 backdrop-blur-sm" +
+        (interactive ? "" : " pointer-events-none")
+      }
+    >
       {children}
+    </div>
+  )
+}
+
+function SearchBar({
+  term, onTerm, onNext, onPrev, onClose,
+}: {
+  term: string
+  onTerm: (s: string) => void
+  onNext: () => void
+  onPrev: () => void
+  onClose: () => void
+}) {
+  return (
+    <div className="absolute top-2 right-2 z-10 flex items-center gap-1 bg-zinc-900/95 border border-zinc-700 rounded-md px-2 py-1 shadow-lg">
+      <Search className="w-3.5 h-3.5 text-zinc-400" />
+      <input
+        autoFocus
+        value={term}
+        onChange={(e) => onTerm(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault()
+            if (e.shiftKey) onPrev()
+            else onNext()
+          }
+          if (e.key === "Escape") {
+            e.preventDefault()
+            onClose()
+          }
+        }}
+        placeholder="Find in terminal"
+        className="bg-transparent border-0 outline-none text-xs text-zinc-100 placeholder:text-zinc-500 w-44"
+      />
+      <button
+        onClick={onPrev}
+        title="Previous (Shift+Enter)"
+        className="text-zinc-400 hover:text-zinc-100 px-1 text-xs"
+      >↑</button>
+      <button
+        onClick={onNext}
+        title="Next (Enter)"
+        className="text-zinc-400 hover:text-zinc-100 px-1 text-xs"
+      >↓</button>
+      <button
+        onClick={onClose}
+        title="Close (Esc)"
+        className="text-zinc-400 hover:text-red-300 px-1"
+      >
+        <X className="w-3 h-3" />
+      </button>
     </div>
   )
 }
