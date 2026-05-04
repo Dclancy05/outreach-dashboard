@@ -201,6 +201,25 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     term.loadAddon(fit)
     term.loadAddon(search)
     term.loadAddon(links)
+
+    // Custom wheel handler — kills the dot-pollution bug where mousewheel
+    // inside a TUI (Claude Code, vim, less) sends SGR mouse-tracking escape
+    // sequences to the PTY that the inner app then renders as placeholder
+    // middle-dot characters across the visible rows. On the alt buffer we
+    // intercept and translate wheel into Up/Down arrow keys so Claude Code's
+    // prompt history scrolls the way the user expects. On the normal buffer
+    // we defer to xterm so bash scrollback keeps working.
+    term.attachCustomWheelEventHandler((ev) => {
+      if (term.buffer.active.type !== "alternate") {
+        return true
+      }
+      ev.preventDefault()
+      const lines = Math.max(1, Math.round(Math.abs(ev.deltaY) / 40))
+      const seq = ev.deltaY < 0 ? "\x1b[A" : "\x1b[B"
+      sendOrBuffer(seq.repeat(Math.min(lines, 3)))
+      return false
+    })
+
     term.open(container)
     // Use xterm's default DOM renderer. The WebGL/Canvas addon ladder was
     // faster, but it intermittently crashed with xterm internals reading
