@@ -25,10 +25,6 @@
       "schedule": "0 11 * * *"
     },
     {
-      "path": "/api/cron/cookie-backup",
-      "schedule": "0 7 * * *"
-    },
-    {
       "path": "/api/cron/cookies-health-check",
       "schedule": "0 12 * * *"
     },
@@ -55,14 +51,6 @@
     {
       "path": "/api/cron/sweep-stuck-runs",
       "schedule": "0 1 * * *"
-    },
-    {
-      "path": "/api/cron/cost-cap",
-      "schedule": "0 2 * * *"
-    },
-    {
-      "path": "/api/cron/morning-digest",
-      "schedule": "0 8 * * *"
     },
     {
       "path": "/api/cron/sentry-to-github",
