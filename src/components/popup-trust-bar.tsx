@@ -50,6 +50,13 @@ export default function PopupTrustBar({ accountId, vncState, className }: PopupT
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // PR #98 — clear stale info BEFORE the new fetch starts. Without this,
+    // switching from Account A → Account B briefly showed Account A's proxy
+    // IP / Chrome profile in the trust bar (the old `info` state stayed put
+    // until the new fetch resolved). On a 404 / 500 it would never clear at
+    // all. Clearing here also gives the user a "refreshing…" state instead
+    // of stale truth.
+    setInfo(null)
     if (!accountId) {
       setLoading(false)
       return
@@ -57,7 +64,14 @@ export default function PopupTrustBar({ accountId, vncState, className }: PopupT
     let cancelled = false
     setLoading(true)
     setError(null)
-    fetch(`/api/accounts/${encodeURIComponent(accountId)}/session-info`, { cache: "no-store" })
+    // 5s timeout — session-info shouldn't ever take longer; if it does,
+    // surface "couldn't load" instead of a forever-spinner.
+    const ac = new AbortController()
+    const timeoutId = setTimeout(() => ac.abort(), 5000)
+    fetch(`/api/accounts/${encodeURIComponent(accountId)}/session-info`, {
+      cache: "no-store",
+      signal: ac.signal,
+    })
       .then(async (r) => {
         if (!r.ok) throw new Error(`session-info ${r.status}`)
         return r.json()
@@ -69,10 +83,13 @@ export default function PopupTrustBar({ accountId, vncState, className }: PopupT
         if (!cancelled) setError(e instanceof Error ? e.message : "couldn't load session info")
       })
       .finally(() => {
+        clearTimeout(timeoutId)
         if (!cancelled) setLoading(false)
       })
     return () => {
       cancelled = true
+      clearTimeout(timeoutId)
+      ac.abort()
     }
   }, [accountId])
 
