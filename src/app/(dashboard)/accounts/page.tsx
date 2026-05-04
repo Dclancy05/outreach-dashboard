@@ -29,6 +29,7 @@ import BulkImportDialog from "@/components/bulk-import-dialog"
 import { CookieHealthBadge } from "@/components/cookie-health-badge"
 import { HelpButton } from "@/components/help-button"
 import { SystemHealthStrip } from "@/components/accounts/system-health-strip"
+import { runSnapshotRetryTick } from "@/lib/api/cookie-snapshot-retry"
 
 // ── Animation variants ──────────────────────────────────────────────
 
@@ -521,6 +522,28 @@ export default function AccountsPage() {
       setAccounts(nextAccounts)
       setWarmupSeqs(warmupRes.data || [])
       setLastPollAt(Date.now())
+
+      // PR #109 — auto-retry snapshot for accounts where the live probe
+      // says "logged in" but Supabase is missing the strict auth cookie.
+      // Heals the LinkedIn timing race (li_at gets set after the
+      // post-login redirect, so the modal's first cookies-dump misses
+      // it). Runs only on silent ticks so user-driven refreshes feel
+      // snappy. Per-account 5-min cooldown + 3-strikes stop are baked
+      // into runSnapshotRetryTick. Fire-and-forget — never blocks the
+      // UI, never toasts unless something flips to saved.
+      if (silent) {
+        runSnapshotRetryTick(nextAccounts, {
+          onResult: (a, result) => {
+            if (result === "saved") {
+              // Schedule one extra silent refetch ~2s later so the UI
+              // shows the now-saved cookie in the next tick. Don't
+              // fetchAll inline — we're inside fetchAll already.
+              setTimeout(() => { void fetchAllImpl(true) }, 2000)
+              toast.success(`Cookies saved for @${a.account_id} — was missing the auth cookie`)
+            }
+          },
+        }).catch(() => {})
+      }
     } catch (e) {
       if (!silent) toast.error("Failed to load data")
       // Silent failures don't toast — the user is browsing, not asking for
