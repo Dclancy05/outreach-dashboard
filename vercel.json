@@ -49,10 +49,6 @@
       "schedule": "30 14 * * *"
     },
     {
-      "path": "/api/cron/project-brain-scan",
-      "schedule": "*/15 * * * *"
-    },
-    {
       "path": "/api/cron/workflow-tick",
       "schedule": "45 14 * * *"
     },
