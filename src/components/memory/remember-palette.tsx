@@ -33,24 +33,17 @@ export function RememberPalette() {
 
   const pathname = usePathname()
 
-  // Cmd-K / Ctrl-K to open — but ONLY outside /jarvis. Inside /jarvis the
-  // Jarvis command palette owns ⌘K and this palette is reachable via ⌘⇧K
-  // (handled below) or programmatically via the "jarvis:open-remember-palette"
-  // custom event (fired by the Jarvis cmdk's static "Quick remember" action).
+  // Keyboard binding: ⌘⇧K (anywhere) opens this palette. Plain ⌘K is owned by
+  // the Jarvis cmdk (inside /jarvis) and the dashboard <CommandPalette /> (the
+  // rest of the app, Phase 4 #2 of the terminals overhaul, 2026-05-04). Both of
+  // those palettes have a "Quick remember" action that fires
+  // `jarvis:open-remember-palette` to reach us programmatically — see the
+  // listener below.
   useEffect(() => {
-    const isJarvis = (pathname || "").startsWith("/jarvis")
     const handler = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return
-      const k = e.key.toLowerCase()
-      if (k !== "k") return
-      // ⌘⇧K opens RememberPalette anywhere (global escape hatch).
-      if (e.shiftKey) {
-        e.preventDefault()
-        setOpen(true)
-        return
-      }
-      // Plain ⌘K only when NOT in /jarvis — avoid conflict with Jarvis cmdk.
-      if (isJarvis) return
+      if (e.key.toLowerCase() !== "k") return
+      if (!e.shiftKey) return // ⌘K alone is owned by the global cmdk now.
       e.preventDefault()
       setOpen(true)
     }

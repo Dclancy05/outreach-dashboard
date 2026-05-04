@@ -18,6 +18,7 @@
  * signed tokens is a Phase 3 polish item.
  */
 import { NextRequest, NextResponse } from "next/server"
+import { createClient } from "@supabase/supabase-js"
 import { getSecret } from "@/lib/secrets"
 
 export const dynamic = "force-dynamic"
@@ -27,6 +28,45 @@ interface CreateBody {
   title?: string
   command?: string
   initial_prompt?: string
+  /** Phase 4 #13 — spawn presets pre-fill these. */
+  color?: string
+  icon?: string
+  nickname?: string
+  cost_cap_usd?: number
+}
+
+/** Dashboard-side enrichment columns the VPS terminal-server doesn't (yet) ship.
+ *  Added on this PR; we read them directly from Postgres and merge into the
+ *  proxied response so the UI sees them on every list refresh. */
+type DashSessionMeta = {
+  id: string
+  color?: string | null
+  icon?: string | null
+  nickname?: string | null
+  lifecycle_state?: string | null
+}
+
+function db() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url || !key) return null
+  return createClient(url, key)
+}
+
+async function fetchDashMeta(ids: string[]): Promise<Map<string, DashSessionMeta>> {
+  const map = new Map<string, DashSessionMeta>()
+  const c = db()
+  if (!c || ids.length === 0) return map
+  try {
+    const { data } = await c
+      .from("terminal_sessions")
+      .select("id, color, icon, nickname, lifecycle_state")
+      .in("id", ids)
+    for (const row of (data || []) as DashSessionMeta[]) map.set(row.id, row)
+  } catch {
+    /* migration not yet applied — leave map empty, UI degrades gracefully */
+  }
+  return map
 }
 
 async function getRunner(): Promise<{ url: string; token: string; wsUrl: string } | { error: string }> {
@@ -54,7 +94,7 @@ export async function GET(): Promise<NextResponse> {
     if (!res.ok) {
       return NextResponse.json({ error: `terminal-server ${res.status}` }, { status: 502 })
     }
-    const body = await res.json() as { sessions?: Array<{ id: string }> }
+    const body = await res.json() as { sessions?: Array<{ id: string }>; capacity?: unknown }
     // Decorate each session with the WS URL. The bearer token rides as a
     // `?token=` query param so Tailscale Funnel's path-prefix proxy preserves
     // it through the WebSocket upgrade (the Sec-WebSocket-Protocol header is
@@ -62,11 +102,19 @@ export async function GET(): Promise<NextResponse> {
     // PIN-authed origin, and the token only authorizes this VPS service —
     // same threat model as the noVNC password we already ship.
     const tokQ = `?token=${encodeURIComponent(r.token)}`
-    const decorated = (body.sessions || []).map((s) => ({
-      ...s,
-      ws_url: `${r.wsUrl}/sessions/${s.id}/stream${tokQ}`,
-    }))
-    return NextResponse.json({ sessions: decorated })
+    const dashMeta = await fetchDashMeta((body.sessions || []).map((s) => s.id))
+    const decorated = (body.sessions || []).map((s) => {
+      const meta: Partial<DashSessionMeta> = dashMeta.get(s.id) ?? {}
+      return {
+        ...s,
+        ws_url: `${r.wsUrl}/sessions/${s.id}/stream${tokQ}`,
+        color: meta.color ?? null,
+        icon: meta.icon ?? null,
+        nickname: meta.nickname ?? null,
+        lifecycle_state: meta.lifecycle_state ?? null,
+      }
+    })
+    return NextResponse.json({ sessions: decorated, capacity: body.capacity })
   } catch (e) {
     return NextResponse.json(
       { error: `terminal-server unreachable: ${(e as Error).message}` },

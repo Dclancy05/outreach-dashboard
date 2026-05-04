@@ -1,49 +1,61 @@
 "use client"
 
 /**
- * The full /agency/terminals page workspace.
+ * The full Terminals workspace — sidebar + activity feed + grid.
+ *
+ * Phase 4 enterprise UX overhaul (2026-05-04) added:
+ *   - Spawn presets (Bug fix / Build feature / Investigate) via SpawnDialog
+ *   - Per-session color, icon, nickname surfaced in the per-pane header
+ *   - 6-state lifecycle dot beside every session name
+ *   - Drag-to-rearrange grid (dnd-kit) with localStorage-saved layouts
+ *   - $ counter strip per pane (per-session + per-day)
+ *   - file:line wiring → routes to /agency/memory?mode=code&file=… in the
+ *     same Command Center
  *
  * Layout:
  *   ┌────────────────────────────────────────────────────────┐
- *   │ Top bar: count, +New, layout selector, Stop all        │
+ *   │ Top bar: count, +New (preset), layout selector,        │
+ *   │          Layouts (save/load), Stop all                 │
  *   ├──────────┬─────────────────────────────────────────────┤
  *   │ Sidebar  │  Terminal grid (1, 4, 9, or 16 panes)       │
- *   │ (320px)  │                                             │
- *   │          │                                             │
+ *   │ (320px)  │  drag the header to rearrange.              │
  *   └──────────┴─────────────────────────────────────────────┘
  *
- * Grid behavior: shows up to N panes from the session list, where N is the
- * current layout (1 / 4 / 9 / 16). Clicking a session card in the sidebar
- * promotes it into the focused slot of the grid. Sessions not currently in
- * the grid are still running — their tmux pane is alive on the VPS, we just
- * unmount the xterm.js instance to keep RAM bounded.
- *
- * Mount-timing safety (BUG-005 fix):
- * `<TerminalPane>` calls `xterm.Terminal#open()` synchronously in its mount
- * effect. xterm reads `clientWidth`/`clientHeight` from the container at that
- * moment to size its renderer; if those are zero (because we're inside a
- * drawer that's still animating from `x:100%` to `0`, or the parent has
- * `display:none`/`hidden`/`opacity:0`), xterm crashes later with
- * `Cannot read properties of undefined (reading 'dimensions')` — every time
- * its Viewport tries to recompute scroll on a never-sized renderer.
- *
- * Mitigation: gate the grid that hosts `<TerminalPane>` behind a
- * `ResizeObserver` watching the grid container. Until we observe a non-zero
- * `contentRect`, we render a tiny placeholder. The pane (and therefore
- * xterm.open) only mounts once the container has real dimensions. After
- * first non-zero observation we keep the panes mounted — `<TerminalPane>`
- * has its own ResizeObserver that handles subsequent resizes via fit().
+ * Mount-timing safety (BUG-005 fix): the grid is gated by a ResizeObserver
+ * watching the grid container. Until non-zero contentRect, we render a
+ * placeholder — protects xterm.open() from a 0×0 mount inside an animating
+ * drawer.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Plus, Loader2, Square, Maximize2, PanelRightClose, PanelRightOpen, TerminalSquare, Zap, Server, KeyRound, AlertTriangle } from "lucide-react"
+import {
+  Plus, Loader2, Square, Maximize2, PanelRightClose, PanelRightOpen,
+  TerminalSquare, Zap, Server, KeyRound, AlertTriangle, GripVertical,
+} from "lucide-react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { toast } from "sonner"
+import {
+  DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors,
+  closestCenter,
+} from "@dnd-kit/core"
+import { SortableContext, useSortable, rectSortingStrategy, arrayMove } from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { SessionList, type SessionRow } from "@/components/terminals/session-list"
 import { ActivityFeed } from "@/components/terminals/activity-feed"
 import { TerminalPane } from "@/components/terminals/terminal-pane"
+import { SpawnDialog } from "@/components/terminals/spawn-dialog"
+import { LayoutsMenu } from "@/components/terminals/layouts-menu"
+import { CostTodayStrip } from "@/components/terminals/cost-today-strip"
+import {
+  type LayoutSize, type SavedLayout,
+  readCurrentLayout, writeCurrentLayout,
+} from "@/components/terminals/layouts-store"
+import {
+  colorClasses, iconFor, deriveLifecycle, LIFECYCLE_META,
+} from "@/components/terminals/terminal-style"
 
 interface CreateResponse {
   id: string
@@ -55,72 +67,50 @@ interface CreateResponse {
   created_at: string
 }
 
-type Layout = 1 | 4 | 9 | 16
-
-const LAYOUTS: { n: Layout; label: string; cols: string }[] = [
+const LAYOUTS: { n: LayoutSize; label: string; cols: string }[] = [
   { n: 1, label: "1 pane", cols: "grid-cols-1" },
   { n: 4, label: "2x2", cols: "grid-cols-2" },
   { n: 9, label: "3x3", cols: "grid-cols-3" },
   { n: 16, label: "4x4", cols: "grid-cols-4" },
 ]
 
-// Per-session connection details we got back from POST /api/terminals.
-// Cached so reopening an existing session doesn't require another create call.
-// Token is now embedded in ws_url as `?token=` — see /api/terminals route.
 interface Connection {
   ws_url: string
 }
 
-export function TerminalsWorkspace() {
+interface Props {
+  /** Phase 4 #5: Cmd+K palette deep-link `?focus=<id>` lands here. */
+  focusOnMount?: string | null
+}
+
+export function TerminalsWorkspace({ focusOnMount }: Props = {}) {
+  const router = useRouter()
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [layout, setLayout] = useState<Layout>(1)
-  const [focusedId, setFocusedId] = useState<string | null>(null)
-  /** Sessions to render right now in the grid. Bounded to `layout`. */
-  const [visibleIds, setVisibleIds] = useState<string[]>([])
-  /** Per-session WS url + token, populated on create. For sessions loaded
-   *  from list-on-mount we hydrate this lazily from a fresh POST… (Phase 2:
-   *  add a GET that returns connection info without creating). */
+  /** Hydrate from localStorage so a refresh keeps the layout the user picked. */
+  const initial = typeof window !== "undefined" ? readCurrentLayout() : null
+  const [layout, setLayout] = useState<LayoutSize>((initial?.size as LayoutSize) || 1)
+  const [focusedId, setFocusedId] = useState<string | null>(focusOnMount || null)
+  const [visibleIds, setVisibleIds] = useState<string[]>(initial?.visibleIds || [])
   const [connections, setConnections] = useState<Record<string, Connection>>({})
-  /** VPS-aware concurrency state. The terminal-server reads /proc/meminfo and
-   *  computes a soft cap; we surface "x of y" + disable + Newterminal when
-   *  full. Falls back to the hard cap if the VPS doesn't return capacity. */
   const [capacity, setCapacity] = useState<{ active: number; hard_max: number; soft_max: number } | null>(null)
-  /** Right rail Activity Feed visibility. Saved to localStorage so it stays
-   *  open across reloads. */
+  const [spawnOpen, setSpawnOpen] = useState(false)
   const [activityOpen, setActivityOpen] = useState<boolean>(() => {
     if (typeof window === "undefined") return true
     return window.localStorage.getItem("terminals.activityOpen") !== "false"
   })
 
-  /**
-   * Grid-container "ready" gate — see BUG-005 doc above.
-   * `gridReady` flips true on the first ResizeObserver tick where the grid
-   * container has non-zero clientWidth and clientHeight. Until then we render
-   * a no-op placeholder instead of `<TerminalPane>` so xterm.open() never
-   * runs against a 0×0 element.
-   */
   const gridContainerRef = useRef<HTMLDivElement | null>(null)
   const [gridReady, setGridReady] = useState(false)
 
   useEffect(() => {
     const el = gridContainerRef.current
     if (!el) return
-
-    // Fast-path: container is already sized (typical for /agency/terminals
-    // and /jarvis/terminals — full-screen mounts), skip waiting.
     if (el.clientWidth > 0 && el.clientHeight > 0) {
       setGridReady(true)
       return
     }
-
-    // Slow-path (drawer / hidden mount): wait until we observe non-zero
-    // dimensions. This is the actual BUG-005 trigger — terminals-drawer
-    // mounts the workspace inside an `AnimatePresence` panel sliding in from
-    // `x:100%`, and on the Memory page the drawer can be mounted before its
-    // panel has any layout box.
     const ro = new ResizeObserver((entries) => {
       const entry = entries[0]
       if (!entry) return
@@ -133,6 +123,11 @@ export function TerminalsWorkspace() {
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  // Persist current layout shape to localStorage so refresh preserves it.
+  useEffect(() => {
+    writeCurrentLayout(layout, visibleIds)
+  }, [layout, visibleIds])
 
   // ─── Data fetch ────────────────────────────────────────────────────
 
@@ -150,12 +145,12 @@ export function TerminalsWorkspace() {
       const list = data.sessions || []
       setSessions(list.map((s) => ({
         id: s.id, title: s.title, branch: s.branch,
-        status: s.status, created_at: s.created_at, last_activity_at: s.last_activity_at,
+        status: s.status, lifecycle_state: s.lifecycle_state,
+        created_at: s.created_at, last_activity_at: s.last_activity_at,
         cost_usd: s.cost_usd, cost_cap_usd: s.cost_cap_usd, paused_reason: s.paused_reason,
+        color: s.color, icon: s.icon, nickname: s.nickname,
       })))
       if (data.capacity) setCapacity(data.capacity)
-      // Hydrate connection details for each existing session so reload-attach
-      // works without a fresh POST.
       setConnections((cur) => {
         const next = { ...cur }
         for (const s of list) {
@@ -181,17 +176,13 @@ export function TerminalsWorkspace() {
 
   // ─── Visible-grid management ──────────────────────────────────────
 
-  // When sessions list updates, ensure visibleIds doesn't reference dead sessions.
   useEffect(() => {
     setVisibleIds((cur) => cur.filter((id) => sessions.some((s) => s.id === id)))
-    // If nothing is focused, focus the most recent session.
     if (!focusedId && sessions.length > 0) {
       setFocusedId(sessions[0].id)
     }
   }, [sessions, focusedId])
 
-  // When layout shrinks, drop trailing visible ids. When it grows, top-up from
-  // the session list (most-recent first).
   useEffect(() => {
     setVisibleIds((cur) => {
       const wanted = layout
@@ -205,22 +196,27 @@ export function TerminalsWorkspace() {
     })
   }, [layout, sessions])
 
-  const focusSession = (id: string) => {
+  const focusSession = useCallback((id: string) => {
     setFocusedId(id)
-    // Promote into visible grid: replace the first slot with this id, swapping
-    // out whatever was there. Keeps the rest of the grid stable so other panes
-    // don't unmount unnecessarily.
     setVisibleIds((cur) => {
       if (cur.includes(id)) return cur
       if (cur.length < layout) return [id, ...cur]
       return [id, ...cur.slice(0, -1)]
     })
-  }
+  }, [layout])
 
-  // ─── Create / stop / rename ────────────────────────────────────────
+  // Honour `focusOnMount` (e.g. ?focus= deep-link from Cmd+K) once the session
+  // shows up in the list.
+  useEffect(() => {
+    if (!focusOnMount) return
+    if (sessions.find((s) => s.id === focusOnMount)) {
+      focusSession(focusOnMount)
+    }
+  }, [focusOnMount, sessions, focusSession])
 
-  const createSession = async () => {
-    setCreating(true)
+  // ─── Create / stop / rename / customise ────────────────────────────
+
+  const createBlankSession = async () => {
     try {
       const res = await fetch("/api/terminals", {
         method: "POST",
@@ -230,7 +226,6 @@ export function TerminalsWorkspace() {
       const body = await res.json()
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`)
       const data = body as CreateResponse
-      // Cache the connection details for this new session.
       setConnections((c) => ({ ...c, [data.id]: { ws_url: data.ws_url } }))
       toast.success("Terminal started", { description: data.title })
       await refresh()
@@ -239,8 +234,6 @@ export function TerminalsWorkspace() {
       toast.error("Couldn't start terminal", {
         description: e instanceof Error ? e.message : String(e),
       })
-    } finally {
-      setCreating(false)
     }
   }
 
@@ -252,7 +245,6 @@ export function TerminalsWorkspace() {
         throw new Error(body.error || `HTTP ${res.status}`)
       }
       toast.success("Terminal stopped")
-      // Optimistic: drop locally before refetch.
       setSessions((s) => s.filter((x) => x.id !== id))
       setVisibleIds((v) => v.filter((x) => x !== id))
       if (focusedId === id) setFocusedId(null)
@@ -279,6 +271,11 @@ export function TerminalsWorkspace() {
     }
   }
 
+  /** Optimistic patch — used by the customise dialog. */
+  const applyCustomization = (id: string, patch: { color?: string | null; icon?: string | null; nickname?: string | null }) => {
+    setSessions((s) => s.map((x) => (x.id === id ? { ...x, ...patch } : x)))
+  }
+
   const stopAll = async () => {
     if (sessions.length === 0) return
     if (!window.confirm(`Stop all ${sessions.length} terminals? Branches are preserved.`)) return
@@ -295,10 +292,36 @@ export function TerminalsWorkspace() {
         body: JSON.stringify({ cols, rows }),
       })
     } catch {
-      // Resize failures aren't user-visible — tmux keeps working at the old
-      // size; just slightly off-screen rendering.
+      /* resize failures aren't user-visible */
     }
   }, [])
+
+  // ─── file:line wiring (Phase 4 #12) ────────────────────────────────
+
+  const openFile = useCallback((path: string, line?: number, _col?: number) => {
+    // Route to the Code mode of the same Command Center. The Code mode reads
+    // ?file= and renders the corresponding source. Line/col aren't surfaced
+    // (yet) — when the Code viewer grows a goto-line API we'll add #L<line>.
+    const params = new URLSearchParams()
+    params.set("mode", "code")
+    params.set("file", path)
+    if (line) params.set("line", String(line))
+    router.push(`/agency/memory?${params.toString()}`)
+  }, [router])
+
+  // ─── Drag to rearrange ─────────────────────────────────────────────
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+  const onDragEnd = (e: DragEndEvent) => {
+    const { active, over } = e
+    if (!over || active.id === over.id) return
+    setVisibleIds((cur) => {
+      const oldIndex = cur.indexOf(String(active.id))
+      const newIndex = cur.indexOf(String(over.id))
+      if (oldIndex < 0 || newIndex < 0) return cur
+      return arrayMove(cur, oldIndex, newIndex)
+    })
+  }
 
   // ─── Render ───────────────────────────────────────────────────────
 
@@ -309,6 +332,18 @@ export function TerminalsWorkspace() {
 
   const currentLayout = LAYOUTS.find((l) => l.n === layout) || LAYOUTS[0]
 
+  const onLoadLayout = (l: SavedLayout) => {
+    setLayout(l.size)
+    // Filter out ids that no longer exist; pad with most-recent sessions.
+    const live = l.visibleIds.filter((id) => sessions.some((s) => s.id === id))
+    const fill = sessions
+      .filter((s) => !live.includes(s.id))
+      .map((s) => s.id)
+      .slice(0, l.size - live.length)
+    setVisibleIds([...live, ...fill])
+    toast.success("Layout loaded", { description: l.name })
+  }
+
   return (
     <div className="flex flex-col h-full bg-zinc-950">
       {/* Top bar */}
@@ -316,7 +351,12 @@ export function TerminalsWorkspace() {
         <div className="flex items-center gap-2">
           <TerminalSquare className="w-5 h-5 text-cyan-400" />
           <h1 className="text-lg font-semibold text-zinc-100">Terminals</h1>
-          <span className="text-xs text-zinc-500 hidden sm:inline">— parallel claudes that survive your laptop close</span>
+          <span className="text-xs text-zinc-500 hidden sm:inline">
+            — parallel claudes that survive your laptop close
+          </span>
+          <span className="hidden md:inline text-[10px] text-zinc-500 ml-2">
+            ⌘K to spawn / focus
+          </span>
         </div>
         <div className="flex items-center gap-1">
           {/* Layout selector */}
@@ -342,11 +382,11 @@ export function TerminalsWorkspace() {
               {capacity.active} / {capacity.soft_max}
             </span>
           )}
+          <LayoutsMenu size={layout} visibleIds={visibleIds} onLoad={onLoadLayout} />
           <Button
             size="sm"
-            onClick={createSession}
+            onClick={() => setSpawnOpen(true)}
             disabled={
-              creating ||
               (capacity ? sessions.length >= capacity.soft_max : sessions.length >= 8) ||
               !!error
             }
@@ -354,14 +394,10 @@ export function TerminalsWorkspace() {
             title={
               capacity && sessions.length >= capacity.soft_max
                 ? `VPS at capacity (${capacity.active}/${capacity.soft_max}) — stop a session first`
-                : "Spawn a new terminal"
+                : "Spawn a new terminal (preset)"
             }
           >
-            {creating ? (
-              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-            ) : (
-              <Plus className="w-3.5 h-3.5 mr-1.5" />
-            )}
+            <Plus className="w-3.5 h-3.5 mr-1.5" />
             New terminal
           </Button>
           <Button
@@ -404,6 +440,7 @@ export function TerminalsWorkspace() {
             onFocus={focusSession}
             onRename={renameSession}
             onStop={stopSession}
+            onCustomized={applyCustomization}
           />
         </div>
 
@@ -411,7 +448,7 @@ export function TerminalsWorkspace() {
         {activityOpen && (
           <div className="hidden lg:flex w-[300px] xl:w-[340px] shrink-0 border-l border-zinc-800/60 overflow-hidden flex-col order-last">
             <ActivityFeed
-              sessionTitles={Object.fromEntries(sessions.map((s) => [s.id, s.title]))}
+              sessionTitles={Object.fromEntries(sessions.map((s) => [s.id, s.nickname?.trim() || s.title]))}
             />
           </div>
         )}
@@ -448,12 +485,11 @@ export function TerminalsWorkspace() {
                     <FeatureChip icon={Server} label="Isolated git worktrees" />
                   </div>
                   <Button
-                    onClick={createSession}
-                    disabled={creating}
+                    onClick={() => setSpawnOpen(true)}
                     size="sm"
                     className="bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-100 border border-cyan-500/30"
                   >
-                    {creating ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Plus className="w-3.5 h-3.5 mr-1.5" />}
+                    <Plus className="w-3.5 h-3.5 mr-1.5" />
                     Start your first terminal
                   </Button>
                 </>
@@ -462,67 +498,152 @@ export function TerminalsWorkspace() {
           )}
 
           {!error && visibleSessions.length > 0 && (
-            <div className={cn("grid gap-2 h-full", currentLayout.cols)}>
-              {visibleSessions.map((s) => {
-                const conn = connections[s.id]
-                return (
-                  <Card
-                    key={s.id}
-                    className={cn(
-                      "overflow-hidden p-0 flex flex-col bg-zinc-950 border-zinc-800/80",
-                      focusedId === s.id && "ring-1 ring-cyan-500/40",
-                    )}
-                    onClick={() => setFocusedId(s.id)}
-                  >
-                    <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-zinc-800/60 text-xs shrink-0 bg-zinc-900/60">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
-                        <span className="font-medium text-zinc-200 truncate">{s.title}</span>
-                        {s.branch && (
-                          <span className="text-[10px] text-zinc-500 font-mono truncate hidden sm:inline">
-                            {s.branch}
-                          </span>
-                        )}
-                      </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); stopSession(s.id) }}
-                        className="text-zinc-500 hover:text-red-400 shrink-0"
-                        title="Stop"
-                      >
-                        ×
-                      </button>
-                    </div>
-                    <div className="flex-1 min-h-0 relative">
-                      {conn ? (
-                        gridReady ? (
-                          <TerminalPane
-                            sessionId={s.id}
-                            wsUrl={conn.ws_url}
-                            onResize={(cols, rows) => handleResize(s.id, cols, rows)}
-                          />
-                        ) : (
-                          // BUG-005: container hasn't laid out yet. Show a
-                          // skeleton instead of mounting xterm into a 0×0 box.
-                          <div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-xs">
-                            <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                            Sizing terminal…
-                          </div>
-                        )
-                      ) : (
-                        <div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-xs">
-                          <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                          Loading connection…
-                        </div>
-                      )}
-                    </div>
-                  </Card>
-                )
-              })}
-            </div>
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+              <SortableContext items={visibleIds} strategy={rectSortingStrategy}>
+                <div className={cn("grid gap-2 h-full", currentLayout.cols)}>
+                  {visibleSessions.map((s) => {
+                    const conn = connections[s.id]
+                    return (
+                      <SortablePane
+                        key={s.id}
+                        session={s}
+                        focused={focusedId === s.id}
+                        connection={conn}
+                        gridReady={gridReady}
+                        onFocus={() => setFocusedId(s.id)}
+                        onStop={() => stopSession(s.id)}
+                        onResize={(cols, rows) => handleResize(s.id, cols, rows)}
+                        onOpenFile={openFile}
+                      />
+                    )
+                  })}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
         </div>
       </div>
+
+      <SpawnDialog
+        open={spawnOpen}
+        onOpenChange={setSpawnOpen}
+        onSpawned={async (data) => {
+          setConnections((c) => ({ ...c, [data.id]: { ws_url: data.ws_url } }))
+          await refresh()
+          focusSession(data.id)
+        }}
+      />
+
+      {/* Bare blank-spawn fallback for keyboard users — Cmd+K → "New terminal"
+          calls /api/terminals directly (no preset). Hidden but keeps the
+          imperative entrypoint alive for downstream UIs. */}
+      <button hidden onClick={createBlankSession} aria-hidden />
     </div>
+  )
+}
+
+/* ─── A single draggable pane ────────────────────────────────────────────── */
+
+interface SortablePaneProps {
+  session: SessionRow
+  focused: boolean
+  connection?: Connection
+  gridReady: boolean
+  onFocus: () => void
+  onStop: () => void
+  onResize: (cols: number, rows: number) => void
+  onOpenFile: (path: string, line?: number, col?: number) => void
+}
+
+function SortablePane({
+  session: s, focused, connection: conn, gridReady,
+  onFocus, onStop, onResize, onOpenFile,
+}: SortablePaneProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: s.id })
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  }
+  const colors = colorClasses(s.color)
+  const Icon = iconFor(s.icon)
+  const lifecycle = deriveLifecycle(s)
+  const lc = LIFECYCLE_META[lifecycle]
+  const displayName = s.nickname?.trim() || s.title
+  const sessionCost = Number(s.cost_usd ?? 0)
+  const sessionCap = Number(s.cost_cap_usd ?? 5)
+
+  return (
+    <Card
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "overflow-hidden p-0 flex flex-col bg-zinc-950 border-zinc-800/80",
+        focused && "ring-1 " + colors.ring,
+      )}
+      onClick={onFocus}
+    >
+      <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-zinc-800/60 text-xs shrink-0 bg-zinc-900/60">
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Drag handle — only this triggers drag, so clicks elsewhere on the
+              header still focus the pane. */}
+          <button
+            {...attributes}
+            {...listeners}
+            className="text-zinc-600 hover:text-zinc-300 cursor-grab active:cursor-grabbing shrink-0 -ml-1 p-0.5"
+            title="Drag to rearrange"
+            aria-label="Drag handle"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <GripVertical className="w-3.5 h-3.5" />
+          </button>
+          <span
+            className={cn("h-1.5 w-1.5 rounded-full shrink-0", lc.dot, lc.pulse && "animate-pulse")}
+            title={lc.label}
+          />
+          <Icon className={cn("w-3.5 h-3.5 shrink-0", colors.text)} />
+          <span className="font-medium text-zinc-200 truncate">{displayName}</span>
+          {s.branch && (
+            <span className="text-[10px] text-zinc-500 font-mono truncate hidden sm:inline">
+              {s.branch}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <CostTodayStrip sessionCost={sessionCost} sessionCap={sessionCap} />
+          <button
+            onClick={(e) => { e.stopPropagation(); onStop() }}
+            className="text-zinc-500 hover:text-red-400 shrink-0"
+            title="Stop"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+      <div className="flex-1 min-h-0 relative">
+        {conn ? (
+          gridReady ? (
+            <TerminalPane
+              sessionId={s.id}
+              wsUrl={conn.ws_url}
+              onResize={onResize}
+              onOpenFile={onOpenFile}
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-xs">
+              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              Sizing terminal…
+            </div>
+          )
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-xs">
+            <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+            Loading connection…
+          </div>
+        )}
+      </div>
+    </Card>
   )
 }
 
@@ -536,9 +657,6 @@ function FeatureChip({ icon: Icon, label }: { icon: typeof TerminalSquare; label
 }
 
 function SetupOrErrorCard({ error }: { error: string }) {
-  // Two distinct error shapes from /api/terminals:
-  //   1. 503 — TERMINAL_RUNNER_URL/TOKEN not configured. First-time setup.
-  //   2. 502 — service unreachable. VPS down or Funnel path missing.
   const needsSetup = /not configured|TERMINAL_RUNNER/.test(error)
   if (needsSetup) {
     return (
@@ -560,7 +678,7 @@ function SetupOrErrorCard({ error }: { error: string }) {
               Deploy <code className="px-1.5 py-0.5 rounded bg-zinc-800/80 text-cyan-300 text-xs">terminal-server</code> on srv1197943 — full walkthrough at <code className="text-xs text-zinc-400">DEPLOY_VPS_TERMINAL_SERVER.md</code> in the repo
             </SetupStep>
             <SetupStep n={2}>
-              Apply the 3 SQL migrations under <code className="text-xs text-zinc-400">supabase/migrations/20260430_terminal_sessions*.sql</code>
+              Apply the SQL migrations under <code className="text-xs text-zinc-400">supabase/migrations/20260430_terminal_sessions*.sql</code> + the <code className="text-xs text-zinc-400">20260504_terminal_*.sql</code> set
             </SetupStep>
             <SetupStep n={3}>
               Add <code className="px-1.5 py-0.5 rounded bg-zinc-800/80 text-cyan-300 text-xs">TERMINAL_RUNNER_URL</code> + <code className="px-1.5 py-0.5 rounded bg-zinc-800/80 text-cyan-300 text-xs">TERMINAL_RUNNER_TOKEN</code> in the API Keys tab
