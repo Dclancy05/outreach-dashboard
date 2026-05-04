@@ -342,7 +342,20 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
       setError(null)
       lastServerDataAtRef.current = Date.now()
 
-      const ws = new WebSocket(wsUrl)
+      // Append the current viewport size to the WS URL so the backend can
+      // launch its tmux attach client (and therefore Claude Code's first
+      // SIGWINCH) at the right size from the start. Without this, the PTY
+      // defaults to 120×30, paints a panel-border cascade into xterm at
+      // narrower widths, and the dots stick around even after our /resize
+      // POST corrects the size — because Claude Code's incremental redraws
+      // never \e[2J the cells outside its UI region.
+      const term = xtermRef.current
+      const cols = term && term.cols > 0 ? term.cols : null
+      const rows = term && term.rows > 0 ? term.rows : null
+      const sized = cols && rows
+        ? `${wsUrl}${wsUrl.includes("?") ? "&" : "?"}cols=${cols}&rows=${rows}`
+        : wsUrl
+      const ws = new WebSocket(sized)
       ws.binaryType = "arraybuffer"
       wsRef.current = ws
 

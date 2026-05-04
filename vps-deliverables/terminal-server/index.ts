@@ -651,7 +651,16 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy()
     return
   }
-  wss.handleUpgrade(req, socket, head, (ws) => attachToSession(ws, s))
+  // Optional cols/rows from the query string. The dashboard appends these so
+  // pty.spawn (and therefore the tmux client + Claude Code's first SIGWINCH)
+  // happen at the user's actual viewport size — not the default 120×30 that
+  // would otherwise paint a panel-border cascade into xterm's buffer for the
+  // first ~1.5s before our follow-up /resize POST takes effect.
+  const qCols = parseInt(url.searchParams.get("cols") || "", 10)
+  const qRows = parseInt(url.searchParams.get("rows") || "", 10)
+  const initialCols = Number.isFinite(qCols) && qCols >= 20 && qCols <= 500 ? qCols : 120
+  const initialRows = Number.isFinite(qRows) && qRows >= 5  && qRows <= 200 ? qRows : 30
+  wss.handleUpgrade(req, socket, head, (ws) => attachToSession(ws, s, initialCols, initialRows))
 })
 
 // Heartbeat tuning. We send a WS-protocol ping every PING_INTERVAL_MS;
@@ -663,7 +672,7 @@ server.on("upgrade", (req, socket, head) => {
 const PING_INTERVAL_MS = 25_000
 const HEARTBEAT_TIMEOUT_MS = 60_000
 
-function attachToSession(ws: WebSocket, s: Session): void {
+function attachToSession(ws: WebSocket, s: Session, initialCols = 120, initialRows = 30): void {
   s.lastActivityAt = Date.now()
   void dbHeartbeat(s.id)
 
@@ -678,10 +687,14 @@ function attachToSession(ws: WebSocket, s: Session): void {
     for (const [k, v] of Object.entries(process.env)) {
       if (typeof v === "string") env[k] = v
     }
+    // Spawn at the dashboard-supplied cols/rows (default 120×30 only if the
+    // dashboard didn't tell us). This makes tmux's first SIGWINCH match the
+    // user's actual viewport, so Claude Code never draws a stale 120-col
+    // panel that would later wrap into xterm's narrower buffer as dots.
     bridge = pty.spawn("tmux", ["-f", TMUX_CONF_PATH, "attach-session", "-t", s.tmuxName], {
       name: "xterm-256color",
-      cols: 120,
-      rows: 30,
+      cols: initialCols,
+      rows: initialRows,
       cwd: s.worktreePath,
       env,
     })
