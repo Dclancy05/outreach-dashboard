@@ -332,36 +332,37 @@ function MemoryPageInner() {
   }
 
   // ── Keyboard shortcuts: g k / g c / g v / g a / g t ───────────────────
+  // Uses a window-level state ref instead of closure-captured `let` so
+  // arming survives across React re-renders, StrictMode double-mount, and
+  // any closure-detachment quirks.
+  const handleFilterRef = React.useRef(handleFilter)
+  React.useEffect(() => { handleFilterRef.current = handleFilter })
   React.useEffect(() => {
-    let armed = false
-    let armedTimer: ReturnType<typeof setTimeout> | null = null
-
+    type WinWithArmed = Window & { __memShortcutArmed?: { v: boolean; timer: ReturnType<typeof setTimeout> | null } }
+    const w = window as WinWithArmed
+    if (!w.__memShortcutArmed) w.__memShortcutArmed = { v: false, timer: null }
+    const state = w.__memShortcutArmed
     function disarm() {
-      armed = false
-      if (armedTimer) {
-        clearTimeout(armedTimer)
-        armedTimer = null
+      state.v = false
+      if (state.timer) {
+        clearTimeout(state.timer)
+        state.timer = null
       }
     }
-
     function onKeyDown(e: KeyboardEvent) {
-      // Skip when typing in an input/textarea or holding modifiers.
       if (e.metaKey || e.ctrlKey || e.altKey) return
       const t = e.target
       if (t instanceof HTMLElement) {
         const tag = t.tagName
         if (tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable) return
       }
-
-      if (!armed) {
+      if (!state.v) {
         if (e.key === "g") {
-          armed = true
-          armedTimer = setTimeout(disarm, 1500)
-          return
+          state.v = true
+          state.timer = setTimeout(disarm, 1500)
         }
         return
       }
-
       // 2nd key of the `g <x>` sequence.
       let next: FilterId | null = null
       if (e.key === "k") next = "knowledge"
@@ -370,20 +371,18 @@ function MemoryPageInner() {
       else if (e.key === "a") next = "agents"
       else if (e.key === "t") next = "terminals"
       else if (e.key === "h") next = "all"
-
       if (next) {
         e.preventDefault()
-        handleFilter(next)
+        handleFilterRef.current(next)
       }
       disarm()
     }
-
     window.addEventListener("keydown", onKeyDown)
     return () => {
       window.removeEventListener("keydown", onKeyDown)
-      disarm()
+      // Don't disarm on cleanup — another instance may share the global state
+      // (StrictMode mounts twice; we want the surviving instance to keep arming).
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ── Sidebar (varies by mode) ─────────────────────────────────────────
