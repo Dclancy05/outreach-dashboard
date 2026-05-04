@@ -103,7 +103,12 @@ export async function POST(request: Request) {
       secure: imap.secure,
       auth: { user: account.email, pass: account.email_password },
       logger: false,
-    })
+      // Hard cap so a slow/unreachable IMAP server can't keep the Vercel
+      // function alive past its budget. 10 s is generous — most providers
+      // respond within 1-2 s. After this, ImapFlow throws "Connection timed
+      // out" which the catch below surfaces to the user.
+      socketTimeout: 10_000,
+    } as any)
 
     try {
       await client.connect()

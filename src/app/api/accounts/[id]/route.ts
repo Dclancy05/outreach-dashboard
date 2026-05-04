@@ -22,11 +22,30 @@ const ALLOWED_PATCH_FIELDS = new Set([
   "warmup_paused",
 ])
 
+// Columns that contain credentials or session material. Stripped from the
+// default GET response so a casual XSS / leaky log can't exfiltrate them.
+// Caller can opt back in with `?include_secrets=1` (route is already behind
+// admin middleware so the opt-in is a soft gate, not a security boundary).
+// Mirrors the pattern in /api/accounts/all/route.ts:202-206.
+const SECRET_FIELDS = [
+  "password",
+  "twofa_secret",
+  "session_cookie",
+  "email_password",
+  "api_key_encrypted",
+] as const
+
+function stripSecrets<T extends Record<string, unknown>>(account: T): T {
+  const out: Record<string, unknown> = { ...account }
+  for (const k of SECRET_FIELDS) delete out[k]
+  return out as T
+}
+
 // GET /api/accounts/:id — fetch a single account with proxy + warmup joined.
 // Used by the account detail drawer. Mirrors the shape /api/accounts/detail
 // returns but is keyed by URL param so the front-end can use REST-style URLs.
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   const account_id = params.id
@@ -62,8 +81,11 @@ export async function GET(
       : Promise.resolve({ data: null, error: null }),
   ])
 
+  const includeSecrets = req.nextUrl.searchParams.get("include_secrets") === "1"
+  const safeAccount = includeSecrets ? account : stripSecrets(account as Record<string, unknown>)
+
   return NextResponse.json({
-    account,
+    account: safeAccount,
     proxy: (proxyRes as any).data || null,
     warmup: (warmupRes as any).data || null,
   })

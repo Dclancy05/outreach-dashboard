@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { rateLimitDb, retryAfterHeaders, ipFromRequest } from "@/lib/rate-limit"
+import { extractAdminId, withAudit } from "@/lib/audit"
 
 export const dynamic = "force-dynamic"
 
@@ -7,6 +9,14 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 )
+
+// Cap at 500 rows per import to keep Supabase insert latency sane and to
+// stop a malicious paste of "everyone in the world" from hammering the DB.
+const MAX_IMPORT_ROWS = 500
+// 2 imports per hour per admin — generous for legit batch onboarding,
+// blocks any runaway script that loops through usernames.
+const IMPORT_LIMIT = 2
+const IMPORT_WINDOW_MS = 60 * 60 * 1000
 
 interface ParsedAccount {
   platform?: string
@@ -75,7 +85,8 @@ function parsePastedText(text: string, defaultPlatform: string): ParsedAccount[]
   return results
 }
 
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
+  const adminId = extractAdminId(request.headers.get("cookie")) || `ip:${ipFromRequest(request)}`
   try {
     const body = await request.json()
     const mode = body.mode as "preview" | "commit"
@@ -85,8 +96,27 @@ export async function POST(request: Request) {
 
     if (!text) return NextResponse.json({ error: "Missing text" }, { status: 400 })
 
+    // Rate-limit only the commit branch — preview is read-only and gets
+    // re-run as the user iterates on their paste, so 429ing it would be
+    // hostile UX.
+    if (mode === "commit") {
+      const limit = await rateLimitDb(`bulk-import:${adminId}`, IMPORT_LIMIT, IMPORT_WINDOW_MS)
+      if (!limit.ok) {
+        return NextResponse.json(
+          { error: "Bulk import is rate-limited to 2 per hour. Try again later.", retryAt: new Date(limit.resetAt).toISOString() },
+          { status: 429, headers: retryAfterHeaders(limit.resetAt) }
+        )
+      }
+    }
+
     const parsed = parsePastedText(text, platform)
     if (!parsed.length) return NextResponse.json({ error: "No accounts parsed" }, { status: 400 })
+    if (parsed.length > MAX_IMPORT_ROWS) {
+      return NextResponse.json(
+        { error: `Too many rows (${parsed.length}). Max ${MAX_IMPORT_ROWS} per import — split into multiple batches.` },
+        { status: 413 }
+      )
+    }
 
     const { data: existing } = await supabase.from("accounts").select("account_id, username, platform")
     const existingMap = new Map<string, string>()
@@ -148,3 +178,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: e.message || "Failed" }, { status: 500 })
   }
 }
+
+export const POST = withAudit("POST /api/accounts/bulk-import", postHandler)

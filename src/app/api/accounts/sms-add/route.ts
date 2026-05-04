@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { withAudit } from "@/lib/audit"
 
 export const dynamic = "force-dynamic"
 
@@ -19,7 +20,7 @@ const VERIFY_TIMEOUT_MS = 7000
 // Mirrors email-add but for SMS via GoHighLevel / LeadConnector. The "from
 // number" is the Twilio (or GHL-provisioned) number that will appear as the
 // sender. Like email, SMS has no warmup ramp — GHL handles delivery.
-export async function POST(req: NextRequest) {
+async function postHandler(req: NextRequest) {
   let body: any = {}
   try {
     body = await req.json()
@@ -159,6 +160,8 @@ export async function POST(req: NextRequest) {
     location_name: verify.location_name,
   })
 }
+
+export const POST = withAudit("POST /api/accounts/sms-add", postHandler as any)
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

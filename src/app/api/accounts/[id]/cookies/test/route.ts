@@ -112,6 +112,7 @@ export async function POST(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ account_id, platform }),
           cache: "no-store",
+          signal: AbortSignal.timeout(5000),
         }
       )
       if (r.ok) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { withAudit } from "@/lib/audit"
 
 export const dynamic = "force-dynamic"
 
@@ -21,7 +22,7 @@ const VERIFY_TIMEOUT_MS = 7000
 // `accounts.api_key_encrypted` if that column exists, otherwise in
 // `system_settings` under the key `email_api_key_${account_id}` so the
 // campaign worker can fetch it later without us having to know the column.
-export async function POST(req: NextRequest) {
+async function postHandler(req: NextRequest) {
   let body: any = {}
   try {
     body = await req.json()
@@ -162,6 +163,8 @@ export async function POST(req: NextRequest) {
     accounts_count: verify.accounts_count,
   })
 }
+
+export const POST = withAudit("POST /api/accounts/email-add", postHandler as any)
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
