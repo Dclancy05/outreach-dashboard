@@ -35,6 +35,7 @@ import { Terminal, type IDisposable } from "xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { SearchAddon } from "@xterm/addon-search"
 import { WebLinksAddon } from "@xterm/addon-web-links"
+import * as Sentry from "@sentry/nextjs"
 import "xterm/css/xterm.css"
 
 type State = "idle" | "connecting" | "connected" | "disconnected" | "error"
@@ -287,6 +288,12 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
         RECONNECT_CAP_MS,
         500 * 2 ** Math.min(reconnectAttemptRef.current, 6),
       )
+      Sentry.addBreadcrumb({
+        category: "terminal-ws",
+        level: "info",
+        message: "reconnect scheduled",
+        data: { sessionId, delayMs: delay, attempt: reconnectAttemptRef.current },
+      })
       clearReconnectTimer()
       reconnectTimerRef.current = setTimeout(connect, delay)
     }
@@ -310,6 +317,12 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
           try { ws.close(1000, "cancelled") } catch { /* */ }
           return
         }
+        Sentry.addBreadcrumb({
+          category: "terminal-ws",
+          level: "info",
+          message: "ws open",
+          data: { sessionId, attempt: reconnectAttemptRef.current },
+        })
         reconnectAttemptRef.current = 0
         setStateBoth("connected")
         // Fit after the server's initial scrollback replay so a 0-row layout
@@ -340,6 +353,12 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
 
       ws.onclose = (ev) => {
         if (cancelled) return
+        Sentry.addBreadcrumb({
+          category: "terminal-ws",
+          level: "info",
+          message: "ws close",
+          data: { sessionId, code: ev.code, reason: ev.reason || null },
+        })
         wsRef.current = null
         if (ev.code === 1000) {
           // Clean close from server (pty exited, etc.). Try to reconnect —
@@ -370,6 +389,12 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
       if (stateRef.current !== "connected") return
       const silentFor = Date.now() - lastServerDataAtRef.current
       if (silentFor > SERVER_SILENCE_TIMEOUT_MS) {
+        Sentry.addBreadcrumb({
+          category: "terminal-ws",
+          level: "warning",
+          message: "watchdog force-close",
+          data: { sessionId, silentForMs: silentFor },
+        })
         const ws = wsRef.current
         if (ws) {
           try { ws.close(4000, "watchdog: server silence") } catch { /* */ }
