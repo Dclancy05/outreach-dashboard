@@ -28,6 +28,7 @@ import AccountDetailDialog from "@/components/account-detail-dialog"
 import BulkImportDialog from "@/components/bulk-import-dialog"
 import { CookieHealthBadge } from "@/components/cookie-health-badge"
 import { HelpButton } from "@/components/help-button"
+import { SystemHealthStrip } from "@/components/accounts/system-health-strip"
 
 // ── Animation variants ──────────────────────────────────────────────
 
@@ -108,6 +109,16 @@ function formatProbeAge(probedAt: string | null | undefined): string | null {
   if (h < 24) return `${h}h ago`
   const d = Math.floor(h / 24)
   return `${d}d ago`
+}
+
+// "live · 5s ago" / "live · 1m ago" — header pill that confirms the page is
+// reactively pulling fresh data. Different from formatProbeAge so the user
+// can tell at a glance: page-tick vs Chrome-side cookie verification.
+function formatPollAgo(at: number): string {
+  const ms = Date.now() - at
+  if (ms < 5_000) return "just now"
+  if (ms < 60_000) return `${Math.floor(ms / 1000)}s ago`
+  return `${Math.floor(ms / 60_000)}m ago`
 }
 
 // Human label for a badge/button — "needs_signin" looks ugly, "Needs Sign-In" doesn't.
@@ -462,22 +473,106 @@ export default function AccountsPage() {
   const [proxyTestResults, setProxyTestResults] = useState<Record<string, { ok: boolean; ip?: string; country?: string; city?: string; latency_ms?: number; error?: string }>>({})
   const router = useRouter()
 
-  const fetchAll = useCallback(async () => {
-    setLoading(true)
+  // PR #100 — live-updates: track when the last poll completed + which
+  // accounts just flipped status so the row can flash.
+  const [lastPollAt, setLastPollAt] = useState<number | null>(null)
+  const [polling, setPolling] = useState(false)
+  const [recentlyFlipped, setRecentlyFlipped] = useState<Set<string>>(new Set())
+  const accountsRef = useRef<Account[]>([])
+  useEffect(() => { accountsRef.current = accounts }, [accounts])
+
+  // Internal worker: hits all 3 endpoints in parallel. `silent=true` means
+  // skip the top-level skeleton (used by the 30s polling loop and by the
+  // post-action refetches) so the page doesn't flash on every tick.
+  const fetchAllImpl = useCallback(async (silent: boolean) => {
+    if (!silent) setLoading(true)
+    else setPolling(true)
     try {
       const [proxyRes, accountRes, warmupRes] = await Promise.all([
         fetch("/api/proxy-groups").then(r => r.json()),
         fetch("/api/dashboard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get_accounts", limit: 1000 }) }).then(r => r.json()),
         fetch("/api/warmup").then(r => r.json()),
       ])
+      const nextAccounts: Account[] = accountRes.data || []
+
+      // Detect status flips since the last poll. The user gets visual
+      // confirmation that "Active → Needs Sign-In" actually happened
+      // without staring at the page waiting for a refresh.
+      if (silent && accountsRef.current.length > 0) {
+        const prevByCol = new Map(accountsRef.current.map(a => [a.account_id, effectiveStatus(a)]))
+        const flips = new Set<string>()
+        for (const a of nextAccounts) {
+          const prev = prevByCol.get(a.account_id)
+          const now = effectiveStatus(a)
+          if (prev && prev !== now) flips.add(a.account_id)
+        }
+        if (flips.size > 0) {
+          setRecentlyFlipped(flips)
+          // Auto-clear the flash after 4s so the indicator doesn't pile up.
+          setTimeout(() => setRecentlyFlipped(prev => {
+            const next = new Set(prev)
+            for (const id of flips) next.delete(id)
+            return next
+          }), 4000)
+        }
+      }
+
       setProxies(proxyRes.data || [])
-      setAccounts(accountRes.data || [])
+      setAccounts(nextAccounts)
       setWarmupSeqs(warmupRes.data || [])
-    } catch (e) { toast.error("Failed to load data") }
-    setLoading(false)
+      setLastPollAt(Date.now())
+    } catch (e) {
+      if (!silent) toast.error("Failed to load data")
+      // Silent failures don't toast — the user is browsing, not asking for
+      // a refresh. The pollAt timestamp staying stale is its own indicator.
+    } finally {
+      if (!silent) setLoading(false)
+      else setPolling(false)
+    }
   }, [])
 
+  const fetchAll = useCallback(() => fetchAllImpl(false), [fetchAllImpl])
+  const silentFetchAll = useCallback(() => fetchAllImpl(true), [fetchAllImpl])
+
   useEffect(() => { fetchAll() }, [fetchAll])
+
+  // PR #100 — 30 s background poll so the page reflects changes from cron
+  // runs (live-probe overlay, cookies-health-check, etc.) without the user
+  // hammering Refresh. Skip when the tab is hidden — wakes back up via the
+  // visibility listener below so we don't burn DB reads in background tabs.
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null
+    function start() {
+      if (timer) return
+      timer = setInterval(() => {
+        if (typeof document !== "undefined" && document.visibilityState === "visible") {
+          silentFetchAll()
+        }
+      }, 30_000)
+    }
+    function stop() {
+      if (timer) { clearInterval(timer); timer = null }
+    }
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        // Coming back to the tab — refresh immediately, don't wait 30s.
+        silentFetchAll()
+        start()
+      } else {
+        stop()
+      }
+    }
+    start()
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange)
+    }
+    return () => {
+      stop()
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange)
+      }
+    }
+  }, [silentFetchAll])
 
   // Lightweight refetch that doesn't toggle the top-level spinner — used when
   // the login modal reports back so Dylan sees the badge flip in-place
@@ -1065,6 +1160,20 @@ export default function AccountsPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* PR #100 — "Updating Xs ago" pill: tells the user the page is
+                live and when the last poll ran. Spinner appears only when a
+                fresh poll is in flight. */}
+            {lastPollAt && (
+              <div
+                className="hidden md:flex items-center gap-1.5 text-[10px] text-muted-foreground/80 px-2 py-1 rounded-md border border-border/30 bg-muted/20"
+                title={`Last live update: ${new Date(lastPollAt).toLocaleTimeString()}`}
+              >
+                <span className={cn("h-1.5 w-1.5 rounded-full", polling ? "bg-emerald-400 animate-pulse" : "bg-emerald-400/60")} />
+                <span className="tabular-nums">
+                  {polling ? "updating…" : `live · ${formatPollAgo(lastPollAt)}`}
+                </span>
+              </div>
+            )}
             <button
               onClick={() => setShowStatusExplainer(true)}
               title="What does Active vs Needs Sign-In actually mean?"
@@ -1081,6 +1190,12 @@ export default function AccountsPage() {
           </div>
         </div>
       </motion.div>
+
+      {/* PR #100 — system health strip. Updates with the same 30s tick as
+          the accounts list (counts derive from the page state) plus its own
+          60s VPS-health probe. Single point of truth for "is everything
+          working" without making the user hunt across pages. */}
+      <SystemHealthStrip accounts={accounts} proxyCount={proxies.length} />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="flex gap-1 p-1 rounded-xl bg-muted/30 backdrop-blur-sm w-fit">
@@ -1274,8 +1389,10 @@ export default function AccountsPage() {
                               // Flash ring — briefly highlights a row whose
                               // login just flipped to Connected in this session.
                               // Driven by `handleLoginComplete` in the page-
-                              // level state; auto-clears after ~1.6s.
-                              const justFlipped = flipFlash.has(a.account_id)
+                              // level state; auto-clears after ~1.6s. PR #100
+                              // also fires the flash when the 30s poll
+                              // detects a status change vs the prior tick.
+                              const justFlipped = flipFlash.has(a.account_id) || recentlyFlipped.has(a.account_id)
                               // If the platform is active but we have no auth
                               // cookie on file, cookies didn't get captured
                               // (VPS dump endpoint down or offline profile).
