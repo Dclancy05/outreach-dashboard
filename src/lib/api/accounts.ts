@@ -1,20 +1,27 @@
 import { supabase, throwOnError } from "./helpers"
 import type { ActionHandler } from "../types"
 
-// Per-platform auth cookies. If a named cookie exists with a non-empty value
-// and hasn't expired, we treat the account as actually logged in on that
-// platform — same logic the VNC capture path uses.
+// Per-platform STRICT auth cookies — only names that, on their own, prove an
+// active logged-in session. Names like `JSESSIONID` (LinkedIn) or `ds_user_id`
+// (Instagram) get set even on a logged-out / first-touch session, so they
+// were producing false-positive "Active" badges. The hardened list below is
+// the single cookie each platform sets exclusively after a successful login.
+//
+// Reference: live verification on 2026-05-04 confirmed LinkedIn @dclancy05
+// had JSESSIONID but NO li_at — the old logic was reporting Active when
+// the platform had no auth at all.
 const AUTH_COOKIE_NAMES: Record<string, string[]> = {
-  instagram: ["sessionid", "ds_user_id"],
-  facebook: ["c_user", "xs"],
-  linkedin: ["li_at", "JSESSIONID"],
-  tiktok: ["sessionid", "sid_tt"],
-  youtube: ["SID", "SAPISID", "__Secure-1PSID"],
-  snapchat: ["sc-a-session", "sc-a-nonce"],
+  instagram: ["sessionid"],
+  facebook: ["c_user"],
+  linkedin: ["li_at"],
+  tiktok: ["sessionid"],
+  youtube: ["__Secure-1PSID"],
+  snapchat: ["sc-a-session"],
   x: ["auth_token"],
   twitter: ["auth_token"],
-  pinterest: ["_auth", "_pinterest_sess"],
+  pinterest: ["_auth"],
   threads: ["sessionid"],
+  google: ["__Secure-1PSID"],
 }
 
 // Cookie jars show up in three shapes depending on source:

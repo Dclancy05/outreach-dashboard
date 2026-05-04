@@ -188,6 +188,20 @@ const PLATFORM_INSTRUCTIONS: Record<string, { label: string; steps: string[]; ti
     ],
     tips: ["Snapchat on web is limited — some features won't be available"],
   },
+  google: {
+    label: "Google (Chrome profile)",
+    steps: [
+      "Enter your Google email, click Next",
+      "Enter your password, click Next",
+      "Finish 2FA if Google prompts for it",
+      "Wait for the Google account dashboard or 'My Account' page",
+      "Click 'I'm Logged In' below",
+    ],
+    tips: [
+      "Sign into ANY Google account — this is just to make Chrome look like a real user's browser before you touch IG/FB/LinkedIn",
+      "Personal Gmail works fine. Brand-new accounts can be flagged.",
+    ],
+  },
 }
 
 function instructionsFor(platform: string) {
