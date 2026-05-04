@@ -78,13 +78,21 @@ export function CommandPalette() {
       // (so "open palette" still works) or when focus is on body/buttons.
       const ae = document.activeElement as HTMLElement | null
       if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) {
-        if (!ae.closest("[data-cmdk-root]")) return
+        // Exception: xterm.js renders a hidden helper textarea to capture
+        // keystrokes for the terminal. It always has focus when the user is
+        // interacting with a terminal pane — without this exception, the
+        // palette can never be opened from Terminals mode.
+        const isXtermHelper = ae.classList.contains("xterm-helper-textarea")
+        if (!isXtermHelper && !ae.closest("[data-cmdk-root]")) return
       }
       e.preventDefault()
+      e.stopPropagation()
       setOpen((v) => !v)
     }
-    window.addEventListener("keydown", handler)
-    return () => window.removeEventListener("keydown", handler)
+    // Capture phase so we win the race against xterm's own keydown listener
+    // (which calls preventDefault on Cmd+K and forwards it to the PTY).
+    window.addEventListener("keydown", handler, true)
+    return () => window.removeEventListener("keydown", handler, true)
   }, [isJarvis])
 
   // Load data on open. Three parallel calls — cheap, all already cache-friendly.
