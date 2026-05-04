@@ -81,10 +81,10 @@ export function CustomizeSessionDialog({ open, onOpenChange, sessionId, current,
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" aria-describedby="customise-terminal-desc">
         <DialogHeader>
           <DialogTitle className="text-base font-semibold">Customise terminal</DialogTitle>
-          <div className="text-xs text-zinc-400 mt-1">
+          <div id="customise-terminal-desc" className="text-xs text-zinc-400 mt-1">
             Color and icon show up in the session list, the pane header, and Telegram.
           </div>
         </DialogHeader>
