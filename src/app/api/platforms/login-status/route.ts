@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getSecret } from "@/lib/secrets"
 import { rateLimitDb, retryAfterHeaders, ipFromRequest } from "@/lib/rate-limit"
 import { extractAdminId } from "@/lib/audit"
+import { supabase } from "@/lib/api/helpers"
 
 export const dynamic = "force-dynamic"
 export const maxDuration = 60
@@ -49,6 +50,30 @@ export async function GET(req: Request) {
       signal: AbortSignal.timeout(55000),
     })
     const data = await res.json()
+
+    // Mirror the result into chrome_login_probes so the dashboard's
+    // get_accounts read path (PR #91) stops claiming Active when the
+    // platform-side session is dead. Best-effort — never fail the response.
+    try {
+      const VPS_PLATFORMS = new Set(["instagram", "facebook", "linkedin", "tiktok"])
+      const results = Array.isArray(data?.results) ? data.results : []
+      const now = new Date().toISOString()
+      const rows = results
+        .filter((r: { platform?: string }) => r?.platform && VPS_PLATFORMS.has(r.platform))
+        .map((r: { platform: string; loggedIn?: boolean | null; reason?: string }) => ({
+          chrome_session_id: "main",
+          platform: r.platform,
+          logged_in: r.loggedIn ?? null,
+          reason: r.reason || null,
+          probed_at: now,
+        }))
+      if (rows.length > 0) {
+        await supabase
+          .from("chrome_login_probes")
+          .upsert(rows, { onConflict: "chrome_session_id,platform" })
+      }
+    } catch {}
+
     return NextResponse.json(data)
   } catch (e) {
     return NextResponse.json({ cached: false, results: [], error: (e as Error).message }, { status: 502 })
