@@ -1,63 +1,86 @@
 "use client"
 /**
- * /agency/memory — 4-pane Memory page (v2).
+ * /agency/memory — the unified Command Center (4-pane vault, v3).
  *
  *   ┌──────────────────────────────────────────────────────────────┐
  *   │ Header: title · filter chips · VPS · Search · 🔔 · ⚙ · 💻    │
  *   ├─────────────┬─────────────────────────────────┬──────────────┤
  *   │             │                                 │              │
- *   │  Tree pane  │  Editor pane                    │  Right rail  │
- *   │             │                                 │  (Chat/Info/ │
- *   │  (vault     │  (markdown editor / code        │   History/   │
- *   │   tree, or  │   viewer / conversation         │   Memories)  │
- *   │   code      │   transcript / pages view)      │              │
- *   │   tree)     │                                 │              │
- *   │             │  ┌──────────────────────────────┴────────────┐ │
- *   │             │  │ Time Machine scrubber                    │ │
- *   │             │  └──────────────────────────────────────────┘ │
+ *   │  Sidebar    │  Center pane (mode-driven)      │  Right rail  │
+ *   │  (mode-     │  - knowledge → FileEditor       │  (mode-aware)│
+ *   │   aware)    │  - code      → CodeFileViewer   │              │
+ *   │             │  - convos    → FileEditor       │              │
+ *   │             │  - agents    → AgentWorkflows   │              │
+ *   │             │  - terminals → TerminalsWS      │              │
+ *   │             │  - all       → AllModeLanding   │              │
+ *   │             │  ┌───────────────────────────┴──────────────┐  │
+ *   │             │  │ Time Machine scrubber (knowledge/code)   │  │
+ *   │             │  └──────────────────────────────────────────┘  │
  *   └─────────────┴────────────────────────────────────────────────┘
  *
- * Filter chips: All · Knowledge · Code · Conversations · Inbox
- *   - Inbox chip opens the right-edge slide-in drawer (and tints the chip).
+ * Filter chips (modes):
+ *   All · Knowledge · Code · Conversations · Agents · Terminals · Inbox folder
  *
- * Mobile (<lg): pane-stack navigator (tree → file → rail).
- * Tablet (sm-lg): 2-pane (tree + editor) with right rail collapsed to 48px.
+ * Phase 3 (Command Center unify, 2026-05-04):
+ *   - Added `agents` + `terminals` modes — they used to live at /agency/agents
+ *     and /agency/terminals. Both routes now redirect here with `?mode=` set.
+ *   - Centre pane is delegated to <CenterPane mode={...}/> for clarity.
+ *   - Sidebar swaps shape:
+ *       knowledge/convos/inbox → TreeView
+ *       code                   → CodeTreeView / PagesView
+ *       agents                 → AgentsSidebar (list of agents)
+ *       terminals              → SessionList (parallel-claude sessions)
+ *   - Right rail swaps tabs:
+ *       agents    → AgentsRightRail (Runs · Health · Info)
+ *       terminals → TerminalsRightRail (Activity · Siblings)
+ *       other     → RightRail (Chat · Info · History · Memories)
+ *   - Mode persisted in URL: `?mode=agents` etc. — survives refresh,
+ *     deep-linkable, plays nicely with hash deep-links from the legacy split.
+ *   - Keyboard shortcuts: `g k / c / v / a / t` switch modes from anywhere
+ *     outside an editable target.
+ *
+ * Mobile (<lg): pane-stack navigator (sidebar → center → rail).
+ * Tablet (sm-lg): 2-pane (sidebar + center) with right rail collapsed to 48px.
  *
  * Hash redirects (top of page):
- *   #agent-workflows*  → /agency/agents
+ *   #agent-workflows*  → ?mode=agents (new) — used to be /agency/agents
  *   #api-keys          → /agency/integrations#api-keys (route doesn't exist
  *                        yet — falls through to /agency/team for now)
  */
 import * as React from "react"
 import dynamic from "next/dynamic"
 import Link from "next/link"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import {
-  Brain, Settings as SettingsIcon, TerminalSquare, FileText, Search, Code2, MessageSquare,
+  Brain, Settings as SettingsIcon, TerminalSquare, Search, MessageSquare,
 } from "lucide-react"
 import useSWR from "swr"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { toast } from "sonner"
 
 import { listPersonas, listMemories, type Memory } from "@/lib/api/memory"
 import { SettingsPanel } from "@/components/memory/settings-panel"
 import { TreeView } from "@/components/memory-tree/tree-view"
-import { FileEditor } from "@/components/memory-tree/file-editor"
 import { ConversationsView } from "@/components/memory-tree/conversations-view"
 import { VpsStatusBadge } from "@/components/memory-tree/vps-status-badge"
 import { CodeTreeView } from "@/components/projects/code-tree-view"
-import { CodeFileViewer } from "@/components/projects/code-file-viewer"
 import { GitHubStatusBadge } from "@/components/projects/github-status-badge"
 import { PagesView } from "@/components/projects/pages-view"
+import { SessionList, type SessionRow } from "@/components/terminals/session-list"
 import { useTerminalsDrawer } from "@/components/terminals/terminals-drawer-provider"
 
 import { FilterChips, type FilterId } from "@/components/memory/filter-chips"
 import { WelcomeBanner } from "@/components/memory/welcome-banner"
 import { ContinueCard } from "@/components/memory/continue-card"
-import { TimeMachine } from "@/components/memory/time-machine"
 import { TimeMachineBanner } from "@/components/memory/time-machine-banner"
 import { RightRail } from "@/components/memory/right-rail"
+import { AgentsRightRail } from "@/components/memory/agents-right-rail"
+import { TerminalsRightRail } from "@/components/memory/terminals-right-rail"
+import { AgentsSidebar } from "@/components/memory/agents-sidebar"
+import { CenterPane, type CenterMode } from "@/components/memory/center-pane"
+import { ModeShortcutHints } from "@/components/memory/mode-shortcut-hints"
 import { PaneStack, useIsMobile, type PaneStackState } from "@/components/memory/pane-stack"
 import { InboxBell } from "@/components/inbox/inbox-bell"
 import { useInboxDrawer } from "@/components/inbox/inbox-drawer-provider"
@@ -71,6 +94,34 @@ function parseAt(raw: string | null): TimeMachineRaw {
   return null
 }
 
+// ── URL <-> filter mapping ──────────────────────────────────────────────
+const VALID_MODES: FilterId[] = [
+  "all", "knowledge", "code", "conversations", "agents", "terminals", "inbox",
+]
+
+function modeFromSearch(sp: URLSearchParams | null | undefined): FilterId {
+  const raw = sp?.get("mode")
+  if (raw && (VALID_MODES as string[]).includes(raw)) return raw as FilterId
+  return "all"
+}
+
+// CenterPane uses a slightly different vocabulary (knowledge/convos/code/agents/
+// terminals/all) — convert here so the chip set stays exactly the spec values
+// while the centre pane stays domain-named.
+function centerModeFor(filter: FilterId): CenterMode {
+  switch (filter) {
+    case "knowledge": return "knowledge"
+    case "code": return "code"
+    case "conversations": return "convos"
+    case "agents": return "agents"
+    case "terminals": return "terminals"
+    case "inbox":
+    case "all":
+    default:
+      return filter === "all" ? "all" : "knowledge"
+  }
+}
+
 export default function MemoryPage() {
   return (
     <React.Suspense fallback={<div className="h-screen bg-background" aria-hidden />}>
@@ -80,10 +131,52 @@ export default function MemoryPage() {
 }
 
 function MemoryPageInner() {
-  const router = useRouter()
   const search = useSearchParams()
   const { open: openTerminals } = useTerminalsDrawer()
-  const { open: openInbox, isOpen: inboxOpen } = useInboxDrawer()
+  const { open: openInbox } = useInboxDrawer()
+
+  // ── State ──────────────────────────────────────────────────────────────
+  const [filter, setFilterRaw] = React.useState<FilterId>(() => modeFromSearch(search))
+  const [selectedPath, setSelectedPath] = React.useState<string | null>(null)
+  const [projectPath, setProjectPath] = React.useState<string | null>(null)
+  const [projectViewMode, setProjectViewMode] = React.useState<"files" | "pages">("pages")
+  const [pendingPageRoute, setPendingPageRoute] = React.useState<string | null>(null)
+  const [businessId, setBusinessId] = React.useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [paneState, setPaneState] = React.useState<PaneStackState>("tree")
+  // Selected-agent slug tracked for the agents sidebar / right rail. Survives
+  // the chip switch so flipping back to agents lands you on the same agent.
+  const [selectedAgentSlug, setSelectedAgentSlug] = React.useState<string | null>(null)
+  // Sessions for the terminals sidebar — pulled from /api/terminals on a
+  // 15s interval (matches TerminalsWorkspace).
+  const [sessions, setSessions] = React.useState<SessionRow[]>([])
+  const [sessionsLoading, setSessionsLoading] = React.useState(false)
+  const [focusedSessionId, setFocusedSessionId] = React.useState<string | null>(null)
+
+  const isMobile = useIsMobile()
+  const at = parseAt(search?.get("at") ?? null)
+  const dimmed = at !== null
+
+  // ── filter setter that also writes ?mode= to the URL ──────────────────
+  const setFilter = React.useCallback(
+    (next: FilterId) => {
+      setFilterRaw(next)
+      if (typeof window === "undefined") return
+      const url = new URL(window.location.href)
+      // Default ("all") drops the param — keeps the URL tidy.
+      if (next === "all") {
+        url.searchParams.delete("mode")
+      } else {
+        url.searchParams.set("mode", next)
+      }
+      // Clear hash so legacy #agent-workflows/... doesn't fight the chip.
+      window.history.replaceState(null, "", url.pathname + url.search + url.hash)
+      // Reset mobile pane to "tree" on chip change so the user lands on the
+      // sidebar instead of staring at an unrelated file.
+      setPaneState("tree")
+    },
+    []
+  )
 
   // ── Hash redirects (legacy deep-links) ─────────────────────────────────
   React.useEffect(() => {
@@ -92,37 +185,35 @@ function MemoryPageInner() {
     if (!h) return
     const seg = h.split("/")[0]
     if (seg === "agent-workflows") {
-      // Old #agent-workflows[/sub] → /agency/agents
+      // Old #agent-workflows[/sub] → new ?mode=agents — keep the sub-tab via
+      // the existing AgentWorkflowsTabs URL sync (it reads `tab=` and `#`).
+      const subSeg = h.split("/")[1]
       window.history.replaceState(null, "", window.location.pathname + window.location.search)
-      router.replace("/agency/agents")
+      setFilter("agents")
+      if (subSeg) {
+        const url = new URL(window.location.href)
+        url.searchParams.set("tab", subSeg)
+        window.history.replaceState(null, "", url.toString())
+      }
       return
     }
     if (seg === "api-keys") {
       window.history.replaceState(null, "", window.location.pathname + window.location.search)
       // /agency/integrations doesn't exist yet — surface settings dialog later.
-      // For now fall through; users land on the default Memory view.
       return
     }
     // #tree / #project-tree / #conversations: map to filter chips
     if (seg === "project-tree") setFilter("code")
     else if (seg === "conversations") setFilter("conversations")
     // others fall through
+  }, [setFilter])
+
+  // Sync state when the URL changes via browser back/forward.
+  React.useEffect(() => {
+    const next = modeFromSearch(search)
+    if (next !== filter) setFilterRaw(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // ── State ──────────────────────────────────────────────────────────────
-  const [filter, setFilter] = React.useState<FilterId>("all")
-  const [selectedPath, setSelectedPath] = React.useState<string | null>(null)
-  const [projectPath, setProjectPath] = React.useState<string | null>(null)
-  const [projectViewMode, setProjectViewMode] = React.useState<"files" | "pages">("pages")
-  const [pendingPageRoute, setPendingPageRoute] = React.useState<string | null>(null)
-  const [businessId, setBusinessId] = React.useState<string | null>(null)
-  const [settingsOpen, setSettingsOpen] = React.useState(false)
-  const [paneState, setPaneState] = React.useState<PaneStackState>("tree")
-
-  const isMobile = useIsMobile()
-  const at = parseAt(search?.get("at") ?? null)
-  const dimmed = at !== null
+  }, [search])
 
   // ── Persist project view-mode in localStorage; honor URL params ───────
   React.useEffect(() => {
@@ -133,13 +224,13 @@ function MemoryPageInner() {
     if (fileParam) {
       setProjectViewMode("files")
       setProjectPath(fileParam)
-      setFilter("code")
+      setFilterRaw("code")
       return
     }
     if (pageParam) {
       setProjectViewMode("pages")
       setPendingPageRoute(pageParam)
-      setFilter("code")
+      setFilterRaw("code")
       return
     }
     const stored = localStorage.getItem("project_tree_mode")
@@ -151,6 +242,38 @@ function MemoryPageInner() {
       typeof window !== "undefined" ? localStorage.getItem("memory_business_scope") : null
     setBusinessId(stored)
   }, [])
+
+  // ── Agents/terminals data fetches (only when their mode is active) ────
+  React.useEffect(() => {
+    if (filter !== "terminals") return
+    let cancelled = false
+    let timer: ReturnType<typeof setInterval> | null = null
+
+    async function refresh() {
+      try {
+        if (!cancelled) setSessionsLoading(true)
+        const res = await fetch("/api/terminals", { cache: "no-store" })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const json = (await res.json()) as { sessions?: SessionRow[] }
+        if (cancelled) return
+        const list = json.sessions || []
+        setSessions(list)
+        if (!focusedSessionId && list.length > 0) setFocusedSessionId(list[0].id)
+      } catch {
+        // Don't toast — TerminalsWorkspace also hits this endpoint and shows
+        // its own error UX. We just leave the sidebar empty.
+      } finally {
+        if (!cancelled) setSessionsLoading(false)
+      }
+    }
+
+    refresh()
+    timer = setInterval(refresh, 15_000)
+    return () => {
+      cancelled = true
+      if (timer) clearInterval(timer)
+    }
+  }, [filter, focusedSessionId])
 
   // ── SettingsPanel still expects personas + memories as props ──────────
   const { data: personas = [] } = useSWR(["personas", businessId], () =>
@@ -208,14 +331,119 @@ function MemoryPageInner() {
     syncProjectUrl("pages", null, route)
   }
 
-  // ── Pane assembly ─────────────────────────────────────────────────────
+  // ── Keyboard shortcuts: g k / g c / g v / g a / g t ───────────────────
+  React.useEffect(() => {
+    let armed = false
+    let armedTimer: ReturnType<typeof setTimeout> | null = null
+
+    function disarm() {
+      armed = false
+      if (armedTimer) {
+        clearTimeout(armedTimer)
+        armedTimer = null
+      }
+    }
+
+    function onKeyDown(e: KeyboardEvent) {
+      // Skip when typing in an input/textarea or holding modifiers.
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target
+      if (t instanceof HTMLElement) {
+        const tag = t.tagName
+        if (tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable) return
+      }
+
+      if (!armed) {
+        if (e.key === "g") {
+          armed = true
+          armedTimer = setTimeout(disarm, 1500)
+          return
+        }
+        return
+      }
+
+      // 2nd key of the `g <x>` sequence.
+      let next: FilterId | null = null
+      if (e.key === "k") next = "knowledge"
+      else if (e.key === "c") next = "code"
+      else if (e.key === "v") next = "conversations"
+      else if (e.key === "a") next = "agents"
+      else if (e.key === "t") next = "terminals"
+      else if (e.key === "h") next = "all"
+
+      if (next) {
+        e.preventDefault()
+        handleFilter(next)
+      }
+      disarm()
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => {
+      window.removeEventListener("keydown", onKeyDown)
+      disarm()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ── Sidebar (varies by mode) ─────────────────────────────────────────
+  const sidebarLabel = (() => {
+    switch (filter) {
+      case "agents": return "Agents"
+      case "terminals": return "Sessions"
+      case "conversations": return "Conversations"
+      case "code": return "Source code"
+      case "inbox": return "Inbox"
+      default: return "Vault"
+    }
+  })()
+
   const treePane = (
     <Card className="h-full overflow-hidden p-0 rounded-none border-0 bg-mem-surface-1">
       <div className="px-3 py-2 border-b border-mem-border text-[10px] uppercase tracking-[0.04em] font-semibold text-mem-text-muted">
-        {filter === "conversations" ? "Conversations" : filter === "code" ? "Source code" : "Vault"}
+        {sidebarLabel}
       </div>
       <div className="h-[calc(100%-2.25rem)]">
-        {filter === "code" ? (
+        {filter === "agents" ? (
+          <AgentsSidebar
+            selectedSlug={selectedAgentSlug}
+            onSelect={(slug) => {
+              setSelectedAgentSlug(slug)
+              if (isMobile) setPaneState("file")
+            }}
+          />
+        ) : filter === "terminals" ? (
+          <SessionList
+            sessions={sessions}
+            focusedId={focusedSessionId}
+            loading={sessionsLoading}
+            onFocus={(id) => {
+              setFocusedSessionId(id)
+              if (isMobile) setPaneState("file")
+            }}
+            onRename={async (id, title) => {
+              try {
+                await fetch(`/api/terminals/${id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ title }),
+                })
+                setSessions((s) => s.map((x) => (x.id === id ? { ...x, title } : x)))
+              } catch (e) {
+                toast.error("Rename failed", { description: e instanceof Error ? e.message : String(e) })
+              }
+            }}
+            onStop={async (id) => {
+              try {
+                await fetch(`/api/terminals/${id}`, { method: "DELETE" })
+                setSessions((s) => s.filter((x) => x.id !== id))
+                if (focusedSessionId === id) setFocusedSessionId(null)
+              } catch (e) {
+                toast.error("Stop failed", { description: e instanceof Error ? e.message : String(e) })
+              }
+            }}
+          />
+        ) : filter === "code" ? (
           projectViewMode === "pages" ? (
             <div className="h-full overflow-y-auto">
               <PagesView
@@ -253,41 +481,32 @@ function MemoryPageInner() {
     </Card>
   )
 
+  // ── Center pane (delegated) ──────────────────────────────────────────
   const filePane = (
-    <div className={cn("h-full flex flex-col bg-mem-bg", dimmed && "opacity-70 pointer-events-auto")}>
-      <div className={cn("flex-1 min-h-0 overflow-hidden", dimmed && "pointer-events-none")}>
-        {filter === "code" ? (
-          projectPath ? (
-            <CodeFileViewer
-              key={projectPath}
-              path={projectPath}
-              onSegmentClick={(segPath) => {
-                const next = `${segPath}/README.md`
-                setProjectPath(next)
-                syncProjectUrl("files", next, null)
-              }}
-              onOpenInPages={openInPages}
-              onDeleted={() => {
-                setProjectPath(null)
-                syncProjectUrl("files", null, null)
-              }}
-            />
-          ) : (
-            <EmptyPane icon={Code2} title="Pick a code file" body="Browse the source tree on the left or switch to Pages mode for the friendly view." />
-          )
-        ) : selectedPath ? (
-          <FileEditor key={selectedPath} path={selectedPath} onPathChange={setSelectedPath} />
-        ) : (
-          <EmptyPane icon={FileText} title="Pick a file from the tree" body="Folders mirror real directories on the AI VPS — your edits here are the same files your AI reads on the terminal." />
-        )}
-      </div>
-      <TimeMachine />
-    </div>
+    <CenterPane
+      mode={centerModeFor(filter)}
+      selectedPath={selectedPath}
+      setSelectedPath={setSelectedPath}
+      projectPath={projectPath}
+      setProjectPath={setProjectPath}
+      syncProjectUrl={syncProjectUrl}
+      openInPages={openInPages}
+      onSelect={handleSelect}
+      dimmed={dimmed}
+    />
   )
 
-  const railPane = (
-    <RightRail path={selectedPath} businessId={businessId} />
+  // ── Right rail (varies by mode) ──────────────────────────────────────
+  const sessionTitles = React.useMemo(
+    () => Object.fromEntries(sessions.map((s) => [s.id, s.title])),
+    [sessions]
   )
+
+  const railPane = (() => {
+    if (filter === "agents") return <AgentsRightRail selectedSlug={selectedAgentSlug} />
+    if (filter === "terminals") return <TerminalsRightRail sessionTitles={sessionTitles} />
+    return <RightRail path={selectedPath} businessId={businessId} />
+  })()
 
   // ── Header (shared) ───────────────────────────────────────────────────
   const header = (
@@ -295,9 +514,11 @@ function MemoryPageInner() {
       <div className="flex items-center gap-2 min-w-0">
         <Brain className="w-5 h-5 text-mem-accent shrink-0" />
         <h1 className="text-[18px] sm:text-[22px] font-semibold tracking-[-0.01em] text-foreground leading-none truncate">
-          Memory
+          Command Center
         </h1>
-        <span className="hidden md:inline text-[12px] text-muted-foreground">— what your AI knows</span>
+        <span className="hidden md:inline text-[12px] text-muted-foreground">
+          — memory, code, agents, terminals — one page
+        </span>
       </div>
       <div className="flex items-center gap-1.5 flex-wrap">
         <FilterChips
@@ -366,6 +587,14 @@ function MemoryPageInner() {
     </header>
   )
 
+  // ── Mobile pane-layout decision ──────────────────────────────────────
+  // For terminals mode the centre pane is full-bleed (its own sidebar +
+  // grid). On <lg we let TerminalsWorkspace take the whole viewport instead
+  // of stuffing it into the file slot of PaneStack — its own internal
+  // session list is more usable than the SessionList rendered inside the
+  // pane-stack tree slot.
+  const useFullBleedOnMobile = filter === "terminals" && isMobile
+
   // ── Layout: 4-pane on lg+, 2-pane on sm-lg, pane-stack on <sm ─────────
   return (
     <div className="h-[calc(100vh-3.5rem)] md:h-screen flex flex-col bg-background overflow-hidden -mt-16 md:-mt-6 -mx-4 md:-mx-6 -mb-20 md:-mb-6 pt-16 md:pt-0">
@@ -378,7 +607,11 @@ function MemoryPageInner() {
       <TimeMachineBanner at={at} />
 
       <div className="flex-1 min-h-0 flex">
-        {isMobile ? (
+        {useFullBleedOnMobile ? (
+          // Terminals on mobile: skip the pane-stack chrome, let the workspace
+          // own the viewport. Its own internal sidebar handles navigation.
+          <div className="flex-1 min-w-0">{filePane}</div>
+        ) : isMobile ? (
           <PaneStack
             state={paneState}
             onBack={() => setPaneState((s) => (s === "rail" ? "file" : "tree"))}
@@ -402,24 +635,9 @@ function MemoryPageInner() {
           </>
         )}
       </div>
-    </div>
-  )
-}
 
-function EmptyPane({
-  icon: Icon, title, body,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  title: string
-  body: string
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center h-full text-mem-text-secondary text-sm px-6">
-      <Icon className="w-8 h-8 mb-3 text-mem-text-muted" />
-      <div className="text-mem-text-primary text-[14px]">{title}</div>
-      <div className="text-[12px] text-mem-text-muted mt-2 max-w-md text-center">
-        {body}
-      </div>
+      {/* Floating shortcut hint strip (lg+ only) */}
+      <ModeShortcutHints />
     </div>
   )
 }

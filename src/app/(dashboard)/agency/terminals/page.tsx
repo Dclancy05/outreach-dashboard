@@ -1,19 +1,13 @@
 /**
- * /agency/terminals — full-screen multi-terminal workspace.
+ * /agency/terminals — legacy route, now folded into the unified Command Center.
  *
- * Persists across MacBook lid close because the actual TTYs live in tmux on
- * the VPS, not in the browser. The browser is just a viewer.
- *
- * Auth inherited from the (dashboard) route group's middleware (PIN cookie).
+ * Phase 3 (Command Center unify, 2026-05-04): the standalone Terminals page
+ * is gone. The same TerminalsWorkspace component now renders at
+ * /agency/memory?mode=terminals inside the unified shell. This redirect
+ * preserves any bookmark or sidebar link pointing to /agency/terminals.
  */
-import { TerminalsWorkspace } from "@/components/terminals/terminals-workspace"
-
-export const dynamic = "force-dynamic"
+import { redirect } from "next/navigation"
 
 export default function TerminalsPage() {
-  return (
-    <div className="h-[calc(100vh-3.5rem)] md:h-screen">
-      <TerminalsWorkspace />
-    </div>
-  )
+  redirect("/agency/memory?mode=terminals")
 }
