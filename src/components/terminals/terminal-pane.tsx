@@ -375,7 +375,21 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
           // visible viewport. Sending the resize unconditionally here means
           // every attach heals the dimensions.
           const term = xtermRef.current
-          if (term) onResizeRef.current?.(term.cols, term.rows)
+          if (term) {
+            onResizeRef.current?.(term.cols, term.rows)
+            // SIGWINCH alone isn't enough on first attach: by the time it
+            // lands, the TUI has already drawn its UI at the PTY's default
+            // size (typically 80×24), and that stale render lingers in
+            // xterm's buffer because TUIs rarely \e[2J between redraws.
+            // Sending Ctrl-L (0x0c) asks the running TUI to do a full
+            // redraw, which on the alt buffer wipes the stale dots/borders
+            // and replaces them with content rendered at the new size.
+            // Skip on the normal buffer (a plain shell) — there's no TUI to
+            // redraw and Ctrl-L would clear the user's visible scrollback.
+            if (term.buffer.active.type === "alternate") {
+              setTimeout(() => sendOrBuffer("\x0c"), 250)
+            }
+          }
           focusXterm()
           flushBuffer()
         }, 50)
