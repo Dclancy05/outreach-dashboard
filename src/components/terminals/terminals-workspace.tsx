@@ -46,6 +46,7 @@ import { cn } from "@/lib/utils"
 import { SessionList, type SessionRow } from "@/components/terminals/session-list"
 import { ActivityFeed } from "@/components/terminals/activity-feed"
 import { TerminalPane } from "@/components/terminals/terminal-pane"
+import { Skeleton } from "@/components/ui/skeleton"
 import { SpawnDialog } from "@/components/terminals/spawn-dialog"
 import { LayoutsMenu } from "@/components/terminals/layouts-menu"
 import { CostTodayStrip } from "@/components/terminals/cost-today-strip"
@@ -433,15 +434,36 @@ export function TerminalsWorkspace({ focusOnMount }: Props = {}) {
       <div className="flex-1 flex min-h-0">
         {/* Sidebar */}
         <div className="w-[260px] sm:w-[300px] shrink-0 border-r border-zinc-800/60 overflow-hidden flex flex-col">
-          <SessionList
-            sessions={sessions}
-            focusedId={focusedId}
-            loading={loading}
-            onFocus={focusSession}
-            onRename={renameSession}
-            onStop={stopSession}
-            onCustomized={applyCustomization}
-          />
+          {loading && sessions.length === 0 ? (
+            // While the very first /api/terminals fetch is in flight, show a
+            // 3-row skeleton mimicking the session card shape so the layout
+            // doesn't jump when data lands. Once any data arrives or loading
+            // flips false, the real <SessionList /> takes over.
+            <div className="p-3 space-y-2" aria-hidden="true">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-2 p-2 rounded-md border border-zinc-800/60 bg-zinc-900/30"
+                >
+                  <Skeleton className="h-1.5 w-1.5 rounded-full shrink-0" />
+                  <div className="flex-1 min-w-0 space-y-1.5">
+                    <Skeleton className="h-3 w-3/4" />
+                    <Skeleton className="h-2 w-1/2" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <SessionList
+              sessions={sessions}
+              focusedId={focusedId}
+              loading={loading}
+              onFocus={focusSession}
+              onRename={renameSession}
+              onStop={stopSession}
+              onCustomized={applyCustomization}
+            />
+          )}
         </div>
 
         {/* Right rail: Activity Feed (collapsible) */}

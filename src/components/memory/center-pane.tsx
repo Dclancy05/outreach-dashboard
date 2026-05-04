@@ -22,7 +22,7 @@
  */
 import * as React from "react"
 import dynamic from "next/dynamic"
-import { Code2, FileText, Loader2 } from "lucide-react"
+import { Code2, FileText } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 import { FileEditor } from "@/components/memory-tree/file-editor"
@@ -30,6 +30,7 @@ import { CodeFileViewer } from "@/components/projects/code-file-viewer"
 import { AgentWorkflowsTabs } from "@/components/agent-workflows/agent-workflows-tabs"
 import { TimeMachine } from "@/components/memory/time-machine"
 import { AllModeLanding } from "@/components/memory/all-mode-landing"
+import { Skeleton } from "@/components/ui/skeleton"
 
 // TerminalsWorkspace pulls in xterm.js, which references `self` at module
 // load time and breaks SSG. Load it client-side only — matches what the
@@ -38,12 +39,23 @@ const TerminalsWorkspace = dynamic(
   () => import("@/components/terminals/terminals-workspace").then((m) => m.TerminalsWorkspace),
   {
     ssr: false,
+    // 3-row skeleton mimicking the terminal sidebar shape — the workspace
+    // bundle is heavy (xterm + addons), so we want structure on screen the
+    // moment the chip flips to "terminals" instead of a generic spinner.
     loading: () => (
-      <div className="h-full grid place-items-center text-mem-text-muted text-[12px]">
-        <div className="inline-flex items-center gap-1.5">
-          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          Booting workspace…
-        </div>
+      <div className="h-full p-3 space-y-2" aria-hidden="true">
+        {[0, 1, 2].map((i) => (
+          <div
+            key={i}
+            className="flex items-center gap-2 p-2 rounded-md border border-zinc-800/60 bg-zinc-900/30"
+          >
+            <Skeleton className="h-1.5 w-1.5 rounded-full shrink-0" />
+            <div className="flex-1 min-w-0 space-y-1.5">
+              <Skeleton className="h-3 w-2/3" />
+              <Skeleton className="h-2 w-1/3" />
+            </div>
+          </div>
+        ))}
       </div>
     ),
   }
