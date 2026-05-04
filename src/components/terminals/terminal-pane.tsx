@@ -252,8 +252,29 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     }
     container.addEventListener("keydown", searchKeyHandler, true)
 
+    // Suppress xterm's mouse-button forwarding to the PTY when the alt buffer
+    // is active. Same root cause class as the wheel bug above: clicks/drag
+    // get encoded as SGR mouse escapes (\e[<…M / \e[<…m) that Claude Code's
+    // prompt UI doesn't know how to handle — it renders the bytes as middle-
+    // dot placeholders and the cursor block (yellow) jumps to wherever the
+    // click reported. Selection still works because xterm respects Shift as
+    // an override even with mouse mode on, and focus still works because the
+    // outer pane's onMouseDown handler calls term.focus().
+    const swallowMouse = (e: MouseEvent) => {
+      if (term.buffer.active.type === "alternate" && !e.shiftKey) {
+        e.stopImmediatePropagation()
+      }
+    }
+    const mouseEvents = ["mousedown", "mouseup", "mousemove", "contextmenu"] as const
+    for (const ev of mouseEvents) {
+      container.addEventListener(ev, swallowMouse, true)
+    }
+
     return () => {
       container.removeEventListener("keydown", searchKeyHandler, true)
+      for (const ev of mouseEvents) {
+        container.removeEventListener(ev, swallowMouse, true)
+      }
       onDataSubRef.current?.dispose()
       onDataSubRef.current = null
       term.dispose()
