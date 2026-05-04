@@ -33,6 +33,9 @@ import { auditLogScraper } from "./instruments/audit-log-scraper.mjs";
 import { writeMergedTimeline } from "./reporters/merged-timeline.mjs";
 import { writeClaudeReadable } from "./reporters/claude-readable-json.mjs";
 import { writeHtmlReport } from "./reporters/html-report.mjs";
+import { writeVisualDiffReport } from "./reporters/visual-diff-report.mjs";
+import { maybeShare } from "./lib/share-report.mjs";
+import * as db from "./lib/db.mjs";
 
 function parseArgs(argv) {
   const out = { _: [] };
@@ -94,7 +97,7 @@ const instruments = [
   cdpTargetEvents({ ev, cdpUrl }),
   networkMonitor({ ev, page }),
   consoleCapture({ ev, page }),
-  screenshotStream({ ev, page, outDir, intervalMs: 500 }),
+  screenshotStream({ ev, page, outDir, intervalMs: 500, timeline }),
   frameRateAnalyzer({ ev, page, ctx }),
 ];
 const audit = auditLogScraper({ ev, dashboardUrl });
@@ -104,7 +107,7 @@ for (const inst of instruments) {
   if (inst.start) await inst.start();
 }
 
-const scenarioCtx = { t0, settledAtMs: 0 };
+const scenarioCtx = { t0, settledAtMs: 0, db, dbAssertions: [] };
 let crashed = null;
 try {
   await scenarioMod.run({
@@ -142,22 +145,35 @@ await browser.close().catch(() => {});
 
 // Write reports
 const events = timeline.snapshot();
-const meta = { scenario: scenarioName, duration_s: duration, t0 };
+let gitSha = null;
+try {
+  gitSha = (await import("node:child_process")).execSync("git rev-parse HEAD", { encoding: "utf8" }).trim();
+} catch {}
+const meta = { scenario: scenarioName, duration_s: duration, t0, gitSha };
+
+// Run assertions (so the HTML report can include pass/fail badges)
+const assertions = scenarioMod.assertions || [];
+const results = assertions.map((a) => ({ name: a.name, ...a.check(events, scenarioCtx) }));
+const allOk = !crashed && results.every((r) => r.ok);
 
 const txtFile = writeMergedTimeline(events, outDir);
 const { file: jsonFile, summary } = writeClaudeReadable(events, outDir, meta);
-const htmlFile = writeHtmlReport(events, outDir, meta);
+// Read labeled snapshots from screenshot-stream instrument (4th instrument)
+const labeledSnapshots = (instruments[3]?.labels?.()) || [];
+const visualDiffReport = writeVisualDiffReport(labeledSnapshots, outDir, meta);
+const htmlFile = writeHtmlReport(events, outDir, {
+  ...meta,
+  summary: summary.summary,
+  visualDiff: visualDiffReport,
+  dbAssertions: scenarioCtx.dbAssertions,
+  assertions: results,
+});
 
 // Write lag-report.json separately (Phase 5.1 needs to compare across runs)
 const lag = events.find((e) => e.kind === "lag.report");
 if (lag) {
   fs.writeFileSync(path.join(outDir, "lag-report.json"), JSON.stringify(lag, null, 2));
 }
-
-// Run assertions
-const assertions = scenarioMod.assertions || [];
-const results = assertions.map((a) => ({ name: a.name, ...a.check(events, scenarioCtx) }));
-const allOk = !crashed && results.every((r) => r.ok);
 
 console.log(`\n═══ HARNESS SUMMARY ═══`);
 console.log(`Scenario: ${scenarioName}`);
@@ -181,5 +197,11 @@ console.log(`  ${htmlFile}`);
 if (videoPath && fs.existsSync(videoPath)) {
   console.log(`  ${videoPath}  (video — open in any browser)`);
 }
+console.log(`  ${visualDiffReport.file}  (visual diff: ${visualDiffReport.completePairs}/${visualDiffReport.totalPairs} pairs)`);
+if (scenarioCtx.dbAssertions.length) {
+  const okCount = scenarioCtx.dbAssertions.filter((a) => a.ok).length;
+  console.log(`  DB asserts: ${okCount}/${scenarioCtx.dbAssertions.length} ok`);
+}
+await maybeShare(outDir, scenarioName);
 
 process.exit(crashed ? 2 : (allOk ? 0 : 1));
