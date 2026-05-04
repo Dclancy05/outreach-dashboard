@@ -556,28 +556,87 @@ export default function AccountsPage() {
     }
   }, [handleLoginComplete])
 
-  async function createProxy() {
-    const res = await fetch("/api/proxy-groups", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "create", ...proxyForm, monthly_cost: parseFloat(proxyForm.monthly_cost) || 0 }),
+  // PR #99 — pendingOps tracks any in-flight mutation by a stable key so
+  // we can disable buttons + suppress double-click double-fire. Cheaper
+  // than 11 separate `isCreatingX` booleans; keys carry an id so per-row
+  // operations don't disable the whole UI.
+  const [pendingOps, setPendingOps] = useState<Set<string>>(new Set())
+  const isPending = useCallback((key: string) => pendingOps.has(key), [pendingOps])
+  const setPending = useCallback((key: string, on: boolean) => {
+    setPendingOps((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(key)
+      else next.delete(key)
+      return next
     })
-    if (res.ok) { toast.success("Proxy added"); setShowProxyForm(false); setProxyForm({ provider: "", ip: "", port: "", username: "", password: "", location_city: "", location_state: "", location_country: "US", monthly_cost: "" }); fetchAll() }
-    else toast.error("Failed to add proxy")
+  }, [])
+
+  async function createProxy() {
+    if (isPending("createProxy")) return
+    setPending("createProxy", true)
+    try {
+      const res = await fetch("/api/proxy-groups", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create", ...proxyForm, monthly_cost: parseFloat(proxyForm.monthly_cost) || 0 }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error || `Failed (${res.status})`)
+      }
+      toast.success("Proxy added")
+      setShowProxyForm(false)
+      setProxyForm({ provider: "", ip: "", port: "", username: "", password: "", location_city: "", location_state: "", location_country: "US", monthly_cost: "" })
+      fetchAll()
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Network error — try again")
+    } finally {
+      setPending("createProxy", false)
+    }
   }
 
   async function deleteProxy(id: string) {
     if (!confirm("Delete this proxy?")) return
-    await fetch("/api/proxy-groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "delete", id }) })
-    toast.success("Proxy deleted"); fetchAll()
+    if (isPending(`deleteProxy:${id}`)) return
+    setPending(`deleteProxy:${id}`, true)
+    try {
+      const res = await fetch("/api/proxy-groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", id }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error || `Failed (${res.status})`)
+      }
+      toast.success("Proxy deleted")
+      fetchAll()
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Couldn't delete proxy")
+    } finally {
+      setPending(`deleteProxy:${id}`, false)
+    }
   }
 
   async function renameGroup(id: string, name: string) {
-    const res = await fetch("/api/proxy-groups", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "rename", id, name }),
-    })
-    if (res.ok) { toast.success("Group renamed"); setEditingGroupId(null); fetchAll() }
-    else toast.error("Failed to rename group")
+    if (isPending(`renameGroup:${id}`)) return
+    setPending(`renameGroup:${id}`, true)
+    try {
+      const res = await fetch("/api/proxy-groups", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "rename", id, name }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error || `Failed (${res.status})`)
+      }
+      toast.success("Group renamed")
+      setEditingGroupId(null)
+      fetchAll()
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Couldn't rename group")
+    } finally {
+      setPending(`renameGroup:${id}`, false)
+    }
   }
 
   // Inline @username rename — hits the per-account PATCH endpoint that
@@ -606,18 +665,26 @@ export default function AccountsPage() {
   }
 
   async function toggleDummy(id: string, nextVal: boolean) {
-    // Optimistic update so the badge/switch flips instantly and only one group shows as dummy.
+    // PR #99 — optimistic update with rollback. Snapshot first so a failure
+    // doesn't strand the UI showing a value the DB never accepted.
+    const snapshot = proxies
     setProxies(prev => prev.map(p => ({ ...p, is_dummy: p.id === id ? nextVal : (nextVal ? false : p.is_dummy) })))
-    const res = await fetch("/api/proxy-groups", {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, is_dummy: nextVal }),
-    })
-    if (res.ok) {
+    try {
+      const res = await fetch("/api/proxy-groups", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, is_dummy: nextVal }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error || `Failed (${res.status})`)
+      }
       toast.success(nextVal ? "Marked as dummy group" : "Removed dummy flag")
       fetchAll()
-    } else {
-      toast.error("Failed to update dummy flag")
-      fetchAll()
+    } catch (e: unknown) {
+      // Rollback to the pre-click state instead of leaving the bad optimistic
+      // flip on screen until fetchAll resolves (~500ms of wrong UI).
+      setProxies(snapshot)
+      toast.error(e instanceof Error ? e.message : "Couldn't update dummy flag")
     }
   }
 
@@ -654,12 +721,24 @@ export default function AccountsPage() {
       ? `This will unassign ${groupAccounts.length} account(s) from this group and delete the proxy. Continue?`
       : "Delete this proxy group?"
     if (!confirm(msg)) return
-    const res = await fetch("/api/proxy-groups", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "delete", id }),
-    })
-    if (res.ok) { toast.success("Group deleted"); fetchAll() }
-    else toast.error("Failed to delete group")
+    if (isPending(`deleteGroup:${id}`)) return
+    setPending(`deleteGroup:${id}`, true)
+    try {
+      const res = await fetch("/api/proxy-groups", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete", id }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error || `Failed (${res.status})`)
+      }
+      toast.success("Group deleted")
+      fetchAll()
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Couldn't delete group")
+    } finally {
+      setPending(`deleteGroup:${id}`, false)
+    }
   }
 
   async function updateProxyDetails() {
@@ -1431,7 +1510,12 @@ export default function AccountsPage() {
                     const expanded = expandedAccount === a.account_id
                     const proxy = proxies.find(p => p.id === a.proxy_group_id)
                     const sendsPercent = Math.min(100, (parseInt(a.sends_today || "0") / warmupLimit) * 100)
-                    const healthScore = a.health_score || Math.round(70 + Math.random() * 30)
+                    // PR #99 — was `a.health_score || Math.round(70 + Math.random() * 30)`,
+                    // which generated a NEW random number on every render → the
+                    // health ring animated differently on every mouse move /
+                    // re-fetch / state update. Now: real value if present, 0 if
+                    // not (renders a flat ring instead of fake-good-vibes).
+                    const healthScore = typeof a.health_score === "number" ? a.health_score : 0
 
                     return (
                       <motion.div
@@ -1975,7 +2059,13 @@ export default function AccountsPage() {
                   <div><Label>State</Label><Input placeholder="NC" value={proxyForm.location_state} onChange={e => setProxyForm(f => ({ ...f, location_state: e.target.value }))} /></div>
                   <div><Label>Country</Label><Input placeholder="US" value={proxyForm.location_country} onChange={e => setProxyForm(f => ({ ...f, location_country: e.target.value }))} /></div>
                 </div>
-                <Button onClick={createProxy} className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl">Add Proxy</Button>
+                <Button
+                  onClick={createProxy}
+                  disabled={isPending("createProxy")}
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl disabled:opacity-50"
+                >
+                  {isPending("createProxy") ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Adding…</> : "Add Proxy"}
+                </Button>
               </div>
             </DialogContent>
           </Dialog>
