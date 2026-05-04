@@ -296,7 +296,7 @@ export default function PlatformLoginModal({
   // couldn't be captured (VPS endpoint not up yet). "failed" = we tried and
   // something broke we want the user to see.
   const [captureState, setCaptureState] = useState<
-    null | "saved_persistent" | "saved_soft" | "failed"
+    null | "saved_persistent" | "saved_soft" | "capture_empty" | "failed"
   >(null)
   // Running tally of consecutive 502s from /api/platforms/cookies-dump across
   // this session. When it hits 3, we reveal the "I pasted cookies manually"
@@ -553,8 +553,21 @@ export default function PlatformLoginModal({
       // path returns 502 and we fall back to a "soft save" chip (login was
       // verified but cookies won't survive a restart). After 3 consecutive
       // 502s we reveal a manual-paste escape hatch.
-      let capturedHere: "saved_persistent" | "saved_soft" | "failed" | null = null
-      if (accountId) {
+      // PR #98 — three discrete capture outcomes (was conflating two):
+      //   saved_persistent: VPS responded with ≥1 cookie + snapshot POST 200 (real win)
+      //   capture_empty:    VPS responded BUT jar was empty — strong signal of
+      //                     data loss (we'd otherwise quietly mark this "saved")
+      //   saved_soft:       VPS unreachable / 502 / network error — login probe
+      //                     passed but cookies aren't durable
+      //   failed:           snapshot POST returned non-200 even with cookies
+      let capturedHere: "saved_persistent" | "capture_empty" | "saved_soft" | "failed" | null = null
+      if (!accountId) {
+        // Defensive: a caller forgot to pass accountId. Without it we have
+        // no row to attach cookies to, so a "successful" login produces zero
+        // saved state. Surface that to the user instead of silently shrugging.
+        console.warn("PlatformLoginModal: missing accountId — skipping cookie capture")
+        toast.warning("This login won't be saved — no account selected")
+      } else {
         try {
           const dump = await fetch(
             `/api/platforms/cookies-dump?platform=${encodeURIComponent(currentPlatform)}`,
@@ -562,6 +575,9 @@ export default function PlatformLoginModal({
           )
           if (dump.ok) {
             setDump502Streak(0)
+            // PR #98 — recovery: if a previous streak revealed the manual
+            // paste fallback, hide it now that the VPS is healthy again.
+            setShowManualPaste(false)
             const dumpBody = await dump.json()
             const cookies = dumpBody?.cookies
             if (Array.isArray(cookies) && cookies.length > 0) {
@@ -584,9 +600,14 @@ export default function PlatformLoginModal({
                 capturedHere = "failed"
               }
             } else {
-              // VPS responded but jar had no cookies for this domain — treat
-              // as soft save; the login-status probe itself passed.
-              capturedHere = "saved_soft"
+              // VPS responded but jar was empty for this platform. This is
+              // suspicious — the user thinks they logged in successfully,
+              // but the cookie store had nothing for the platform's domain.
+              // Most likely cause: cookies are httpOnly + same-site=Strict on
+              // a cross-domain redirect, or the user authenticated on a
+              // partner-SSO page and the platform set cookies in a different
+              // partition. Don't claim success — flag for manual paste.
+              capturedHere = "capture_empty"
             }
           } else if (dump.status === 502) {
             setDump502Streak((n) => n + 1)
@@ -621,17 +642,30 @@ export default function PlatformLoginModal({
 
       onComplete?.({ stillLoggedOut })
 
-      // 🚨 NO AUTO-ADVANCE. After the user successfully logs in to ONE
-      // platform, close the modal. Chaining navigation events ("now log into
-      // the next platform") is what gave the user a "rotation" feel — Chrome
-      // would visibly hop from Facebook → Instagram → LinkedIn → TikTok
-      // without their intent. Each platform login is now an explicit user
-      // action: they click Sign In Now on the next account row when they're
-      // ready. Cleaner UX, predictable Chrome state, no accidental rotation.
-      const success = thisPlatform?.loggedIn ||
-        (!probeProducedAnswer && capturedHere === "saved_persistent")
-      if (success) {
+      // PR #98 — only close the modal when BOTH the login probe passed AND
+      // cookies were captured persistently (or there's no accountId so cookie
+      // capture isn't expected). Previously we'd close on login-true alone,
+      // which silently lost data when the snapshot POST returned 5xx — the
+      // user saw the badge flip green but had no actual auth cookie.
+      const probeSaysOk = thisPlatform?.loggedIn === true
+      const cookiesSaved = capturedHere === "saved_persistent"
+      const noCaptureExpected = !accountId
+      const probeBusyButCookiesSaved = !probeProducedAnswer && capturedHere === "saved_persistent"
+
+      // 🚨 NO AUTO-ADVANCE. After successful login on ONE platform, close
+      // the modal. Each platform login is an explicit user action.
+      if ((probeSaysOk && (cookiesSaved || noCaptureExpected)) || probeBusyButCookiesSaved) {
         setTimeout(() => onClose(), 900)
+      } else if (probeSaysOk && (capturedHere === "failed" || capturedHere === "capture_empty")) {
+        // Login worked but cookies didn't land — keep modal open so the user
+        // can hit "Save cookies manually" instead of seeing a fake-success
+        // close and discovering 3 days later that no auth cookie exists.
+        toast.error(
+          capturedHere === "capture_empty"
+            ? `Logged in, but couldn't read cookies from Chrome. Try "Save cookies manually" below.`
+            : `Logged in, but couldn't save cookies to the database. Try again or paste them manually below.`
+        )
+        setShowManualPaste(true)
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Couldn't verify login status"
@@ -707,6 +741,11 @@ export default function PlatformLoginModal({
       }
       setCaptureState("saved_persistent")
       setManualPasteText("")
+      // PR #98 — successful manual save means we recovered. Reset the streak
+      // and hide the fallback panel so it doesn't linger after the user is
+      // back on the happy path.
+      setDump502Streak(0)
+      setShowManualPaste(false)
       toast.success("Cookies saved — this account is set.")
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Couldn't save cookies"
@@ -866,6 +905,21 @@ export default function PlatformLoginModal({
                     >
                       <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                       <span>Saved.</span>
+                    </motion.div>
+                  )}
+                  {captureState === "capture_empty" && (
+                    <motion.div
+                      key="capture-empty"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      className="rounded-xl bg-amber-500/10 border border-amber-500/40 p-3 text-[11px] text-amber-100 flex items-start gap-2"
+                    >
+                      <XCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>
+                        Login looked good but Chrome had no cookies for {info.label} —
+                        try logging in again, or use <strong>Save cookies manually</strong> below.
+                      </span>
                     </motion.div>
                   )}
                   {captureState === "failed" && (
