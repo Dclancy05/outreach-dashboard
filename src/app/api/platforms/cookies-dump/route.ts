@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server"
 import { getSecret } from "@/lib/secrets"
+import { rateLimitDb, retryAfterHeaders, ipFromRequest } from "@/lib/rate-limit"
+import { extractAdminId } from "@/lib/audit"
+
+const VALID_PLATFORMS = new Set([
+  "instagram", "facebook", "linkedin", "tiktok",
+  "youtube", "twitter", "x", "threads", "pinterest", "snapchat",
+])
+const COOKIES_DUMP_LIMIT = 5
+const COOKIES_DUMP_WINDOW_MS = 60 * 1000
 
 /**
  * GET /api/platforms/cookies-dump?platform=instagram
@@ -26,7 +35,23 @@ export const maxDuration = 20
 
 export async function GET(req: Request) {
   const url = new URL(req.url)
-  const platform = url.searchParams.get("platform") || ""
+  const platform = (url.searchParams.get("platform") || "").toLowerCase()
+  if (!platform || !VALID_PLATFORMS.has(platform)) {
+    return NextResponse.json(
+      { ok: false, error: `Unsupported platform "${platform}". Allowed: ${Array.from(VALID_PLATFORMS).join(", ")}` },
+      { status: 400 }
+    )
+  }
+
+  const adminId = extractAdminId(req.headers.get("cookie")) || `ip:${ipFromRequest(req)}`
+  const limit = await rateLimitDb(`cookies-dump:${adminId}`, COOKIES_DUMP_LIMIT, COOKIES_DUMP_WINDOW_MS)
+  if (!limit.ok) {
+    return NextResponse.json(
+      { ok: false, error: "Cookie-dump rate-limited.", retryAt: new Date(limit.resetAt).toISOString() },
+      { status: 429, headers: retryAfterHeaders(limit.resetAt) }
+    )
+  }
+
   const VPS_URL = (await getSecret("VPS_URL")) || "https://srv1197943.taild42583.ts.net:10000"
   try {
     const res = await fetch(

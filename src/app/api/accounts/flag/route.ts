@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { withAudit } from "@/lib/audit"
 
 export const dynamic = "force-dynamic"
 
@@ -10,7 +11,7 @@ const supabase = createClient(
 
 const ALLOWED = new Set(["active", "paused", "banned", "cooldown", "warming", "pending_setup", "flagged"])
 
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
   try {
     const { account_id, status, reason } = await request.json()
     if (!account_id) return NextResponse.json({ error: "Missing account_id" }, { status: 400 })
@@ -33,3 +34,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: e.message || "Failed" }, { status: 500 })
   }
 }
+
+export const POST = withAudit("POST /api/accounts/flag", postHandler)

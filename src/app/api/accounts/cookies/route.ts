@@ -81,6 +81,13 @@ function parseCookies(raw: string): CookieRow[] {
   return []
 }
 
+// Caps to prevent a malicious / accidental megabyte-paste from crashing the
+// Supabase row size limit or filling logs. 100 KB JSON is enough for
+// hundreds of legit cookies; 500 individual cookies is well above any real
+// session jar. Anything past either limit returns 413.
+const MAX_COOKIES_JSON_BYTES = 100 * 1024
+const MAX_COOKIE_COUNT = 500
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -90,15 +97,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "cookies (string) required" }, { status: 400 })
     }
 
+    if (cookies.length > MAX_COOKIES_JSON_BYTES) {
+      return NextResponse.json(
+        { error: `Cookie payload exceeds ${MAX_COOKIES_JSON_BYTES} bytes — split or trim.` },
+        { status: 413 }
+      )
+    }
+
     const parsed = parseCookies(cookies)
     if (parsed.length === 0) {
       return NextResponse.json({ error: "Could not parse cookies. Expected JSON array, Cookie header, or cookies.txt" }, { status: 400 })
+    }
+    if (parsed.length > MAX_COOKIE_COUNT) {
+      return NextResponse.json(
+        { error: `Too many cookies (${parsed.length}). Max ${MAX_COOKIE_COUNT} per account.` },
+        { status: 413 }
+      )
+    }
+    const serialized = JSON.stringify(parsed)
+    if (serialized.length > MAX_COOKIES_JSON_BYTES) {
+      return NextResponse.json(
+        { error: `Parsed cookie jar exceeds ${MAX_COOKIES_JSON_BYTES} bytes serialized.` },
+        { status: 413 }
+      )
     }
 
     const { error } = await supabase
       .from("accounts")
       .update({
-        session_cookie: JSON.stringify(parsed),
+        session_cookie: serialized,
         session_cookie_imported_at: new Date().toISOString(),
       })
       .eq("account_id", account_id)
@@ -107,7 +134,7 @@ export async function POST(req: NextRequest) {
       // If the timestamp column doesn't exist yet, retry without it
       const { error: retry } = await supabase
         .from("accounts")
-        .update({ session_cookie: JSON.stringify(parsed) })
+        .update({ session_cookie: serialized })
         .eq("account_id", account_id)
       if (retry) return NextResponse.json({ error: retry.message }, { status: 500 })
     }

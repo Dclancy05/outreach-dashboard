@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { getSecret } from "@/lib/secrets"
+import { rateLimitDb, retryAfterHeaders, ipFromRequest } from "@/lib/rate-limit"
+import { extractAdminId, withAudit } from "@/lib/audit"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
+
+// Per CLAUDE.md ban-risk policy: every Chrome-driving endpoint is rate-limited.
+const RECORDING_LIMIT = 5
+const RECORDING_WINDOW_MS = 60 * 1000
 
 // Get the base URL for internal API calls
 function getBaseUrl(req: NextRequest): string {
@@ -14,7 +20,15 @@ function getBaseUrl(req: NextRequest): string {
   return `${proto}://${host}`
 }
 
-export async function POST(req: NextRequest) {
+async function postHandler(req: NextRequest) {
+  const adminId = extractAdminId(req.headers.get("cookie")) || `ip:${ipFromRequest(req)}`
+  const limit = await rateLimitDb(`recording-stop:${adminId}`, RECORDING_LIMIT, RECORDING_WINDOW_MS)
+  if (!limit.ok) {
+    return NextResponse.json(
+      { error: "Recording control rate-limited. Try again in a minute.", retryAt: new Date(limit.resetAt).toISOString() },
+      { status: 429, headers: retryAfterHeaders(limit.resetAt) }
+    )
+  }
   try {
     const body = await req.json()
     const { sessionId, name, platform, action_type, tags } = body
@@ -28,6 +42,7 @@ export async function POST(req: NextRequest) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sessionId }),
+      signal: AbortSignal.timeout(10_000),
     })
     const vpsData = await res.json()
 
@@ -64,6 +79,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Failed to stop recording", details: e.message }, { status: 502 })
   }
 }
+
+export const POST = withAudit("POST /api/recordings/stop", postHandler as any)
 
 async function runPipelineAsync(baseUrl: string, recordingId: string, platform: string, actionType: string) {
   try {
