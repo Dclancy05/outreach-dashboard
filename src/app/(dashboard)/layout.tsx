@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/dashboard/sidebar"
 import { BottomTabs } from "@/components/dashboard/bottom-tabs"
 import { SystemPulse } from "@/components/system-pulse"
 import { RememberPalette } from "@/components/memory/remember-palette"
+import { CommandPalette } from "@/components/command-palette/command-palette"
 import { TerminalsDrawerProvider } from "@/components/terminals/terminals-drawer-provider"
 import { TerminalsDrawer } from "@/components/terminals/terminals-drawer"
 import { TerminalsRailTab } from "@/components/terminals/terminals-rail-tab"
@@ -21,6 +22,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </main>
         <BottomTabs />
         <SystemPulse />
+        {/* Cmd+K palette — spawn/focus terminals, fuzzy-search agents/memory.
+            Phase 4 #2 of the terminals overhaul. RememberPalette is now ⌘⇧K. */}
+        <CommandPalette />
         <RememberPalette />
         <TerminalsRailTab />
         <TerminalsDrawer />

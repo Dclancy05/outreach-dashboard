@@ -2,33 +2,38 @@
 
 /**
  * Left-rail session list. One row per active terminal. Click to focus, ⋯ menu
- * for rename/stop. Idle/stopped/crashed states get distinct colored dots so
- * Dylan can scan all sessions at a glance.
+ * for rename/customise/stop. Idle/stopped/crashed states get distinct colored
+ * dots so Dylan can scan all sessions at a glance.
+ *
+ * Phase 4 #7 + #11 surface:
+ *   - per-session color + icon + nickname (rendered next to title)
+ *   - 6-state lifecycle dot derived from `lifecycle_state` (with legacy
+ *     `status` fallback) — see `terminal-style.ts` / `deriveLifecycle`.
  */
-import { Loader2, X, MoreHorizontal, Pause } from "lucide-react"
+import { useState } from "react"
+import { Loader2, X, MoreHorizontal, Pause, Palette } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu"
+import { CustomizeSessionDialog } from "./customize-session-dialog"
+import { colorClasses, iconFor, deriveLifecycle, LIFECYCLE_META } from "./terminal-style"
 
 export interface SessionRow {
   id: string
   title: string
   branch?: string
   status?: "starting" | "running" | "idle" | "stopped" | "crashed" | "paused"
+  /** Phase 4 #11 — preferred over legacy `status` when present. */
+  lifecycle_state?: string | null
   created_at: string
   last_activity_at?: string
   cost_usd?: number
   cost_cap_usd?: number
   paused_reason?: string | null
-}
-
-const STATUS_COLOR: Record<NonNullable<SessionRow["status"]>, string> = {
-  starting: "bg-amber-400 animate-pulse",
-  running: "bg-emerald-400",
-  idle: "bg-zinc-500",
-  stopped: "bg-zinc-700",
-  crashed: "bg-red-500",
-  paused: "bg-orange-400",
+  /** Phase 4 #7. */
+  color?: string | null
+  icon?: string | null
+  nickname?: string | null
 }
 
 interface Props {
@@ -38,9 +43,15 @@ interface Props {
   onFocus: (id: string) => void
   onRename: (id: string, title: string) => void
   onStop: (id: string) => void
+  /** Optimistic patch — caller should mirror locally so the dot/icon updates
+   *  before the next list refresh. Optional; omitted callers wait for refresh. */
+  onCustomized?: (id: string, patch: { color?: string | null; icon?: string | null; nickname?: string | null }) => void
 }
 
-export function SessionList({ sessions, focusedId, loading, onFocus, onRename, onStop }: Props) {
+export function SessionList({ sessions, focusedId, loading, onFocus, onRename, onStop, onCustomized }: Props) {
+  const [customisingId, setCustomisingId] = useState<string | null>(null)
+  const customising = customisingId ? sessions.find((s) => s.id === customisingId) : null
+
   return (
     <div className="flex flex-col h-full">
       <div className="px-3 py-2 border-b border-zinc-800/60 text-[10px] uppercase tracking-wider text-zinc-500 sticky top-0 bg-zinc-950/90 backdrop-blur z-10 flex items-center justify-between">
@@ -56,13 +67,17 @@ export function SessionList({ sessions, focusedId, loading, onFocus, onRename, o
         )}
         {sessions.map((s) => {
           const focused = focusedId === s.id
-          const status = s.status || "running"
+          const lifecycle = deriveLifecycle(s)
+          const lc = LIFECYCLE_META[lifecycle]
+          const colors = colorClasses(s.color)
+          const Icon = iconFor(s.icon)
+          const displayName = s.nickname?.trim() || s.title
           return (
             <div
               key={s.id}
               className={cn(
                 "group relative border-b border-zinc-800/30 transition-colors",
-                focused ? "bg-amber-500/10" : "hover:bg-zinc-800/40",
+                focused ? colors.bgSoft : "hover:bg-zinc-800/40",
               )}
             >
               <button
@@ -70,22 +85,35 @@ export function SessionList({ sessions, focusedId, loading, onFocus, onRename, o
                 className="block w-full text-left px-3 py-2.5 pr-9"
               >
                 <div className="flex items-center gap-2">
-                  <span className={cn("h-2 w-2 rounded-full shrink-0", STATUS_COLOR[status])} />
-                  <span className={cn("text-sm font-medium truncate", focused ? "text-amber-100" : "text-zinc-200")}>
-                    {s.title}
+                  <span
+                    className={cn("h-2 w-2 rounded-full shrink-0", lc.dot, lc.pulse && "animate-pulse")}
+                    title={lc.label}
+                  />
+                  <Icon className={cn("w-3.5 h-3.5 shrink-0", colors.text)} />
+                  <span className={cn(
+                    "text-sm font-medium truncate",
+                    focused ? colors.text : "text-zinc-200",
+                  )}>
+                    {displayName}
                   </span>
                 </div>
+                {s.nickname?.trim() && s.nickname.trim() !== s.title && (
+                  <div className="text-[10px] text-zinc-500 mt-0.5 truncate pl-5">{s.title}</div>
+                )}
                 {s.branch && (
-                  <div className="text-[11px] text-zinc-500 mt-1 truncate font-mono">
+                  <div className="text-[11px] text-zinc-500 mt-1 truncate font-mono pl-5">
                     {s.branch}
                   </div>
                 )}
-                <div className="text-[10px] text-zinc-600 mt-0.5 flex items-center gap-2">
+                <div className="text-[10px] text-zinc-600 mt-0.5 flex items-center gap-2 pl-5">
                   <span>{timeAgo(s.last_activity_at || s.created_at)}</span>
                   <CostBadge cost={s.cost_usd || 0} cap={s.cost_cap_usd || 5} />
+                  <span className={cn("inline-flex items-center gap-1", lc.text)}>
+                    {lc.label}
+                  </span>
                 </div>
-                {status === "paused" && s.paused_reason && (
-                  <div className="text-[10px] text-orange-300 mt-1 flex items-center gap-1">
+                {lifecycle === "paused" && s.paused_reason && (
+                  <div className="text-[10px] text-orange-300 mt-1 flex items-center gap-1 pl-5">
                     <Pause className="w-2.5 h-2.5" />
                     <span className="truncate">{s.paused_reason}</span>
                   </div>
@@ -107,7 +135,7 @@ export function SessionList({ sessions, focusedId, loading, onFocus, onRename, o
                   <DropdownMenu.Portal>
                     <DropdownMenu.Content
                       align="end"
-                      className="min-w-[160px] bg-zinc-900 border border-zinc-800 rounded-md shadow-xl py-1 text-sm z-50"
+                      className="min-w-[180px] bg-zinc-900 border border-zinc-800 rounded-md shadow-xl py-1 text-sm z-50"
                     >
                       <DropdownMenu.Item
                         onSelect={() => {
@@ -117,6 +145,13 @@ export function SessionList({ sessions, focusedId, loading, onFocus, onRename, o
                         className="px-3 py-1.5 cursor-pointer outline-none data-[highlighted]:bg-zinc-800 text-zinc-200"
                       >
                         Rename
+                      </DropdownMenu.Item>
+                      <DropdownMenu.Item
+                        onSelect={() => setCustomisingId(s.id)}
+                        className="px-3 py-1.5 cursor-pointer outline-none data-[highlighted]:bg-zinc-800 text-zinc-200 flex items-center gap-2"
+                      >
+                        <Palette className="w-3.5 h-3.5" />
+                        Color, icon &amp; nickname
                       </DropdownMenu.Item>
                       <DropdownMenu.Separator className="h-px bg-zinc-800 my-1" />
                       <DropdownMenu.Item
@@ -138,6 +173,20 @@ export function SessionList({ sessions, focusedId, loading, onFocus, onRename, o
           )
         })}
       </div>
+      {customising && (
+        <CustomizeSessionDialog
+          open={customisingId !== null}
+          onOpenChange={(v) => { if (!v) setCustomisingId(null) }}
+          sessionId={customising.id}
+          current={{
+            title: customising.title,
+            color: customising.color,
+            icon: customising.icon,
+            nickname: customising.nickname,
+          }}
+          onChanged={(patch) => onCustomized?.(customising.id, patch)}
+        />
+      )}
     </div>
   )
 }
