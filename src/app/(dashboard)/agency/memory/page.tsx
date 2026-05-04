@@ -588,12 +588,13 @@ function MemoryPageInner() {
   )
 
   // ── Mobile pane-layout decision ──────────────────────────────────────
-  // For terminals mode the centre pane is full-bleed (its own sidebar +
-  // grid). On <lg we let TerminalsWorkspace take the whole viewport instead
-  // of stuffing it into the file slot of PaneStack — its own internal
-  // session list is more usable than the SessionList rendered inside the
-  // pane-stack tree slot.
-  const useFullBleedOnMobile = filter === "terminals" && isMobile
+  // For terminals mode the centre pane is full-bleed at every breakpoint —
+  // <TerminalsWorkspace /> ships its own session-list sidebar and activity
+  // feed, so wrapping it in our 3-pane shell triple-renders the same data.
+  // The Phase 3 dedicated TerminalsRightRail / SessionList in our shell were
+  // intended to add sibling-awareness but ended up as dupes; we now mount the
+  // workspace alone and revisit per-mode chrome in a follow-up.
+  const useFullBleedTerminals = filter === "terminals"
 
   // ── Layout: 4-pane on lg+, 2-pane on sm-lg, pane-stack on <sm ─────────
   return (
@@ -607,9 +608,8 @@ function MemoryPageInner() {
       <TimeMachineBanner at={at} />
 
       <div className="flex-1 min-h-0 flex">
-        {useFullBleedOnMobile ? (
-          // Terminals on mobile: skip the pane-stack chrome, let the workspace
-          // own the viewport. Its own internal sidebar handles navigation.
+        {useFullBleedTerminals ? (
+          // Terminals mode: full-bleed. TerminalsWorkspace owns the chrome.
           <div className="flex-1 min-w-0">{filePane}</div>
         ) : isMobile ? (
           <PaneStack
