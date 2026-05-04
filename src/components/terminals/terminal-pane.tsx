@@ -36,6 +36,7 @@ import { FitAddon } from "@xterm/addon-fit"
 import { SearchAddon } from "@xterm/addon-search"
 import { WebLinksAddon } from "@xterm/addon-web-links"
 import { WebglAddon } from "@xterm/addon-webgl"
+import { CanvasAddon } from "@xterm/addon-canvas"
 import * as Sentry from "@sentry/nextjs"
 import "xterm/css/xterm.css"
 
@@ -82,10 +83,6 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
   const onResizeRef = useRef<Props["onResize"]>(onResize)
   const onOpenFileRef = useRef<Props["onOpenFile"]>(onOpenFile)
   const stateRef = useRef<State>("idle")
-  // Once the user has focused this pane at least once, the blur handler will
-  // restore focus when it falls to body. Avoids stealing focus on initial
-  // mount before the user has actually engaged with the pane.
-  const userHasFocusedRef = useRef(false)
 
   const [state, setState] = useState<State>("idle")
   const [error, setError] = useState<string | null>(null)
@@ -149,7 +146,10 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     if (!container) return
 
     const term = new Terminal({
-      cursorBlink: true,
+      // Cursor blink is a major DOM-renderer perf hit (constant repaints) and
+      // looked janky on heavy output. Off until profiled clean.
+      cursorBlink: false,
+      cursorStyle: "block",
       fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
       fontSize: 13,
       lineHeight: 1.2,
@@ -160,9 +160,9 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
         selectionBackground: "#3f3f46", // zinc-700
       },
       scrollback: 5000,
+      // Smoothing helps perceived input latency on the GPU renderer.
+      smoothScrollDuration: 0,
       allowProposedApi: true,
-      // Keep the alt-screen buffer in sync — fixes scrollback corruption when
-      // a TUI (claude, vim, less) exits and the parent shell repaints.
       windowsMode: false,
     })
     const fit = new FitAddon()
@@ -185,23 +185,34 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     term.loadAddon(search)
     term.loadAddon(links)
     term.open(container)
-    // WebGL renderer — 10-100x faster than the default DOM renderer when
-    // Claude streams heavy output (splash banners, code blocks). MUST be
-    // loaded AFTER term.open() so the canvas has a parent to size against.
-    // Wrap in try/catch: WebGL can fail on some GPU/driver combos, in which
-    // case xterm gracefully falls back to DOM rendering.
+    // Renderer ladder: WebGL → Canvas → DOM (xterm default).
+    // WebGL is 10-100x faster than DOM for animated output (Claude streams
+    // hundreds of chars/sec while responding); Canvas is the safe middle
+    // ground when WebGL is unavailable (some Chromebooks, hardware-acceleration
+    // disabled, GPU driver blocklist). The DOM fallback is xterm's built-in;
+    // we don't have to do anything to engage it.
     let webglAddon: WebglAddon | null = null
+    let canvasAddon: CanvasAddon | null = null
     try {
       webglAddon = new WebglAddon()
       webglAddon.onContextLoss(() => {
-        // Browser killed our context (tab backgrounded too long, GPU reset).
-        // Drop the addon — xterm reverts to DOM rendering until next mount.
+        // Tab backgrounded too long / GPU reset — drop the addon so xterm
+        // reverts to DOM until next mount. Don't try to re-attach in place;
+        // xterm's renderer is single-shot.
         try { webglAddon?.dispose() } catch { /* */ }
         webglAddon = null
       })
       term.loadAddon(webglAddon)
     } catch {
       webglAddon = null
+      // WebGL refused — try the canvas renderer next.
+      try {
+        canvasAddon = new CanvasAddon()
+        term.loadAddon(canvasAddon)
+      } catch {
+        canvasAddon = null
+        // Both refused — xterm uses its default DOM renderer.
+      }
     }
     try { fit.fit() } catch { /* container may be 0×0 mid-transition */ }
 
@@ -216,36 +227,9 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
       sendOrBuffer(data)
     })
 
-    // Focus recovery — once the user has focused the terminal, keep it focused.
-    // Real bug observed in production: after the first message + Enter, output
-    // streams in and the helper textarea blurs to body. The user has to click
-    // back in to type again. We watch for blur where the new active element is
-    // body and restore focus on the next animation frame.
-    const helper = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement | null
-    const handleHelperFocus = () => {
-      userHasFocusedRef.current = true
-    }
-    const handleHelperBlur = () => {
-      // Defer so the next-focused element has time to settle. If focus went
-      // somewhere intentional (a button, the search overlay, the inbox drawer,
-      // a dialog), leave it alone. Only restore when focus has fallen to body
-      // — i.e., nothing claimed it.
-      requestAnimationFrame(() => {
-        if (!userHasFocusedRef.current) return
-        const ae = document.activeElement
-        if (ae === document.body || ae === null || ae === document.documentElement) {
-          try { xtermRef.current?.focus() } catch { /* */ }
-        }
-      })
-    }
-    helper?.addEventListener("focus", handleHelperFocus)
-    helper?.addEventListener("blur", handleHelperBlur)
-
     // Cmd/Ctrl+F opens the in-pane search bar.
     const searchKeyHandler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
-        // Only intercept when the xterm has focus so we don't steal Cmd+F
-        // from the surrounding page.
         if (document.activeElement === container.querySelector(".xterm-helper-textarea")) {
           e.preventDefault()
           setSearchOpen(true)
@@ -259,11 +243,10 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
 
     return () => {
       container.removeEventListener("keydown", searchKeyHandler, true)
-      helper?.removeEventListener("focus", handleHelperFocus)
-      helper?.removeEventListener("blur", handleHelperBlur)
       onDataSubRef.current?.dispose()
       onDataSubRef.current = null
       try { webglAddon?.dispose() } catch { /* */ }
+      try { canvasAddon?.dispose() } catch { /* */ }
       term.dispose()
       xtermRef.current = null
       fitRef.current = null
