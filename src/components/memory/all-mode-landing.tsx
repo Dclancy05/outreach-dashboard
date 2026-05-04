@@ -116,7 +116,7 @@ export function AllModeLanding({ onSelect: _onSelect }: Props) {
             {recent.map((r) => (
               <li key={r.id}>
                 <Link
-                  href={`/agency/runs?run=${r.id}`}
+                  href={`/agency/runs/${r.id}`}
                   className="flex items-center gap-3 px-4 py-3 hover:bg-mem-surface-2 transition-colors"
                 >
                   <StatusDot status={r.status} />

@@ -143,7 +143,7 @@ export function ContinueCard({ onSelect }: Props) {
             </div>
             {card.kind === "run" ? (
               <Link
-                href={`/agency/runs?run=${card.run.id}`}
+                href={`/agency/runs/${card.run.id}`}
                 className="h-8 px-3 inline-flex items-center gap-1.5 rounded-lg bg-mem-accent text-white text-[12.5px] font-semibold hover:brightness-110 hover:shadow-[0_0_18px_rgba(124,92,255,0.3)] transition-all"
               >
                 View run
