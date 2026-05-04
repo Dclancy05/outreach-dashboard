@@ -202,21 +202,22 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     term.loadAddon(search)
     term.loadAddon(links)
 
-    // Custom wheel handler — kills the dot-pollution bug where mousewheel
-    // inside a TUI (Claude Code, vim, less) sends SGR mouse-tracking escape
-    // sequences to the PTY that the inner app then renders as placeholder
-    // middle-dot characters across the visible rows. On the alt buffer we
-    // intercept and translate wheel into Up/Down arrow keys so Claude Code's
-    // prompt history scrolls the way the user expects. On the normal buffer
-    // we defer to xterm so bash scrollback keeps working.
+    // Custom wheel handler. On the normal buffer (a plain shell), defer to
+    // xterm so native scrollback works. On the alt buffer (Claude Code, vim,
+    // less, htop), swallow the wheel completely — DO NOT translate it into
+    // Up/Down arrow keys. The previous implementation did, and the running
+    // app's readline interpreted those arrows as history navigation, pulling
+    // prior commands back into the prompt every time the user scrolled. A
+    // normal terminal sends nothing on a wheel scroll inside a TUI unless the
+    // app explicitly opts into mouse-wheel tracking. (Note: the dot/border
+    // pollution Dylan reported has a SEPARATE root cause — the PTY size
+    // drifting away from xterm's actual cols/rows. That is fixed by the
+    // forced onResize push in ws.onopen below.)
     term.attachCustomWheelEventHandler((ev) => {
       if (term.buffer.active.type !== "alternate") {
         return true
       }
       ev.preventDefault()
-      const lines = Math.max(1, Math.round(Math.abs(ev.deltaY) / 40))
-      const seq = ev.deltaY < 0 ? "\x1b[A" : "\x1b[B"
-      sendOrBuffer(seq.repeat(Math.min(lines, 3)))
       return false
     })
 
@@ -363,6 +364,18 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
         // even if their pointer wandered.
         setTimeout(() => {
           try { fitRef.current?.fit() } catch { /* */ }
+          // Force-push the current size to the backend on every WS open.
+          // ResizeObserver only fires on size *changes*, so on reconnect (or
+          // a fresh attach where the pane hasn't moved) the backend would
+          // otherwise never hear about our actual dimensions — leaving the
+          // PTY at its default 80×24 while xterm is the size of a small grid
+          // cell. That mismatch is the root cause of the dot/border cascade
+          // bug: TUIs like Claude Code draw their right-side panel border
+          // past xterm's actual width and the overflow wraps into the
+          // visible viewport. Sending the resize unconditionally here means
+          // every attach heals the dimensions.
+          const term = xtermRef.current
+          if (term) onResizeRef.current?.(term.cols, term.rows)
           focusXterm()
           flushBuffer()
         }, 50)
