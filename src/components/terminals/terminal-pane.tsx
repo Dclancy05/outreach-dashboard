@@ -35,6 +35,7 @@ import { Terminal, type IDisposable } from "xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { SearchAddon } from "@xterm/addon-search"
 import { WebLinksAddon } from "@xterm/addon-web-links"
+import { WebglAddon } from "@xterm/addon-webgl"
 import * as Sentry from "@sentry/nextjs"
 import "xterm/css/xterm.css"
 
@@ -184,6 +185,24 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     term.loadAddon(search)
     term.loadAddon(links)
     term.open(container)
+    // WebGL renderer — 10-100x faster than the default DOM renderer when
+    // Claude streams heavy output (splash banners, code blocks). MUST be
+    // loaded AFTER term.open() so the canvas has a parent to size against.
+    // Wrap in try/catch: WebGL can fail on some GPU/driver combos, in which
+    // case xterm gracefully falls back to DOM rendering.
+    let webglAddon: WebglAddon | null = null
+    try {
+      webglAddon = new WebglAddon()
+      webglAddon.onContextLoss(() => {
+        // Browser killed our context (tab backgrounded too long, GPU reset).
+        // Drop the addon — xterm reverts to DOM rendering until next mount.
+        try { webglAddon?.dispose() } catch { /* */ }
+        webglAddon = null
+      })
+      term.loadAddon(webglAddon)
+    } catch {
+      webglAddon = null
+    }
     try { fit.fit() } catch { /* container may be 0×0 mid-transition */ }
 
     xtermRef.current = term
@@ -244,6 +263,7 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
       helper?.removeEventListener("blur", handleHelperBlur)
       onDataSubRef.current?.dispose()
       onDataSubRef.current = null
+      try { webglAddon?.dispose() } catch { /* */ }
       term.dispose()
       xtermRef.current = null
       fitRef.current = null
