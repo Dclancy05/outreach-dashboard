@@ -38,7 +38,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import {
   Loader2, CheckCircle2, Shield,
   ChevronRight, Instagram, Facebook, Linkedin, Globe,
-  RefreshCw, LogIn, XCircle, Save, Clipboard,
+  RefreshCw, LogIn, XCircle, Save, Clipboard, Maximize2, Minimize2,
 } from "lucide-react"
 import {
   VncViewer,
@@ -306,6 +306,12 @@ export default function PlatformLoginModal({
   const [manualPasteText, setManualPasteText] = useState("")
   const [manualPasteSaving, setManualPasteSaving] = useState(false)
   const hasNavigatedRef = useRef(false)
+  // Fullscreen toggle — bumps DialogContent to fill the viewport so the
+  // VNC canvas can render closer to 1:1 with Chrome's native 1280px.
+  // Default modal is already 1600px wide (was 6xl/1280) which fixes 90%
+  // of the "looks zoomed in" complaint; fullscreen is the eject button
+  // for users on big monitors who want maximum readability.
+  const [isFullscreen, setIsFullscreen] = useState(false)
 
   // VNC viewer lifecycle. We drive the imperative VncViewer so the modal can
   // sequence "connect first, then navigate". The previous component
@@ -717,7 +723,14 @@ export default function PlatformLoginModal({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
-      <DialogContent className="max-w-6xl h-[88vh] p-0 overflow-hidden bg-card/95 backdrop-blur-xl">
+      <DialogContent
+        className={cn(
+          "p-0 overflow-hidden bg-card/95 backdrop-blur-xl",
+          isFullscreen
+            ? "!max-w-[100vw] !w-screen !h-screen !rounded-none !left-0 !top-0 !translate-x-0 !translate-y-0 sm:!rounded-none"
+            : "max-w-[1600px] w-[95vw] h-[90vh]"
+        )}
+      >
         {/* Screen-reader title + description — visually hidden because the
             left-side header already shows the same info in the main layout.
             Without these Radix warns and some assistive tech skips the modal. */}
@@ -981,6 +994,15 @@ export default function PlatformLoginModal({
                 <RefreshCw className={cn("h-3 w-3 mr-1", navigating && "animate-spin")} />
                 Reload login page
               </Button>
+              <button
+                onClick={() => setIsFullscreen(v => !v)}
+                title={isFullscreen ? "Shrink back to default size" : "Fullscreen — fill the whole window"}
+                className="ml-auto p-1.5 rounded-md hover:bg-muted/40 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {isFullscreen
+                  ? <Minimize2 className="h-4 w-4" />
+                  : <Maximize2 className="h-4 w-4" />}
+              </button>
             </div>
 
             {/* Identity / trust bar — proxy IP + location + Chrome profile
