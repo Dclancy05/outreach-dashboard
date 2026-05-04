@@ -63,7 +63,7 @@
     "inngest": "^3.27.0",
     "is-extglob": "^2.1.1",
     "is-glob": "^4.0.3",
-    "lucide-react": "^0.344.0",
+    "lucide-react": "^1.8.0",
     "next": "^14.2.20",
     "otplib": "^12.0.1",
     "playwright": "^1.58.1",
