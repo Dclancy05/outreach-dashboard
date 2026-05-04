@@ -26,6 +26,7 @@
  * placeholder — protects xterm.open() from a 0×0 mount inside an animating
  * drawer.
  */
+import * as React from "react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Plus, Loader2, Square, Maximize2, PanelRightClose, PanelRightOpen,
@@ -152,14 +153,20 @@ export function TerminalsWorkspace({ focusOnMount }: Props = {}) {
         color: s.color, icon: s.icon, nickname: s.nickname,
       })))
       if (data.capacity) setCapacity(data.capacity)
+      // Only build a new connections object when there's actually a new session
+      // to add — otherwise return the same reference so React skips the render.
+      // Was: always shipped a new object every refresh, which forced the entire
+      // workspace tree to re-render on every interval and was a major lag source
+      // when interleaved with xterm output.
       setConnections((cur) => {
-        const next = { ...cur }
+        let next: Record<string, Connection> | null = null
         for (const s of list) {
-          if (s.ws_url && !next[s.id]) {
+          if (s.ws_url && !cur[s.id]) {
+            if (next === null) next = { ...cur }
             next[s.id] = { ws_url: s.ws_url }
           }
         }
-        return next
+        return next ?? cur
       })
       setError(null)
     } catch (e) {
@@ -171,7 +178,9 @@ export function TerminalsWorkspace({ focusOnMount }: Props = {}) {
 
   useEffect(() => {
     refresh()
-    const id = setInterval(refresh, 15_000)
+    // 30s poll (was 15s — terminals don't appear/disappear that often, the
+    // refresh was the dominant cause of recurring parent re-renders).
+    const id = setInterval(refresh, 30_000)
     return () => clearInterval(id)
   }, [refresh])
 
@@ -532,9 +541,13 @@ export function TerminalsWorkspace({ focusOnMount }: Props = {}) {
                         focused={focusedId === s.id}
                         connection={conn}
                         gridReady={gridReady}
-                        onFocus={() => setFocusedId(s.id)}
-                        onStop={() => stopSession(s.id)}
-                        onResize={(cols, rows) => handleResize(s.id, cols, rows)}
+                        // handleResize takes (id, cols, rows). SortablePane
+                        // constructs a stable per-session closure internally
+                        // so React.memo can short-circuit when nothing else
+                        // about this pane changed.
+                        onResizeWithId={handleResize}
+                        onFocusId={setFocusedId}
+                        onStopId={stopSession}
                         onOpenFile={openFile}
                       />
                     )
@@ -571,16 +584,31 @@ interface SortablePaneProps {
   focused: boolean
   connection?: Connection
   gridReady: boolean
-  onFocus: () => void
-  onStop: () => void
-  onResize: (cols: number, rows: number) => void
+  // ID-keyed callbacks — these are stable references across parent re-renders
+  // (parent uses useCallback). SortablePane constructs the per-session closure
+  // internally via useCallback so React.memo's prop check passes.
+  onResizeWithId: (id: string, cols: number, rows: number) => void
+  onFocusId: (id: string) => void
+  onStopId: (id: string) => Promise<void>
   onOpenFile: (path: string, line?: number, col?: number) => void
 }
 
-function SortablePane({
+// React.memo to skip re-rendering when nothing about THIS pane changed.
+// Without it, every parent state change (refresh tick, focus shift, etc.)
+// re-runs the entire SortablePane body for every visible pane — feels laggy
+// when there are 4+ open at once and the parent ticks every 30s.
+const SortablePane = React.memo(SortablePaneImpl)
+
+function SortablePaneImpl({
   session: s, focused, connection: conn, gridReady,
-  onFocus, onStop, onResize, onOpenFile,
+  onResizeWithId, onFocusId, onStopId, onOpenFile,
 }: SortablePaneProps) {
+  const onFocus = useCallback(() => onFocusId(s.id), [onFocusId, s.id])
+  const onStop = useCallback(() => { void onStopId(s.id) }, [onStopId, s.id])
+  const onResize = useCallback(
+    (cols: number, rows: number) => onResizeWithId(s.id, cols, rows),
+    [onResizeWithId, s.id],
+  )
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: s.id })
   const style: React.CSSProperties = {

@@ -85,7 +85,9 @@ export function ActivityFeed({ sessionTitles }: Props) {
       }
     }
     refresh()
-    const id = setInterval(refresh, 5_000)
+    // 30s poll (was 5s — too aggressive, was the dominant cause of constant
+    // re-renders that interleaved with typing and made the UI feel laggy).
+    const id = setInterval(refresh, 30_000)
     return () => {
       cancelled = true
       clearInterval(id)
