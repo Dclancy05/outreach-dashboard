@@ -78,13 +78,21 @@ export function CommandPalette() {
       // (so "open palette" still works) or when focus is on body/buttons.
       const ae = document.activeElement as HTMLElement | null
       if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) {
-        if (!ae.closest("[data-cmdk-root]")) return
+        // Exception: xterm.js renders a hidden helper textarea to capture
+        // keystrokes for the terminal. It always has focus when the user is
+        // interacting with a terminal pane — without this exception, the
+        // palette can never be opened from Terminals mode.
+        const isXtermHelper = ae.classList.contains("xterm-helper-textarea")
+        if (!isXtermHelper && !ae.closest("[data-cmdk-root]")) return
       }
       e.preventDefault()
+      e.stopPropagation()
       setOpen((v) => !v)
     }
-    window.addEventListener("keydown", handler)
-    return () => window.removeEventListener("keydown", handler)
+    // Capture phase so we win the race against xterm's own keydown listener
+    // (which calls preventDefault on Cmd+K and forwards it to the PTY).
+    window.addEventListener("keydown", handler, true)
+    return () => window.removeEventListener("keydown", handler, true)
   }, [isJarvis])
 
   // Load data on open. Three parallel calls — cheap, all already cache-friendly.
@@ -197,6 +205,11 @@ export function CommandPalette() {
       overlayClassName="fixed inset-0 z-[110] bg-black/60 backdrop-blur-[3px] data-[state=closed]:animate-out data-[state=open]:animate-in"
       contentClassName="fixed left-1/2 top-[12vh] z-[111] -translate-x-1/2 w-[min(640px,calc(100vw-2rem))] rounded-xl border border-zinc-700 bg-zinc-950 shadow-2xl overflow-hidden"
     >
+      {/* sr-only title — Radix Dialog (which Command.Dialog wraps) requires a
+          DialogTitle for screen-reader accessibility. The visible UI uses the
+          search input as its own affordance, so we hide this from sighted users
+          via Tailwind sr-only. */}
+      <h2 className="sr-only">Command Palette</h2>
       {/* The header doubles as the search input. */}
       <div className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2.5">
         <Search className="w-4 h-4 text-zinc-400 shrink-0" />
