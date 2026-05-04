@@ -57,6 +57,22 @@ If you're working on outreach service code, you're editing files that get deploy
 
 When the user asks for "context" or "memory" of past conversations, **use these endpoints, not a new system**. The custom MCP server at `/root/projects/outreach-dashboard/.../memory-mcp/` (when built) bridges Claude Code → these endpoints.
 
+## Multi-terminal protocol
+
+The `/agency/memory?mode=terminals` workspace runs up to 8 parallel Claude Code sessions on the VPS. They're not isolated — they're **siblings** that can see and coordinate with each other, all reading from the same dashboard repo.
+
+**Sibling files** — every running terminal `<id>` has two coordination surfaces:
+- `/dev/shm/terminal-siblings/<id>.md` — live status snippet, refreshed every ~30s by the siblings watcher (id, branch, "doing right now", last activity).
+- `<worktree>/.claude/CLAUDE.md` — injected at spawn time. Tells the new session who it is, who its peers are, what cost cap it has, and how to reach Dylan.
+
+**Telegram notify primitive** — to ping Dylan from a session, write a short markdown body to `/dev/shm/notify-out/<id>.md`. The dispatcher picks it up on its next tick. Reserve it for blockers, approval requests, cost-cap warnings, or "I'm done" — every message vibrates Dylan's phone.
+
+**Coordination etiquette** — before any significant edit, glance at `/dev/shm/terminal-siblings/`. If a sibling is already touching the same files, drop a coordination note in `/dev/shm/sibling-handoff/<their-id>.md` rather than overwriting their work. Worktrees are isolated branches but the underlying repo and DB schema are shared.
+
+**Lifecycle states** (`terminal_sessions.lifecycle_state`): `starting` → `running` → `awaiting-input` | `paused` | `errored` | `done`. The cost-cap guard hard-stops via Ctrl-C twice when `cost_usd >= cost_cap_usd`. Wallclock cap behaves the same. Both default to $5 / 24h. Self-throttle by reading `cost_usd` and `cost_cap_usd` off your row.
+
+See `Jarvis/agent-skills/terminals-bulletproof-test.md` for the daily test plan.
+
 ## Cron jobs (live in `vercel.json`)
 
 ```

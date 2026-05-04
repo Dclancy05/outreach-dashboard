@@ -89,7 +89,16 @@ type ParsedCommand =
     }
   | { kind: "terminal_list" }
   | { kind: "terminal_spawn"; task: string }
+  // /spawn <preset> <task> — preset is the first whitespace-separated token,
+  // looked up against the spawn_presets table (Phase 4 #13). On miss or when
+  // the table doesn't exist yet, the handler falls through to free-text spawn
+  // with the original full argument.
+  | { kind: "terminal_spawn_preset"; preset_slug: string; task: string }
   | { kind: "terminal_kill"; id: string }
+  // /status — sibling-aware summary of all running terminals.
+  | { kind: "terminal_status" }
+  // /focus <nickname-or-id> — deep-link to /agency/memory?mode=terminals&focus=<id>.
+  | { kind: "terminal_focus"; query: string }
   | { kind: "clear_conversation"; tone: "clear" | "exit" }
 
 function parseCommand(rawText: string): ParsedCommand {
@@ -111,8 +120,10 @@ function parseCommand(rawText: string): ParsedCommand {
         "/health — fire the daily health check now",
         "/runs — link to recent runs in the dashboard",
         "/terminals — list active VPS terminals",
-        "/spawn <task> — spawn a new persistent terminal",
+        "/spawn [preset] <task> — spawn a new persistent terminal",
         "/kill <id> — stop a terminal",
+        "/status — what every terminal is doing right now",
+        "/focus <id-or-nickname> — deep-link a terminal",
         "/help — full command list",
         "",
         "*Or just talk to me:*",
@@ -156,12 +167,18 @@ function parseCommand(rawText: string): ParsedCommand {
         "🖥️ */terminals*",
         "List active VPS terminals (persistent claude sessions).",
         "",
-        "🚀 */spawn <task>*",
-        "Spawn a new persistent terminal working on the task.",
+        "🚀 */spawn [preset] <task>*",
+        "Spawn a new persistent terminal. Optional preset: `bug-fix`, `build`, `investigate` (when configured).",
         "_Example:_ `/spawn add a regex tester component to /agency/tools`",
         "",
         "🛑 */kill <id>*",
         "Stop a terminal. ID = first 8 chars from `/terminals`.",
+        "",
+        "🔭 */status*",
+        "Sibling-aware summary of all running terminals (id, age, spend, what they're doing now).",
+        "",
+        "🎯 */focus <nickname-or-id>*",
+        "Deep-link to a specific terminal in the dashboard.",
         "",
         "🧹 */clear*",
         "Save recent chat to the Memory Vault and wipe the buffer.",
@@ -255,7 +272,13 @@ function parseCommand(rawText: string): ParsedCommand {
     return { kind: "terminal_list" }
   }
 
-  // /spawn <task description> — spawn a new terminal with the task
+  // /spawn [preset] <task description> — spawn a new persistent terminal.
+  //
+  // The first whitespace-separated token is treated as a candidate preset
+  // slug. The handler looks it up in `spawn_presets`; on table-missing or
+  // no-match, falls back to free-text spawn with the FULL original arg.
+  // This preserves the existing `/spawn <task>` UX while letting users opt
+  // into pre-configured prompt templates + cost caps once seeded.
   const spawnMatch = text.match(/^\/spawn(?:@\w+)?(?:\s+([\s\S]+))?$/i)
   if (spawnMatch) {
     const arg = (spawnMatch[1] || "").trim()
@@ -263,10 +286,34 @@ function parseCommand(rawText: string): ParsedCommand {
       return {
         kind: "static",
         text:
-          "Usage: `/spawn <task>`\n\n_Example:_ `/spawn write a regex tester component`\n\nSpawns a new persistent terminal on the VPS, claude starts working on the task. Sibling-aware so it won't fight other terminals.",
+          "Usage: `/spawn [preset] <task>` or `/spawn <task>`\n\n_Examples:_\n`/spawn write a regex tester component`\n`/spawn bug-fix lead pipeline isn't moving on reply`\n\n_Presets (when configured):_ `bug-fix`, `build`, `investigate`",
       }
     }
-    return { kind: "terminal_spawn", task: arg }
+    // Split into [first-word, rest]. We always emit `terminal_spawn_preset`
+    // so a single code path handles preset + free-text fallback.
+    const firstSpace = arg.search(/\s+/)
+    const presetSlug = firstSpace === -1 ? arg : arg.slice(0, firstSpace)
+    const task = firstSpace === -1 ? "" : arg.slice(firstSpace + 1).trim()
+    return { kind: "terminal_spawn_preset", preset_slug: presetSlug, task }
+  }
+
+  // /status — sibling-aware terminal summary.
+  if (/^\/status(?:\s|$|@)/i.test(text)) {
+    return { kind: "terminal_status" }
+  }
+
+  // /focus <nickname-or-id-prefix> — deep-link to a terminal in the dashboard.
+  const focusMatch = text.match(/^\/focus(?:@\w+)?(?:\s+([\s\S]+))?$/i)
+  if (focusMatch) {
+    const arg = (focusMatch[1] || "").trim()
+    if (!arg) {
+      return {
+        kind: "static",
+        text:
+          "Usage: `/focus <nickname-or-id>`\n\n_Example:_ `/focus a1b2c3d4` or `/focus regex-tester`\n\nReturns a tap-to-open link to the terminal in the dashboard.",
+      }
+    }
+    return { kind: "terminal_focus", query: arg }
   }
 
   // /kill <id> — stop a terminal by 8-char id prefix or full uuid
@@ -325,6 +372,30 @@ interface TerminalSession {
   cost_usd?: number
   cost_cap_usd?: number
   paused_reason?: string | null
+}
+
+// Row shape for the spawn_presets table (Phase 4 #13). The table is created
+// by a parallel PR; this interface is a forward-compatible stub. Lookups
+// here gracefully tolerate the table not existing yet (42P01).
+interface SpawnPresetRow {
+  id: string
+  label: string
+  slug: string
+  prompt_template: string
+  cost_cap_usd?: number | null
+  wallclock_cap_h?: number | null
+  worktree_base?: string | null
+  agent_slug?: string | null
+}
+
+// Optional richer columns on terminal_sessions (lifecycle_state +
+// current_status_human are added in a parallel migration). We tolerate them
+// being absent (42703) and fall back to the base column set.
+interface EnrichedSession {
+  id: string
+  lifecycle_state?: string | null
+  current_status_human?: string | null
+  current_status?: string | null
 }
 
 async function callTerminalServer<T>(
@@ -858,6 +929,331 @@ export async function POST(req: NextRequest) {
         replyToMessageId: message.message_id,
       })
       return NextResponse.json({ ok: true, kind: "terminal_kill" })
+    }
+
+    // /spawn <preset> <task> — preset-aware spawn. Looks up `spawn_presets`
+    // for the candidate slug; on miss / table-missing / lookup error, falls
+    // back to free-text spawn with the FULL original argument so the user's
+    // first word isn't dropped.
+    if (cmd.kind === "terminal_spawn_preset") {
+      let preset: SpawnPresetRow | null = null
+      let presetMissing = false
+      try {
+        const { data, error } = await supabase
+          .from("spawn_presets")
+          .select(
+            "id, label, slug, prompt_template, cost_cap_usd, wallclock_cap_h, worktree_base, agent_slug",
+          )
+          .eq("slug", cmd.preset_slug.toLowerCase())
+          .maybeSingle<SpawnPresetRow>()
+        if (error) {
+          // 42P01 = undefined_table. Treat as "not built yet" — silent fall-through.
+          if (error.code === "42P01") presetMissing = true
+          else
+            console.warn(
+              "[telegram-webhook] spawn_presets lookup failed:",
+              error.message,
+              error.code,
+            )
+        }
+        preset = data ?? null
+      } catch (e) {
+        console.warn(
+          "[telegram-webhook] spawn_presets lookup threw:",
+          (e as Error).message,
+        )
+      }
+
+      if (!preset) {
+        // Fall through to free-text — reconstruct full task from preset_slug + task
+        // so the candidate first word isn't lost.
+        const fullTask = [cmd.preset_slug, cmd.task].filter(Boolean).join(" ").trim()
+        if (!fullTask) {
+          await sendTelegram(
+            "Usage: `/spawn [preset] <task>` or `/spawn <task>`\n\n_Presets (when configured):_ `bug-fix`, `build`, `investigate`",
+            {
+              chatId,
+              parseMode: "Markdown",
+              replyToMessageId: message.message_id,
+            },
+          )
+          return NextResponse.json({
+            ok: true,
+            kind: "terminal_spawn_preset",
+            fallback: "empty",
+          })
+        }
+        const r = await callTerminalServer<{ id: string; title: string; branch: string }>(
+          "POST",
+          "/sessions",
+          {
+            title: fullTask.slice(0, 50),
+            initial_prompt: fullTask,
+            inject_sibling_prompt: true,
+            telegram_chat_id: String(chatId),
+          },
+        )
+        const presetMissingNote = presetMissing
+          ? " (preset table not built yet — using free-text)"
+          : ""
+        const text = r.ok
+          ? `🚀 *Terminal spawned* \`${r.data.id.slice(0, 8)}\`${presetMissingNote}\n\n_${fullTask.slice(0, 200)}_\n\nBranch: \`${r.data.branch}\`\nWatch live: outreach-github.vercel.app/agency/memory?mode=terminals\n\nI'll ping you on cost cap, wallclock cap, or crash.`
+          : `❌ Couldn't spawn a terminal.\n\n\`${r.error}\``
+        await sendTelegram(text, {
+          chatId,
+          parseMode: "Markdown",
+          replyToMessageId: message.message_id,
+          disableWebPagePreview: true,
+        })
+        return NextResponse.json({
+          ok: true,
+          kind: "terminal_spawn_preset",
+          fallback: "free-text",
+        })
+      }
+
+      // Preset hit — build prompt from template + user's task. Templates may
+      // use {{task}} as a placeholder; otherwise we append.
+      const finalPrompt = preset.prompt_template.includes("{{task}}")
+        ? preset.prompt_template.replace(/\{\{task\}\}/g, cmd.task)
+        : `${preset.prompt_template}\n\n${cmd.task}`.trim()
+
+      const body: Record<string, unknown> = {
+        title: `${preset.label}: ${cmd.task.slice(0, 40)}`.slice(0, 60),
+        initial_prompt: finalPrompt,
+        inject_sibling_prompt: true,
+        telegram_chat_id: String(chatId),
+      }
+      if (preset.cost_cap_usd != null) body.cost_cap_usd = preset.cost_cap_usd
+      if (preset.wallclock_cap_h != null) body.wallclock_cap_h = preset.wallclock_cap_h
+      if (preset.worktree_base) body.worktree_base = preset.worktree_base
+      if (preset.agent_slug) body.agent_slug = preset.agent_slug
+
+      const r = await callTerminalServer<{ id: string; title: string; branch: string }>(
+        "POST",
+        "/sessions",
+        body,
+      )
+      const capLine = preset.cost_cap_usd
+        ? `\nCost cap: $${Number(preset.cost_cap_usd).toFixed(2)}`
+        : ""
+      const text = r.ok
+        ? `🚀 *${preset.label}* spawned — \`${r.data.id.slice(0, 8)}\`\n\n_${cmd.task.slice(0, 200)}_\n\nBranch: \`${r.data.branch}\`${capLine}\n\nWatch live: outreach-github.vercel.app/agency/memory?mode=terminals&focus=${r.data.id}`
+        : `❌ Couldn't spawn \`${preset.label}\`.\n\n\`${r.error}\``
+      await sendTelegram(text, {
+        chatId,
+        parseMode: "Markdown",
+        replyToMessageId: message.message_id,
+        disableWebPagePreview: true,
+      })
+      return NextResponse.json({
+        ok: true,
+        kind: "terminal_spawn_preset",
+        preset: preset.slug,
+      })
+    }
+
+    // /status — sibling-aware summary of all running terminals. Pulls live
+    // sessions from terminal-server (canonical source on who's actually
+    // attached / running), then tries to enrich each with optional richer
+    // columns from `terminal_sessions` (lifecycle_state, current_status_human).
+    // Falls back gracefully when those columns don't exist yet.
+    if (cmd.kind === "terminal_status") {
+      const r = await callTerminalServer<{ sessions: TerminalSession[] }>(
+        "GET",
+        "/sessions",
+      )
+      if (!r.ok) {
+        await sendTelegram(
+          `❌ Couldn't reach terminal-server.\n\n\`${r.error}\``,
+          {
+            chatId,
+            parseMode: "Markdown",
+            replyToMessageId: message.message_id,
+          },
+        )
+        return NextResponse.json({
+          ok: false,
+          kind: "terminal_status",
+          error: r.error,
+        })
+      }
+      const sessions = r.data.sessions || []
+
+      if (sessions.length === 0) {
+        await sendTelegram(
+          "🖥️ *No terminals running.*\n\nStart one with `/spawn <task>` or open the dashboard.",
+          {
+            chatId,
+            parseMode: "Markdown",
+            replyToMessageId: message.message_id,
+          },
+        )
+        return NextResponse.json({ ok: true, kind: "terminal_status", count: 0 })
+      }
+
+      // Enrichment — defensive: try the rich column set, fall back if a
+      // column doesn't exist (42703 undefined_column).
+      const enrichment: Record<string, EnrichedSession> = {}
+      const ids = sessions.map((s) => s.id)
+      const tryRich = await supabase
+        .from("terminal_sessions")
+        .select("id, lifecycle_state, current_status_human, current_status")
+        .in("id", ids)
+      if (tryRich.error && tryRich.error.code === "42703") {
+        const fallback = await supabase
+          .from("terminal_sessions")
+          .select("id, current_status")
+          .in("id", ids)
+        if (!fallback.error && fallback.data) {
+          for (const row of fallback.data as Array<{
+            id: string
+            current_status?: string | null
+          }>) {
+            enrichment[row.id] = {
+              id: row.id,
+              current_status: row.current_status ?? null,
+            }
+          }
+        }
+      } else if (!tryRich.error && tryRich.data) {
+        for (const row of tryRich.data as EnrichedSession[]) {
+          enrichment[row.id] = row
+        }
+      }
+
+      // Sort by activity recency — last_activity_at desc, fall back to created_at.
+      const sorted = [...sessions]
+        .sort((a, b) => {
+          const ta = new Date(a.last_activity_at || a.created_at).getTime()
+          const tb = new Date(b.last_activity_at || b.created_at).getTime()
+          return tb - ta
+        })
+        .slice(0, 8)
+
+      const now = Date.now()
+      const lines: string[] = []
+      lines.push(
+        `🖥️ *${sessions.length} terminal${sessions.length === 1 ? "" : "s"}* — _showing top ${sorted.length}_`,
+      )
+      lines.push("")
+      for (const s of sorted) {
+        const id8 = s.id.slice(0, 8)
+        const ageMin = Math.max(
+          0,
+          Math.round((now - new Date(s.created_at).getTime()) / 60000),
+        )
+        const enr = enrichment[s.id] || ({} as EnrichedSession)
+        const lifecycle = enr.lifecycle_state || s.status || "running"
+        const lifecycleEmoji =
+          lifecycle === "paused"
+            ? "⏸"
+            : lifecycle === "errored" || lifecycle === "crashed"
+              ? "💥"
+              : lifecycle === "done"
+                ? "✅"
+                : lifecycle === "starting"
+                  ? "🌀"
+                  : lifecycle === "awaiting-input"
+                    ? "❓"
+                    : "🟢"
+        const cost =
+          s.cost_usd != null
+            ? ` · $${Number(s.cost_usd).toFixed(2)}${s.cost_cap_usd ? ` / $${Number(s.cost_cap_usd).toFixed(2)}` : ""}`
+            : ""
+        const doingRaw =
+          enr.current_status_human ||
+          (enr.current_status ? enr.current_status.slice(-80) : null)
+        const doing = doingRaw
+          ? `\n  └ _${doingRaw.replace(/[\r\n]+/g, " ").trim()}_`
+          : ""
+        lines.push(`${lifecycleEmoji} \`${id8}\` *${s.title}*${cost}`)
+        lines.push(
+          `  └ ${s.branch || "(no branch)"} · ${ageMin}m old · ${lifecycle}${doing}`,
+        )
+      }
+      lines.push("")
+      lines.push("_Open one with_ `/focus <nickname-or-id>`")
+
+      await sendTelegram(lines.join("\n"), {
+        chatId,
+        parseMode: "Markdown",
+        replyToMessageId: message.message_id,
+        disableWebPagePreview: true,
+      })
+      return NextResponse.json({
+        ok: true,
+        kind: "terminal_status",
+        count: sorted.length,
+      })
+    }
+
+    // /focus <nickname-or-id-prefix> — return a deep-link URL to the dashboard
+    // Command Center filtered to the terminals view with the given session
+    // pre-selected via `?focus=<id>`. The page may or may not consume `focus`
+    // yet — out-of-scope for this PR per the spec — but the link is a
+    // future-friendly anchor users can tap from chat.
+    if (cmd.kind === "terminal_focus") {
+      const r = await callTerminalServer<{ sessions: TerminalSession[] }>(
+        "GET",
+        "/sessions",
+      )
+      if (!r.ok) {
+        await sendTelegram(
+          `❌ Couldn't reach terminal-server.\n\n\`${r.error}\``,
+          {
+            chatId,
+            parseMode: "Markdown",
+            replyToMessageId: message.message_id,
+          },
+        )
+        return NextResponse.json({
+          ok: false,
+          kind: "terminal_focus",
+          error: r.error,
+        })
+      }
+      const q = cmd.query.toLowerCase()
+      const sessions = r.data.sessions || []
+      // Prefer id-prefix match; fall back to title/branch substring.
+      const byPrefix = sessions.find((s) => s.id.toLowerCase().startsWith(q))
+      const match =
+        byPrefix ||
+        sessions.find(
+          (s) =>
+            (s.title || "").toLowerCase().includes(q) ||
+            (s.branch || "").toLowerCase().includes(q),
+        )
+      if (!match) {
+        await sendTelegram(
+          `No terminal matches \`${cmd.query}\`. Run /status to see the list.`,
+          {
+            chatId,
+            parseMode: "Markdown",
+            replyToMessageId: message.message_id,
+          },
+        )
+        return NextResponse.json({
+          ok: true,
+          kind: "terminal_focus",
+          err: "not_found",
+        })
+      }
+      const url = `https://outreach-github.vercel.app/agency/memory?mode=terminals&focus=${match.id}`
+      await sendTelegram(
+        `🎯 *${match.title}* \`${match.id.slice(0, 8)}\`\n${url}\n\n_Tap to open the workspace with this terminal selected._`,
+        {
+          chatId,
+          parseMode: "Markdown",
+          replyToMessageId: message.message_id,
+          disableWebPagePreview: false,
+        },
+      )
+      return NextResponse.json({
+        ok: true,
+        kind: "terminal_focus",
+        id: match.id,
+      })
     }
 
     // /clear — save recent conversation to vault, then "wipe" the buffer.
