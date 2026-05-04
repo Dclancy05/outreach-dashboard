@@ -110,13 +110,13 @@ export function SpawnDialog({ open, onOpenChange, onSpawned }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg" aria-describedby="spawn-terminal-desc">
         <DialogHeader>
           <DialogTitle className="text-base font-semibold flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-cyan-400" />
             Start a new terminal
           </DialogTitle>
-          <div className="text-xs text-zinc-400 mt-1">
+          <div id="spawn-terminal-desc" className="text-xs text-zinc-400 mt-1">
             Pick a preset to pre-fill your first task &amp; cost cap, or start blank.
           </div>
         </DialogHeader>
