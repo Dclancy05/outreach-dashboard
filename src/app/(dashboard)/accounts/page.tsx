@@ -1138,12 +1138,13 @@ export default function AccountsPage() {
                                 : ageHrs < 24 ? `${ageHrs}h ago`
                                 : `${Math.floor(ageHrs / 24)}d ago`
 
-                              // Google accounts are band-quality boosters, never used to
-                              // send. They must never surface a "Sign In Now" affordance or
-                              // trigger a login modal — hiding the buttons + short-circuiting
-                              // the handler keeps the row visible in admin without letting
-                              // anyone (or a click handler bubble) drive the VPS Chrome to
-                              // a Google login URL.
+                              // Google accounts ("Chrome profile boosters") used to be a
+                              // dead-end here — the row showed "Booster account — no sign-in
+                              // needed" with no clickable affordance. Per Dylan 2026-05-04 we
+                              // surface a real Sign In Now button so he can wake up the
+                              // Google session inside the shared VPS Chrome before driving
+                              // any social platform. The modal navigates to accounts.google.com
+                              // (PLATFORM_LOGIN_URLS["google"]).
                               const isGoogleBooster = a.platform === "google"
 
                               // One-click re-login: opens the guided PlatformLoginModal for
@@ -1153,7 +1154,6 @@ export default function AccountsPage() {
                               // call can associate captured cookies with this Supabase row.
                               const openVnc = (e?: React.MouseEvent) => {
                                 if (e) e.stopPropagation()
-                                if (isGoogleBooster) return
                                 setLoginModalPlatform(a.platform)
                                 setLoginModalAccountId(a.account_id)
                                 setLoginModalOpen(true)
@@ -1183,8 +1183,8 @@ export default function AccountsPage() {
                                       : "border-border/40 bg-card/40 hover:bg-card/60 hover:border-border",
                                     justFlipped && "ring-2 ring-emerald-400/70 shadow-[0_0_20px_-4px_rgba(16,185,129,0.55)] animate-pulse",
                                   )}
-                                  onClick={() => (needsAttn && !isGoogleBooster) ? openVnc() : setDetailAccountId(a.account_id)}
-                                  title={(needsAttn && !isGoogleBooster) ? "Click to sign in — opens your saved Chrome profile" : "Click for full details"}
+                                  onClick={() => needsAttn ? openVnc() : setDetailAccountId(a.account_id)}
+                                  title={needsAttn ? (isGoogleBooster ? "Click to sign into the Chrome profile (Google account)" : "Click to sign in — opens your saved Chrome profile") : "Click for full details"}
                                 >
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2 min-w-0">
@@ -1233,18 +1233,24 @@ export default function AccountsPage() {
                                       <span>Login may not persist — click <b>Sign In</b> again to save it.</span>
                                     </div>
                                   )}
-                                  {needsAttn && !isGoogleBooster && (
+                                  {needsAttn && (
                                     <Button
                                       size="sm"
                                       onClick={openVnc}
-                                      className="w-full h-7 text-xs bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 rounded-lg"
+                                      className={cn(
+                                        "w-full h-7 text-xs rounded-lg",
+                                        isGoogleBooster
+                                          ? "bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500"
+                                          : "bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500"
+                                      )}
                                     >
-                                      <Monitor className="h-3 w-3 mr-1" /> Sign In Now
+                                      <Monitor className="h-3 w-3 mr-1" />
+                                      {isGoogleBooster ? "Sign Into Chrome Profile" : "Sign In Now"}
                                     </Button>
                                   )}
-                                  {needsAttn && isGoogleBooster && (
-                                    <div className="text-[10px] text-muted-foreground/80 italic px-1">
-                                      Booster account — no sign-in needed
+                                  {isGoogleBooster && !needsAttn && (
+                                    <div className="text-[10px] text-violet-300/70 italic px-1">
+                                      Chrome profile — keeps the browser looking like a real user
                                     </div>
                                   )}
                                   {isActive && (
