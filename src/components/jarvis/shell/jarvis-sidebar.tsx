@@ -23,6 +23,7 @@ import {
   PlayCircle,
   Plug,
   Settings,
+  ShieldCheck,
   Terminal,
   Workflow,
   type LucideIcon,
@@ -67,6 +68,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/jarvis/observability", label: "Observability", icon: Eye },
   { href: "/jarvis/cost", label: "Cost", icon: DollarSign },
   { href: "/jarvis/status", label: "Status", icon: Activity },
+  { href: "/jarvis/proof", label: "Proof", icon: ShieldCheck },
   { href: "/jarvis/audit", label: "Audit", icon: FileText },
 ]
 

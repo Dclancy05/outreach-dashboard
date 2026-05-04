@@ -16,6 +16,11 @@
     "migrate": "npx tsx scripts/migrate-to-supabase.ts",
     "seed:workflows": "tsx scripts/seed-workflow-templates.ts",
     "seed:schedules": "tsx scripts/seed-schedules.ts",
+    "proof:idle": "node scripts/harness/run.mjs --scenario idle-smoke",
+    "proof:login": "node scripts/harness/run.mjs --scenario login-flow-e2e",
+    "proof:popup": "node scripts/harness/run.mjs --scenario popup-login",
+    "proof:recording": "node scripts/harness/run.mjs --scenario automation-record",
+    "proof:vnc": "node scripts/harness/run.mjs --scenario observability-vnc",
     "postinstall": "patch-package"
   },
   "dependencies": {
@@ -43,6 +48,7 @@
     "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/addon-webgl": "^0.19.0",
+    "@xterm/xterm": "^5.5.0",
     "@xyflow/react": "^12.10.0",
     "apify-client": "^2.22.0",
     "class-variance-authority": "^0.7.0",
@@ -72,8 +78,7 @@
     "tailwind-merge": "^2.2.1",
     "tailwindcss-animate": "^1.0.7",
     "ws": "^8.19.0",
-    "xlsx": "^0.18.5",
-    "xterm": "^5.3.0"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

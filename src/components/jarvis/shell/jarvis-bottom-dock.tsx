@@ -4,7 +4,7 @@
 // Memory · Agents · Runs · MCPs · Settings — equally spaced 56px row.
 // Active item draws an animated underline pill via `tabSwap`.
 
-import { Bot, Brain, PlayCircle, Plug, Settings, type LucideIcon } from "lucide-react"
+import { Bot, Brain, PlayCircle, Settings, ShieldCheck, type LucideIcon } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { motion, useReducedMotion } from "framer-motion"
@@ -31,7 +31,7 @@ const DOCK_ITEMS: DockItem[] = [
     matchPrefix: "/jarvis/agents",
     matchQuery: { key: "tab", value: "runs" },
   },
-  { href: "/jarvis/mcps", label: "MCPs", icon: Plug, matchPrefix: "/jarvis/mcps" },
+  { href: "/jarvis/proof", label: "Proof", icon: ShieldCheck, matchPrefix: "/jarvis/proof" },
   { href: "/jarvis/settings", label: "Settings", icon: Settings, matchPrefix: "/jarvis/settings" },
 ]
 

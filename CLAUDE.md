@@ -144,3 +144,30 @@ The 2026-05-02 incident — silent Chrome rotation through IG/FB/LI/TikTok every
 3. Pull memory context: `curl -s "$DASHBOARD_URL/api/memories/inject?max_tokens=4000&format=markdown"` (or use the MCP tool when wired)
 4. Confirm with user what they want before changing code
 5. When done, log the session: write `/memory-hq/sessions/$(date +%F).md`
+
+## Proof gate — no more "done" without evidence
+
+Dylan is non-technical. Do not make him remember to ask for deep testing. Every AI session must choose and run the right proof automatically before claiming work is done.
+
+Default rule:
+- If you changed UI, run a real browser check and capture console/network errors.
+- If you touched Chrome-driving code, run `npm run proof:idle` and the relevant harness scenario.
+- If you touched login/account/VNC/recording flows, run the matching `proof:*` script.
+- If you touched terminals, verify `/jarvis/terminals` in Chromium and confirm there are no `pageerror` events.
+- If you touched agents/workflows/runs, verify `/jarvis/agents`, `/api/jarvis/status`, and at least one workflow/run API path.
+- If you cannot run the proof, say exactly why and mark the work as unverified.
+
+Never say "done", "fixed", "working", or "verified" unless you can name the proof:
+- command run
+- pass/fail result
+- screenshot/video/trace/report path when the harness produced one
+- remaining risk
+
+Never weaken, skip, delete, or rewrite a failing test just to get green. Fix the app first. Test changes require an explicit reason.
+
+Existing proof commands:
+- `npm run proof:idle` — catches silent Chrome navigation / ban-risk regressions.
+- `npm run proof:login` — full account login badge-flip flow.
+- `npm run proof:popup` — popup login behavior.
+- `npm run proof:recording` — automation recording flow.
+- `npm run proof:vnc` — observability VNC flow.

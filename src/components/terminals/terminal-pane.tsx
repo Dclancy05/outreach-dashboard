@@ -31,14 +31,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Loader2, Plug, AlertTriangle, RotateCw, KeyRound, Search, X } from "lucide-react"
-import { Terminal, type IDisposable } from "xterm"
+import { Terminal, type IDisposable } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { SearchAddon } from "@xterm/addon-search"
 import { WebLinksAddon } from "@xterm/addon-web-links"
-import { WebglAddon } from "@xterm/addon-webgl"
-import { CanvasAddon } from "@xterm/addon-canvas"
 import * as Sentry from "@sentry/nextjs"
-import "xterm/css/xterm.css"
+import "@xterm/xterm/css/xterm.css"
 
 type State = "idle" | "connecting" | "connected" | "disconnected" | "error"
 
@@ -88,6 +86,7 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
   const [error, setError] = useState<string | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
+  const [terminalReady, setTerminalReady] = useState(false)
 
   // Keep refs in sync with latest callback identity so the xterm-mount effect
   // doesn't have to depend on them (and re-mount xterm whenever the parent
@@ -139,11 +138,29 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     outboundBufferSizeRef.current = 0
   }, [])
 
-  // ─── xterm mount (once) ──────────────────────────────────────────────
-  // Stable across reconnects, prop changes, and parent rerenders.
+  // Wait for this specific pane to have non-zero dimensions before opening
+  // xterm. The parent grid can be "ready" while a child pane is still settling
+  // from tabs/layout animation; opening xterm in that window can trip internal
+  // viewport code that expects renderer dimensions to exist.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+    const markReady = () => {
+      const rect = container.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0) setTerminalReady(true)
+    }
+    markReady()
+    if (terminalReady) return
+    const ro = new ResizeObserver(markReady)
+    ro.observe(container)
+    return () => ro.disconnect()
+  }, [terminalReady])
+
+  // ─── xterm mount (once ready) ────────────────────────────────────────
+  // Stable across reconnects, prop changes, and parent rerenders.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !terminalReady) return
 
     const term = new Terminal({
       // Cursor blink is a major DOM-renderer perf hit (constant repaints) and
@@ -185,35 +202,10 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     term.loadAddon(search)
     term.loadAddon(links)
     term.open(container)
-    // Renderer ladder: WebGL → Canvas → DOM (xterm default).
-    // WebGL is 10-100x faster than DOM for animated output (Claude streams
-    // hundreds of chars/sec while responding); Canvas is the safe middle
-    // ground when WebGL is unavailable (some Chromebooks, hardware-acceleration
-    // disabled, GPU driver blocklist). The DOM fallback is xterm's built-in;
-    // we don't have to do anything to engage it.
-    let webglAddon: WebglAddon | null = null
-    let canvasAddon: CanvasAddon | null = null
-    try {
-      webglAddon = new WebglAddon()
-      webglAddon.onContextLoss(() => {
-        // Tab backgrounded too long / GPU reset — drop the addon so xterm
-        // reverts to DOM until next mount. Don't try to re-attach in place;
-        // xterm's renderer is single-shot.
-        try { webglAddon?.dispose() } catch { /* */ }
-        webglAddon = null
-      })
-      term.loadAddon(webglAddon)
-    } catch {
-      webglAddon = null
-      // WebGL refused — try the canvas renderer next.
-      try {
-        canvasAddon = new CanvasAddon()
-        term.loadAddon(canvasAddon)
-      } catch {
-        canvasAddon = null
-        // Both refused — xterm uses its default DOM renderer.
-      }
-    }
+    // Use xterm's default DOM renderer. The WebGL/Canvas addon ladder was
+    // faster, but it intermittently crashed with xterm internals reading
+    // undefined `dimensions` during attach/reconnect. Reliability matters more
+    // than renderer speed for Dylan's daily terminal surface.
     try { fit.fit() } catch { /* container may be 0×0 mid-transition */ }
 
     xtermRef.current = term
@@ -245,8 +237,6 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
       container.removeEventListener("keydown", searchKeyHandler, true)
       onDataSubRef.current?.dispose()
       onDataSubRef.current = null
-      try { webglAddon?.dispose() } catch { /* */ }
-      try { canvasAddon?.dispose() } catch { /* */ }
       term.dispose()
       xtermRef.current = null
       fitRef.current = null
@@ -255,12 +245,12 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     // We intentionally exclude every changing dep — xterm must be a singleton.
     // Callbacks are read through refs above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [terminalReady])
 
   // ─── ResizeObserver — push viewport size up so VPS knows the new geometry.
   useEffect(() => {
     const container = containerRef.current
-    if (!container) return
+    if (!container || !terminalReady) return
     const ro = new ResizeObserver(() => {
       try {
         fitRef.current?.fit()
@@ -270,7 +260,7 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     })
     ro.observe(container)
     return () => ro.disconnect()
-  }, [])
+  }, [terminalReady])
 
   // ─── WS lifecycle (per wsUrl/sessionId) ──────────────────────────────
   useEffect(() => {
