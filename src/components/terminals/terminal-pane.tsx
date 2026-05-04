@@ -306,6 +306,13 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
   // ─── WS lifecycle (per wsUrl/sessionId) ──────────────────────────────
   useEffect(() => {
     if (!wsUrl) return
+    // Wait until xterm is mounted (terminalReady gates xterm-mount, which is
+    // what populates xtermRef.current and sets term.cols/term.rows via fit).
+    // Without this gate, the WS effect fires on initial render BEFORE the
+    // xterm-mount effect, so the cols/rows we append to the WS URL would be
+    // null and the backend would fall back to the 120×30 default — which is
+    // exactly the dot-cascade root cause we're trying to avoid.
+    if (!terminalReady) return
     let cancelled = false
 
     const clearReconnectTimer = () => {
@@ -502,7 +509,7 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
       try { wsRef.current?.close(1000, "unmount") } catch { /* */ }
       wsRef.current = null
     }
-  }, [wsUrl, sessionId, flushBuffer, setStateBoth])
+  }, [wsUrl, sessionId, terminalReady, flushBuffer, setStateBoth])
 
   // ─── Search bar ──────────────────────────────────────────────────────
   const runSearch = useCallback((term: string, direction: "next" | "prev") => {
