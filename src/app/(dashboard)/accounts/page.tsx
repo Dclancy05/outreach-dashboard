@@ -55,6 +55,10 @@ interface Account {
   session_age_hours?: number | null;
   has_auth_cookie?: boolean;
   has_saved_session?: boolean;
+  // Live-probe overlay (PR #91). null when probe was unavailable / unsupported.
+  live_probe_logged_in?: boolean | null;
+  live_probe_at?: string | null;
+  live_probe_reason?: string | null;
   cooldown_until?: string | null;
   cooldown_reason?: string | null;
 }
@@ -90,6 +94,20 @@ const statusColors: Record<string, string> = {
 function effectiveStatus(a: Account): string {
   if (a.session_status) return a.session_status
   return a.status || "pending_setup"
+}
+
+// "verified 4m ago" / "1h ago" / "just now" — short labels for the live-probe pill.
+function formatProbeAge(probedAt: string | null | undefined): string | null {
+  if (!probedAt) return null
+  const ms = Date.now() - new Date(probedAt).getTime()
+  if (Number.isNaN(ms)) return null
+  if (ms < 30_000) return "just now"
+  const m = Math.floor(ms / 60_000)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
 }
 
 // Human label for a badge/button — "needs_signin" looks ugly, "Needs Sign-In" doesn't.
@@ -1217,6 +1235,27 @@ export default function AccountsPage() {
                                       >
                                         <Badge className={cn("text-[10px]", statusColors[effStatus] || "bg-muted/30")}>{statusLabel(effStatus)}</Badge>
                                       </motion.div>
+                                      {(() => {
+                                        const ageLabel = formatProbeAge(a.live_probe_at)
+                                        if (!ageLabel) return null
+                                        const ok = a.live_probe_logged_in === true
+                                        const tip = a.live_probe_logged_in === false
+                                          ? `Live check ${ageLabel}: ${a.live_probe_reason || "session invalidated by the platform"}`
+                                          : `Live check ${ageLabel}: cookies look good`
+                                        return (
+                                          <span
+                                            title={tip}
+                                            className={cn(
+                                              "text-[9px] px-1.5 py-0.5 rounded border whitespace-nowrap",
+                                              ok
+                                                ? "border-emerald-500/30 text-emerald-400/80 bg-emerald-500/5"
+                                                : "border-amber-500/30 text-amber-400/80 bg-amber-500/5"
+                                            )}
+                                          >
+                                            {ok ? "✓" : "!"} {ageLabel}
+                                          </span>
+                                        )
+                                      })()}
                                       {isActive && !isGoogleBooster && (
                                         <>
                                           <button

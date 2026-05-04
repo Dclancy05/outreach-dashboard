@@ -1,5 +1,6 @@
 import { supabase, throwOnError } from "./helpers"
 import type { ActionHandler } from "../types"
+import { ensureFreshProbes, isVpsSupported, type LoginProbe } from "./login-probe"
 
 // Per-platform STRICT auth cookies — only names that, on their own, prove an
 // active logged-in session. Names like `JSESSIONID` (LinkedIn) or `ds_user_id`
@@ -85,6 +86,23 @@ const handlers: Record<string, ActionHandler> = {
     const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000    // 7d — still considered logged in
     const EXPIRED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000  // 7-30d — "expired", very likely needs sign-in
 
+    // Live-probe overlay: catches the case where saved cookies look fine but
+    // Meta/LinkedIn invalidated the session remotely (e.g. Facebook's c_user
+    // sticking around in the DB after server-side logout). Probe is per
+    // Chrome session — today there's a single shared "main", but the helper
+    // is keyed by chrome_session_id so per-account Chrome works later.
+    // Only DOWNGRADES Active → Needs Sign-In; never upgrades. See
+    // src/lib/api/login-probe.ts for the rationale.
+    const platformsInUse = Array.from(new Set(
+      accounts.map(a => String((a as Record<string, unknown>).platform || "").toLowerCase()).filter(Boolean)
+    ))
+    let probesByPlatform: Record<string, LoginProbe> = {}
+    try {
+      probesByPlatform = await ensureFreshProbes("main", platformsInUse)
+    } catch {
+      // Probe failure is non-fatal — fall back to local-cookie-only verdict.
+    }
+
     const enriched = accounts.map(acct => {
       const a = acct as Record<string, unknown> & { account_id?: string; platform?: string; status?: string; session_cookie?: unknown }
       const platform = String(a.platform || "").toLowerCase()
@@ -132,12 +150,25 @@ const handlers: Record<string, ActionHandler> = {
         derivedStatus = "active"
       }
 
+      // Live-probe downgrade: if the VPS probe says this platform is NOT
+      // logged in, override Active/warming → Needs Sign-In. Only applies to
+      // platforms the VPS knows about (instagram/facebook/linkedin/tiktok)
+      // and only when probe ran successfully (logged_in is non-null).
+      const probe = isVpsSupported(platform) ? probesByPlatform[platform] : undefined
+      const liveLoggedIn = probe?.logged_in ?? null
+      if (liveLoggedIn === false && (derivedStatus === "active" || derivedStatus === "warming" || derivedStatus === "expired")) {
+        derivedStatus = "needs_signin"
+      }
+
       return {
         ...acct,
         session_status: derivedStatus,
         session_age_hours: sessionAgeHours,
         has_auth_cookie: hasAuthCookie,
         has_saved_session: !!sess,
+        live_probe_logged_in: liveLoggedIn,
+        live_probe_at: probe?.probed_at || null,
+        live_probe_reason: probe?.reason || null,
       }
     })
 
