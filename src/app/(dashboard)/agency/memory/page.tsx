@@ -243,37 +243,13 @@ function MemoryPageInner() {
     setBusinessId(stored)
   }, [])
 
-  // ── Agents/terminals data fetches (only when their mode is active) ────
-  React.useEffect(() => {
-    if (filter !== "terminals") return
-    let cancelled = false
-    let timer: ReturnType<typeof setInterval> | null = null
-
-    async function refresh() {
-      try {
-        if (!cancelled) setSessionsLoading(true)
-        const res = await fetch("/api/terminals", { cache: "no-store" })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const json = (await res.json()) as { sessions?: SessionRow[] }
-        if (cancelled) return
-        const list = json.sessions || []
-        setSessions(list)
-        if (!focusedSessionId && list.length > 0) setFocusedSessionId(list[0].id)
-      } catch {
-        // Don't toast — TerminalsWorkspace also hits this endpoint and shows
-        // its own error UX. We just leave the sidebar empty.
-      } finally {
-        if (!cancelled) setSessionsLoading(false)
-      }
-    }
-
-    refresh()
-    timer = setInterval(refresh, 15_000)
-    return () => {
-      cancelled = true
-      if (timer) clearInterval(timer)
-    }
-  }, [filter, focusedSessionId])
+  // ── Sessions data fetch is now owned entirely by TerminalsWorkspace.
+  // The page-level SessionList sidebar is hidden in terminals mode (full-bleed),
+  // so polling /api/terminals from this effect was duplicate work — measured at
+  // 1 extra fetch every 15s on top of TerminalsWorkspace's own 30s poll. Removed.
+  // If we ever need page-level session state again (e.g., sidebar in non-terminals
+  // mode showing terminal status), add it back behind a `filter !== 'terminals'`
+  // gate so the two polls never overlap.
 
   // ── SettingsPanel still expects personas + memories as props ──────────
   const { data: personas = [] } = useSWR(["personas", businessId], () =>
