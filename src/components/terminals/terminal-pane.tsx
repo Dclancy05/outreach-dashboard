@@ -80,6 +80,10 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
   const onResizeRef = useRef<Props["onResize"]>(onResize)
   const onOpenFileRef = useRef<Props["onOpenFile"]>(onOpenFile)
   const stateRef = useRef<State>("idle")
+  // Once the user has focused this pane at least once, the blur handler will
+  // restore focus when it falls to body. Avoids stealing focus on initial
+  // mount before the user has actually engaged with the pane.
+  const userHasFocusedRef = useRef(false)
 
   const [state, setState] = useState<State>("idle")
   const [error, setError] = useState<string | null>(null)
@@ -192,6 +196,31 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
       sendOrBuffer(data)
     })
 
+    // Focus recovery — once the user has focused the terminal, keep it focused.
+    // Real bug observed in production: after the first message + Enter, output
+    // streams in and the helper textarea blurs to body. The user has to click
+    // back in to type again. We watch for blur where the new active element is
+    // body and restore focus on the next animation frame.
+    const helper = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement | null
+    const handleHelperFocus = () => {
+      userHasFocusedRef.current = true
+    }
+    const handleHelperBlur = () => {
+      // Defer so the next-focused element has time to settle. If focus went
+      // somewhere intentional (a button, the search overlay, the inbox drawer,
+      // a dialog), leave it alone. Only restore when focus has fallen to body
+      // — i.e., nothing claimed it.
+      requestAnimationFrame(() => {
+        if (!userHasFocusedRef.current) return
+        const ae = document.activeElement
+        if (ae === document.body || ae === null || ae === document.documentElement) {
+          try { xtermRef.current?.focus() } catch { /* */ }
+        }
+      })
+    }
+    helper?.addEventListener("focus", handleHelperFocus)
+    helper?.addEventListener("blur", handleHelperBlur)
+
     // Cmd/Ctrl+F opens the in-pane search bar.
     const searchKeyHandler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
@@ -210,6 +239,8 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
 
     return () => {
       container.removeEventListener("keydown", searchKeyHandler, true)
+      helper?.removeEventListener("focus", handleHelperFocus)
+      helper?.removeEventListener("blur", handleHelperBlur)
       onDataSubRef.current?.dispose()
       onDataSubRef.current = null
       term.dispose()
