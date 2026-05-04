@@ -394,6 +394,11 @@ export default function AccountsPage() {
   const [selectedAccounts, setSelectedAccounts] = useState<Set<string>>(new Set())
   const [quickFill, setQuickFill] = useState({ days: 3, start: 5, inc: 1, max: 30 })
   const [showQuickFillHelp, setShowQuickFillHelp] = useState(false)
+  // Quick explainer popup for "what does Active vs Needs Sign-In actually mean?"
+  // Linked from the (?) icon next to Refresh. Full explainer lives in the
+  // pinned 🔐 reference memory (id mem_23b5bf3b86594ae3ac52479096e8e69b);
+  // this dialog shows the short version + a link to the Memory tab.
+  const [showStatusExplainer, setShowStatusExplainer] = useState(false)
   function applyQuickFill(daysPerStep: number, start: number, increment: number, max: number) {
     const d = Math.max(1, daysPerStep)
     const s = Math.max(1, start)
@@ -962,11 +967,21 @@ export default function AccountsPage() {
               </p>
             </div>
           </div>
-          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-            <Button onClick={() => fetchAll()} variant="outline" size="sm" className="rounded-xl">
-              <RefreshCw className="h-4 w-4 mr-1" /> Refresh
-            </Button>
-          </motion.div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowStatusExplainer(true)}
+              title="What does Active vs Needs Sign-In actually mean?"
+              className="rounded-xl border border-border/50 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors flex items-center gap-1.5"
+            >
+              <Info className="h-3.5 w-3.5" />
+              How statuses work
+            </button>
+            <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+              <Button onClick={() => fetchAll()} variant="outline" size="sm" className="rounded-xl">
+                <RefreshCw className="h-4 w-4 mr-1" /> Refresh
+              </Button>
+            </motion.div>
+          </div>
         </div>
       </motion.div>
 
@@ -2284,6 +2299,49 @@ export default function AccountsPage() {
         onImported={fetchAll}
         proxies={proxies.map(p => ({ id: p.id, ip: p.ip, location_city: p.location_city || "" }))}
       />
+
+      {/* "How statuses work" — quick explainer for what Active vs Needs Sign-In
+          actually means. Full version lives in the Memory Vault (id below)
+          so future AI sessions and Dylan himself have one place to find it. */}
+      <Dialog open={showStatusExplainer} onOpenChange={setShowStatusExplainer}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <span>🔐</span> How the badges decide Active vs Needs Sign-In
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm text-muted-foreground">
+            <p>The dashboard checks <span className="font-semibold text-foreground">three things</span> in order:</p>
+            <ol className="space-y-2 list-decimal list-inside">
+              <li>
+                <span className="font-semibold text-foreground">Right cookies saved?</span>{" "}
+                Each platform needs a specific cookie (Instagram = <code className="text-[11px]">sessionid</code>, Facebook = <code className="text-[11px]">c_user</code>, LinkedIn = <code className="text-[11px]">li_at</code>). Missing → <span className="text-amber-400">Needs Sign-In</span>.
+              </li>
+              <li>
+                <span className="font-semibold text-foreground">Cookies still fresh?</span>{" "}
+                Older than 7 days → <span className="text-orange-300">Expired</span>. Older than 30 days → <span className="text-amber-400">Needs Sign-In</span>.
+              </li>
+              <li>
+                <span className="font-semibold text-foreground">Live check still passes?</span>{" "}
+                Every 10 min the dashboard quietly asks the VPS Chrome &quot;still logged in?&quot; If it says no — even with saved cookies — the badge flips to <span className="text-amber-400">Needs Sign-In</span>.
+              </li>
+            </ol>
+            <p>
+              The pill next to each badge (<span className="text-emerald-400">✓ 4m ago</span> / <span className="text-amber-400">! 4m ago</span>) shows when the last live check ran. Click <span className="text-emerald-400">✓ Verify Now</span> on a row to force a fresh check.
+            </p>
+          </div>
+          <div className="pt-2 flex items-center justify-end">
+            <Link
+              href="/agency/memory"
+              className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"
+              onClick={() => setShowStatusExplainer(false)}
+              title="Find the pinned 🔐 entry in the Memories tab"
+            >
+              Read the full explainer in Memory <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Floating bulk-action bar */}
       <AnimatePresence>

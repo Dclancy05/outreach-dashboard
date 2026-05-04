@@ -649,6 +649,15 @@ server.on("upgrade", (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => attachToSession(ws, s))
 })
 
+// Heartbeat tuning. We send a WS-protocol ping every PING_INTERVAL_MS;
+// browsers automatically reply with a pong. If we go HEARTBEAT_TIMEOUT_MS
+// without a pong, we treat the socket as half-open and terminate it — the
+// browser's reconnect ladder will re-attach. The values pair with
+// SERVER_SILENCE_TIMEOUT_MS in terminal-pane.tsx (~45s) so both sides agree
+// on the dead-connection threshold.
+const PING_INTERVAL_MS = 25_000
+const HEARTBEAT_TIMEOUT_MS = 60_000
+
 function attachToSession(ws: WebSocket, s: Session): void {
   s.lastActivityAt = Date.now()
   void dbHeartbeat(s.id)
@@ -706,7 +715,24 @@ function attachToSession(ws: WebSocket, s: Session): void {
     }
   })
 
+  // Heartbeat — ping every PING_INTERVAL_MS, terminate if no pong in
+  // HEARTBEAT_TIMEOUT_MS. The browser auto-replies to pings so this catches
+  // the half-open NAT-rebind / mobile-sleep case where TCP says fine but the
+  // peer is gone.
+  let lastPongAt = Date.now()
+  ws.on("pong", () => { lastPongAt = Date.now() })
+  const pingInterval = setInterval(() => {
+    if (ws.readyState !== ws.OPEN) return
+    if (Date.now() - lastPongAt > HEARTBEAT_TIMEOUT_MS) {
+      console.warn("[terminal-server] heartbeat timeout, terminating ws", { id: safe(s.id) })
+      try { ws.terminate() } catch { /* */ }
+      return
+    }
+    try { ws.ping() } catch { /* */ }
+  }, PING_INTERVAL_MS)
+
   ws.on("close", () => {
+    clearInterval(pingInterval)
     dataSub.dispose()
     exitSub.dispose()
     try { bridge.kill() } catch { /* */ }
