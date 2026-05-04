@@ -205,6 +205,11 @@ export function CommandPalette() {
       overlayClassName="fixed inset-0 z-[110] bg-black/60 backdrop-blur-[3px] data-[state=closed]:animate-out data-[state=open]:animate-in"
       contentClassName="fixed left-1/2 top-[12vh] z-[111] -translate-x-1/2 w-[min(640px,calc(100vw-2rem))] rounded-xl border border-zinc-700 bg-zinc-950 shadow-2xl overflow-hidden"
     >
+      {/* sr-only title — Radix Dialog (which Command.Dialog wraps) requires a
+          DialogTitle for screen-reader accessibility. The visible UI uses the
+          search input as its own affordance, so we hide this from sighted users
+          via Tailwind sr-only. */}
+      <h2 className="sr-only">Command Palette</h2>
       {/* The header doubles as the search input. */}
       <div className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2.5">
         <Search className="w-4 h-4 text-zinc-400 shrink-0" />
