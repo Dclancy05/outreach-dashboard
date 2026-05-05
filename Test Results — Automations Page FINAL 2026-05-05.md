@@ -11,11 +11,11 @@
 | **Bugs found + fixed** | 28 |
 | **Critical bugs** | 5 |
 | **High-severity bugs** | 9 |
-| **Live matrix lifecycles** | **1,337+** |
-| **Chaos runs (5 variants)** | 300+ |
-| **Memory leak runs** | 13 |
-| **A11y tab scans** | 52+ |
-| **Sweep cycles** | 12 + 5 standalone matrix runs |
+| **Live matrix lifecycles** | **1,445+** |
+| **Chaos runs (5 variants)** | 325+ |
+| **Memory leak runs** | 14 |
+| **A11y tab scans** | 56+ |
+| **Sweep cycles** | 14 + 5 standalone matrix runs |
 | **Per-cycle pass rate** | 100% (matrix), 100% (chaos post-fix) |
 | **PR commits** | 50+ |
 | **Sacred constraint violations** | 0 |
@@ -80,7 +80,8 @@ Fix: drop `dummy` from deps with explanatory comment.
 | Cycle 11 sweep | 108/108 | 25/25 | ✓ | 0/4 | |
 | Cycle 12 sweep | 135/135 | 25/25 | ✓ | 4/4 | All 4 green |
 | Cycle 13 sweep | 81/81 | 25/25 | ✓ | 4/4 | Second consecutive all-4-green |
-| **Cumulative** | **1,337+** | **300+** | **13** | **52+** | |
+| Cycle 14 sweep | 108/108 | 25/25 | ✓ | 4/4 | Third consecutive all-4-green — final cycle of audit |
+| **Cumulative** | **1,445+** | **325+** | **14** | **56+** | |
 
 A11y fluctuating between 0/4 and 4/4 because the live site has a pre-existing `button-name` violation (11 nodes) that's only present in DOM under certain conditions (modals mounted, certain panels open). Phase F's `aria-label` additions resolve it once merged.
 
