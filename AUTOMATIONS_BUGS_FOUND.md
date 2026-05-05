@@ -39,9 +39,11 @@ how each was resolved. All fixes live in PR #154 (stacked on Phase G-4 #153).
 | 23 | 🟡 | `pipeline-status/route.ts` | **Selected wrong column names** — `status, error` don't exist on `automation_test_log`. Mapped to real `success`/`error_message`. |
 | 24 | 🟡 | `recordings/start/route.ts` | **VPS sessionId not type-guarded** — could pass through objects/null and break downstream. |
 | 25 | 🟡 | `self-test/route.ts` | **Screenshot data URL was unreadable by agent** — Claude Code's Read tool can't decode data URLs. Set `screenshotPath:null` + agent skill MD updated. |
+| 26 | 🔴 | `automations/dummy-selection/route.ts` | **Proxy credential leak** — GET selected `username, password` from `proxy_groups` and returned them to ANY authenticated client. Any dashboard user could read proxy creds via this endpoint. |
 
-**Total: 24 fixed bugs** (#9 was defense-in-depth notation only). Plus 1
-convenience improvement (data-slug attributes).
+**Total: 25 fixed bugs** (#9 was defense-in-depth notation only). Plus 2
+convenience improvements (data-slug attributes + ban-risk policy
+unit-test smoke).
 
 ## Bonus deliverables in this branch
 
@@ -67,8 +69,14 @@ Across all sweep cycles run today:
 | Cycle 6 | 81 | 100% |
 | Cycle 7 | 135 | 100% |
 
-**Cumulative: ~770 matrix lifecycles** at 100% pass rate. Plus ~150
-chaos runs, ~7 memory leak runs, ~28 a11y tab scans.
+| Cycle 8 | 108 | 100% |
+| Cycle 9 | 81 | 100% |
+| Cycle 10 | 54 | 100% |
+
+**Cumulative: 1,013 matrix lifecycles** at 100% pass rate (over 18
+hours of grinding live traffic, ZERO failures, ZERO flake on the
+infrastructure side). Plus ~225 chaos runs across all 5 variants,
+~10 memory leak runs, ~40 a11y tab scans.
 
 ## Sacred constraint
 
