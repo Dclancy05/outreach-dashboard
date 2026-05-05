@@ -1155,6 +1155,15 @@ function RecordingModal({
     cookies_injected: { ok: boolean; captured_at?: string; deployable?: boolean; hint?: string; error?: string } | null
     navigated: { ok: boolean; url?: string; error?: string } | null
   }>({ target_url: null, cookies_injected: null, navigated: null })
+  // Phase D — real pipeline progress polled from /api/recordings/[id]/pipeline-status
+  const [recordingId, setRecordingId] = useState<string | null>(null)
+  const [pipelinePhase, setPipelinePhase] = useState<
+    "analyzing" | "building" | "self_testing" | "auto_repairing" | "active" | "needs_rerecording" | null
+  >(null)
+  const [recentAttempts, setRecentAttempts] = useState<Array<{
+    strategy: string; status: string; error?: string | null; ran_at?: string | null
+  }>>([])
+  const [lastPipelineError, setLastPipelineError] = useState<string | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const viewerRef = useRef<VncViewerHandle | null>(null)
 
@@ -1196,6 +1205,10 @@ function RecordingModal({
       setShowHelp(false)
       setStartError(null)
       setStartInfo({ target_url: null, cookies_injected: null, navigated: null })
+      setRecordingId(null)
+      setPipelinePhase(null)
+      setRecentAttempts([])
+      setLastPipelineError(null)
       // Re-fetch dummy selection in case the user changed it on Live View tab
       // since the modal was last opened. Cheap (one Supabase row).
       void dummy.reload()
@@ -1212,24 +1225,80 @@ function RecordingModal({
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [isRecording])
 
-  // Fake processing progress
+  // Phase D — real progress poll. Hits /api/recordings/[id]/pipeline-status
+  // every 1500ms while phase === "processing"; the backend writes
+  // pipeline_phase + pipeline_percent at each step (analyzing → building →
+  // self_testing → active|needs_rerecording). Falls back to a slow gentle
+  // animation if recording_id is missing OR the endpoint hasn't been
+  // populated yet (preview deploys ahead of the migration just see NULL).
   useEffect(() => {
-    if (phase === "processing") {
-      const interval = setInterval(() => {
-        setProcessProgress(p => {
-          if (p >= 100) {
-            clearInterval(interval)
-            setTimeout(() => setPhase("done"), 500)
-            return 100
-          }
-          // Speed varies — fast at start, slows in middle, fast at end
-          const increment = p < 30 ? 8 : p < 70 ? 3 : p < 90 ? 5 : 10
-          return Math.min(p + increment, 100)
-        })
-      }, 200)
-      return () => clearInterval(interval)
+    if (phase !== "processing") return
+
+    let cancelled = false
+    let consecutiveNullPhases = 0
+    const PRE_MIGRATION_GRACE = 12 // ~18s before falling back to fake progress
+
+    async function poll() {
+      if (!recordingId) {
+        // No id yet — gentle fake progress so the bar isn't frozen.
+        setProcessProgress(p => Math.min(p + 2, 25))
+        return
+      }
+      try {
+        const res = await fetch(`/api/recordings/${recordingId}/pipeline-status`, { cache: "no-store" })
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled) return
+        const newPhase = (data?.phase as typeof pipelinePhase) || null
+        const newPercent = typeof data?.percent === "number" ? data.percent : null
+        if (newPhase) {
+          consecutiveNullPhases = 0
+          setPipelinePhase(newPhase)
+        } else {
+          consecutiveNullPhases++
+        }
+        if (newPercent != null) {
+          // Monotonic — never let the bar go backward (avoids weird visual)
+          setProcessProgress(p => Math.max(p, newPercent))
+        } else if (consecutiveNullPhases > PRE_MIGRATION_GRACE) {
+          // Migration not applied → degrade to legacy fake animation
+          setProcessProgress(p => (p >= 95 ? 95 : Math.min(p + 5, 95)))
+        }
+        if (Array.isArray(data?.recent_attempts)) {
+          setRecentAttempts(data.recent_attempts)
+        }
+        if (data?.last_error) {
+          setLastPipelineError(data.last_error)
+        }
+        // Terminal phases — flip to done
+        if (newPhase === "active" || newPhase === "needs_rerecording") {
+          setProcessProgress(100)
+          setTimeout(() => { if (!cancelled) setPhase("done") }, 500)
+        }
+      } catch {
+        // Swallow — next poll tick will retry
+      }
     }
-  }, [phase])
+
+    // Fire immediately + interval
+    void poll()
+    const interval = setInterval(poll, 1500)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [phase, recordingId])
+
+  // Safety net — if we never get a real phase signal AND no recording_id,
+  // still complete after 8s so the user isn't stuck forever.
+  useEffect(() => {
+    if (phase !== "processing" || recordingId) return
+    const t = setTimeout(() => {
+      setProcessProgress(100)
+      setTimeout(() => setPhase("done"), 500)
+    }, 8000)
+    return () => clearTimeout(t)
+  }, [phase, recordingId])
 
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`
 
@@ -1292,6 +1361,11 @@ function RecordingModal({
       // and the card will show "Setting up..." until self-test completes
       if (data.pipeline_status === "started") {
         setPipelineStarted(true)
+      }
+      // Phase D — capture recording_id so the new pipeline-status poll can
+      // drive real progress instead of the fake 200ms timer.
+      if (data.recording_id || data.id) {
+        setRecordingId((data.recording_id || data.id) as string)
       }
     } catch (e) {
       console.error(e)
@@ -1382,16 +1456,124 @@ function RecordingModal({
                   style={{ width: `${processProgress}%` }}
                 />
               </div>
+              {/* Phase D — real status messages from the backend pipeline. */}
               <p className="text-xs text-muted-foreground">
-                {processProgress < 30 ? "Analyzing recording..." : processProgress < 60 ? "Identifying click patterns..." : processProgress < 90 ? "Building automation steps..." : "Almost done!"}
+                {pipelinePhase === "analyzing"
+                  ? "Analyzing recording..."
+                  : pipelinePhase === "building"
+                    ? "Building automation steps..."
+                    : pipelinePhase === "self_testing"
+                      ? "Testing on a safe target..."
+                      : pipelinePhase === "auto_repairing"
+                        ? "First try didn't work — George is figuring it out..."
+                        : pipelinePhase === "active"
+                          ? "Done — almost there!"
+                          : pipelinePhase === "needs_rerecording"
+                            ? "Hmm, this one's tricky — see what we tried..."
+                            : processProgress < 30
+                              ? "Getting started..."
+                              : processProgress < 60
+                                ? "Working on it..."
+                                : processProgress < 90
+                                  ? "Almost there..."
+                                  : "Wrapping up..."}
               </p>
             </div>
           </motion.div>
         </div>
       )}
 
-      {/* Done Phase */}
-      {phase === "done" && (
+      {/* Done Phase — Phase D branches on real result. If self-test failed
+          we show a failure card with what George tried; otherwise the
+          original celebration view. */}
+      {phase === "done" && pipelinePhase === "needs_rerecording" && (
+        <div className="h-full flex items-center justify-center p-8 overflow-y-auto">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.3 }}
+            className="max-w-lg w-full space-y-5"
+          >
+            <div className="text-center">
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-amber-500/20 border-2 border-amber-500/40">
+                <AlertTriangle className="h-10 w-10 text-amber-400" />
+              </div>
+              <h2 className="text-2xl font-bold mt-4 mb-1">
+                Couldn&apos;t get this working automatically
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                George tried a few different ways but the {platformLabels[automation.platform]} {automation.action} steps didn&apos;t stick. Here&apos;s what he tried:
+              </p>
+            </div>
+
+            {recentAttempts.length > 0 ? (
+              <div className="rounded-xl border border-border/50 bg-card/60 backdrop-blur-xl p-3 space-y-2 text-xs">
+                {recentAttempts.slice(0, 6).map((a, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className={`mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full ${a.status === "passed" ? "bg-emerald-500/30 text-emerald-300" : "bg-red-500/30 text-red-300"}`}>
+                      {a.status === "passed" ? "✓" : "✗"}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium">Strategy: <span className="font-mono">{a.strategy}</span></p>
+                      {a.error && (
+                        <p className="text-muted-foreground mt-0.5 break-all">{a.error.slice(0, 200)}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {lastPipelineError && !recentAttempts.some(a => a.error === lastPipelineError) && (
+                  <div className="pt-2 border-t border-border/30 text-muted-foreground">
+                    Last error: {lastPipelineError.slice(0, 200)}
+                  </div>
+                )}
+              </div>
+            ) : lastPipelineError ? (
+              <div className="rounded-xl border border-border/50 bg-card/60 backdrop-blur-xl p-3 text-xs text-muted-foreground">
+                {lastPipelineError.slice(0, 280)}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                onClick={() => {
+                  // Re-record — return to the guide view, fresh state
+                  setPhase("guide")
+                  setCurrentStep(0)
+                  setRecordingTime(0)
+                  setRecordingId(null)
+                  setPipelinePhase(null)
+                  setRecentAttempts([])
+                  setLastPipelineError(null)
+                }}
+                className="flex items-center justify-center gap-2 py-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold transition-colors"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Re-record
+              </button>
+              <button
+                onClick={handleDone}
+                className="flex items-center justify-center gap-2 py-3 rounded-xl bg-muted/40 hover:bg-muted/60 text-sm font-semibold transition-colors"
+              >
+                Save as draft
+              </button>
+              <a
+                href="/agency/observability"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 py-3 rounded-xl bg-muted/40 hover:bg-muted/60 text-sm font-semibold transition-colors"
+              >
+                <ExternalLink className="h-4 w-4" />
+                See full log
+              </a>
+            </div>
+
+            <p className="text-[11px] text-muted-foreground text-center">
+              The recording is saved on the server — you can come back to it from the Maintenance tab.
+            </p>
+          </motion.div>
+        </div>
+      )}
+      {phase === "done" && pipelinePhase !== "needs_rerecording" && (
         <div className="h-full flex items-center justify-center p-8">
           <Confetti />
           <motion.div
@@ -1411,14 +1593,18 @@ function RecordingModal({
             </motion.div>
             <div>
               <h2 className="text-3xl font-bold mb-2">
-                {pipelineStarted
-                  ? `🚀 ${platformLabels[automation.platform]} ${automation.action} is being set up!`
-                  : `✅ ${platformLabels[automation.platform]} ${automation.action} is now active!`}
+                {pipelinePhase === "active"
+                  ? `✅ ${platformLabels[automation.platform]} ${automation.action} is now active!`
+                  : pipelineStarted
+                    ? `🚀 ${platformLabels[automation.platform]} ${automation.action} is being set up!`
+                    : `✅ ${platformLabels[automation.platform]} ${automation.action} is now active!`}
               </h2>
               <p className="text-muted-foreground">
-                {pipelineStarted
-                  ? "George is analyzing your recording and building the automation. We're testing it now — you'll get a notification when it's ready!"
-                  : "George learned the steps and is ready to go."}
+                {pipelinePhase === "active"
+                  ? "George ran the test against a safe target and it worked. You're good to go."
+                  : pipelineStarted
+                    ? "George is analyzing your recording and building the automation. We're testing it now — you'll get a notification when it's ready!"
+                    : "George learned the steps and is ready to go."}
               </p>
             </div>
             <div className="flex flex-col gap-3">
@@ -1431,7 +1617,7 @@ function RecordingModal({
                 🎉 Awesome, let&apos;s go!
               </motion.button>
               <button
-                onClick={() => { setPhase("guide"); setCurrentStep(0); setRecordingTime(0) }}
+                onClick={() => { setPhase("guide"); setCurrentStep(0); setRecordingTime(0); setRecordingId(null); setPipelinePhase(null) }}
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
                 Record again (if something went wrong)

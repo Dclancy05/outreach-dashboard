@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { setPipelinePhase } from "@/lib/automations/pipeline-status"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -39,6 +40,9 @@ export async function POST(req: Request) {
     if (!recording_id) {
       return NextResponse.json({ error: "recording_id required" }, { status: 400 })
     }
+
+    // Phase D — surface real progress to the RecordingModal poll.
+    await setPipelinePhase(recording_id, "analyzing")
 
     // Fetch recording
     const { data: recording, error: fetchErr } = await supabase

@@ -73,6 +73,10 @@ async function postHandler(req: NextRequest) {
     return NextResponse.json({
       success: true,
       recording: data,
+      // Phase D: surface the id at the top level too so the RecordingModal
+      // can `setRecordingId(data.recording_id)` and start polling
+      // /api/recordings/[id]/pipeline-status without picking through nested.
+      recording_id: recordingId,
       pipeline_status: "started",
     })
   } catch (e: any) {

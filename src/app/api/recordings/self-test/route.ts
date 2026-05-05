@@ -159,6 +159,7 @@ function buildFindExpression(strategy: Strategy, step: {
 // here. The shape conversion preserves the legacy `{ url, name, skipSend? }`
 // interface this route consumes.
 import { buildLegacyTestTargets } from "@/lib/automations/platform-action-targets"
+import { setPipelinePhase } from "@/lib/automations/pipeline-status"
 const TEST_TARGETS: Record<string, Record<string, { url: string; name: string; skipSend?: boolean }>> =
   buildLegacyTestTargets()
 
@@ -325,6 +326,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "script_id or automation_id required" }, { status: 400 })
     }
 
+    // Phase D — surface real progress to the RecordingModal poll. The
+    // recording_id is resolved below from the script/automation record so
+    // we update phase as soon as we know it.
+
     // Tier 1 path — automation_id loads from the `automations` table (new
     // ManualStepBuilder-fed flow). Map its `steps` JSONB into the same
     // shape the legacy strategy runner expects.
@@ -404,6 +409,11 @@ export async function POST(req: Request) {
     const recordTable = isAutomationsTable ? "automations" : "automation_scripts"
     const recordId = (script_id || automation_id) as string
 
+    // Phase D — surface real progress now that we know which recording we
+    // belong to. recording_id lives on both legacy + new rows.
+    const recordingId = (scriptRecord.recording_id as string | null) || null
+    await setPipelinePhase(recordingId, "self_testing")
+
     const testTarget = TEST_TARGETS[platform]?.[action_type]
     if (!testTarget) {
       // No safe test target — mark as active based on script generation alone
@@ -444,6 +454,10 @@ export async function POST(req: Request) {
         // doesn't FK-fail. Future migration can add automation_id.
         await supabase.from("automation_test_log").insert({
           script_id: isAutomationsTable ? null : recordId,
+          // Phase D migration 20260505_test_log_automation_id.sql adds this
+          // FK so the failure card + Maintenance auto-repair badge can
+          // aggregate attempts per Tier-1 automation row.
+          automation_id: isAutomationsTable ? recordId : null,
           attempt_number: attemptNum,
           strategy,
           test_target: testTarget.url,
@@ -464,6 +478,10 @@ export async function POST(req: Request) {
 
         await supabase.from("automation_test_log").insert({
           script_id: isAutomationsTable ? null : recordId,
+          // Phase D migration 20260505_test_log_automation_id.sql adds this
+          // FK so the failure card + Maintenance auto-repair badge can
+          // aggregate attempts per Tier-1 automation row.
+          automation_id: isAutomationsTable ? recordId : null,
           attempt_number: attemptNum,
           strategy,
           test_target: testTarget.url,
@@ -473,6 +491,12 @@ export async function POST(req: Request) {
         })
       }
     }
+
+    // Phase D — record terminal phase before flipping automation status.
+    await setPipelinePhase(
+      recordingId,
+      winningStrategy ? "active" : "needs_rerecording"
+    )
 
     // Update record status — `automations` table doesn't have all the
     // columns automation_scripts has (test_attempts, last_test_result,

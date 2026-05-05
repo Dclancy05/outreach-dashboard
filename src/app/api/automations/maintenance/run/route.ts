@@ -1,29 +1,54 @@
 import { NextRequest, NextResponse } from "next/server"
+import { runMaintenance } from "@/lib/automations/maintenance-runner"
+import { extractAdminId } from "@/lib/audit"
 
 export const dynamic = "force-dynamic"
+export const runtime = "nodejs"
+export const maxDuration = 60
 
 /**
  * POST /api/automations/maintenance/run
  *
- * Placeholder for the manual "Run maintenance now" button on the Maintenance
- * tab. The real cron + replay engine lives in Phase 4 of the build plan —
- * this route exists so the UI can wire the button NOW without a 404.
+ * Manual "Run maintenance now" button on the Maintenance tab. Same logic
+ * as the daily cron at /api/cron/automations-maintenance, but gated by
+ * the dashboard's PIN-cookie auth (via extractAdminId) instead of
+ * CRON_SECRET. Phase D — replaces the previous 501 stub.
  *
- * Returns 501 so callers can render "Coming soon" copy instead of a generic
- * failure toast. GET is a cheap healthcheck the maintenance UI uses to tell
- * Dylan "the route is reachable, the runner itself isn't built yet."
+ * Body (optional):
+ *   { automation_ids?: string[] }
+ *     If supplied, only those automations are tested; otherwise the
+ *     default sweep (all active + needs_rerecording + fixing) runs.
  */
-export async function POST(_req: NextRequest) {
-  return NextResponse.json(
-    {
-      ok: false,
-      status: "not_implemented",
-      message: "Maintenance runner is not wired yet. The 6am ET cron + replay engine lands in Phase 4 — this button will trigger it manually once that ships.",
-    },
-    { status: 501 }
-  )
+export async function POST(req: NextRequest) {
+  const adminId = extractAdminId(req.headers.get("cookie"))
+  if (!adminId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  let automationIds: string[] | undefined
+  try {
+    const ct = req.headers.get("content-type") || ""
+    if (ct.includes("application/json")) {
+      const body = (await req.json()) as { automation_ids?: string[] }
+      if (Array.isArray(body?.automation_ids) && body.automation_ids.length > 0) {
+        automationIds = body.automation_ids
+      }
+    }
+  } catch {
+    // empty body is fine — full sweep
+  }
+
+  const result = await runMaintenance({
+    runType: "manual",
+    automationIds,
+  })
+  return NextResponse.json(result)
 }
 
-export async function GET(_req: NextRequest) {
-  return NextResponse.json({ ok: true, ready: false, note: "Maintenance runner not yet implemented (Phase 4)." })
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    ready: true,
+    note: "POST to trigger a manual maintenance run. Optional body { automation_ids?: string[] }.",
+  })
 }
