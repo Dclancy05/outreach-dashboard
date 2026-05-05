@@ -266,15 +266,24 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     container.addEventListener("keydown", searchKeyHandler, true)
 
     // Suppress xterm's mouse-button forwarding to the PTY when the alt buffer
-    // is active. Same root cause class as the wheel bug above: clicks/drag
-    // get encoded as SGR mouse escapes (\e[<…M / \e[<…m) that Claude Code's
-    // prompt UI doesn't know how to handle — it renders the bytes as middle-
-    // dot placeholders and the cursor block (yellow) jumps to wherever the
-    // click reported. Selection still works because xterm respects Shift as
-    // an override even with mouse mode on, and focus still works because the
-    // outer pane's onMouseDown handler calls term.focus().
+    // is active. Clicks/drag get encoded as SGR mouse escapes (\e[<…M /
+    // \e[<…m) that the running TUI's prompt doesn't know how to handle.
+    // Selection still works because xterm respects Shift as an override.
+    //
+    // CRITICAL: stopImmediatePropagation also kills the React onMouseDown on
+    // the outer pane wrapper, which is what would have focused the terminal
+    // when the user clicks inside the pane. To preserve "click-to-focus"
+    // behavior, we explicitly focus xterm + helper here on mousedown before
+    // the event is swallowed.
     const swallowMouse = (e: MouseEvent) => {
       if (term.buffer.active.type === "alternate" && !e.shiftKey) {
+        if (e.type === "mousedown") {
+          try { term.focus() } catch { /* */ }
+          try {
+            const helper = container.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
+            helper?.focus({ preventScroll: true })
+          } catch { /* */ }
+        }
         e.stopImmediatePropagation()
       }
     }
