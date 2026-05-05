@@ -25,13 +25,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
+  // Bug #8 fix — validate array contents + cap. Without these, a malformed
+  // body could slip non-string values into Supabase's .in() filter, and
+  // an oversized list could blow the 60s wallclock budget. The
+  // UUID regex matches canonical 8-4-4-4-12 hex format; ids that fail
+  // are silently dropped (caller can re-submit cleaned list).
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  const MAX_IDS = 50
   let automationIds: string[] | undefined
   try {
     const ct = req.headers.get("content-type") || ""
     if (ct.includes("application/json")) {
-      const body = (await req.json()) as { automation_ids?: string[] }
-      if (Array.isArray(body?.automation_ids) && body.automation_ids.length > 0) {
-        automationIds = body.automation_ids
+      const body = (await req.json()) as { automation_ids?: unknown }
+      if (Array.isArray(body?.automation_ids)) {
+        const cleaned = body.automation_ids
+          .filter((v): v is string => typeof v === "string" && UUID_RE.test(v))
+          .slice(0, MAX_IDS)
+        if (cleaned.length > 0) automationIds = cleaned
       }
     }
   } catch {
