@@ -1,0 +1,415 @@
+{
+  "matrix": {
+    "label": "STAGE 1 — matrix",
+    "code": 0,
+    "took": 3715361,
+    "summary": {
+      "ran_at": "2026-05-05T19:49:26.798Z",
+      "finished_at": "2026-05-05T20:51:22.114Z",
+      "took_ms": 3715316,
+      "total_runs": 108,
+      "passed": 108,
+      "failed": 0,
+      "pass_rate": "1.0000",
+      "by_combo": {
+        "ig_dm": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 138989,
+          "lastError": null
+        },
+        "ig_follow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137694,
+          "lastError": null
+        },
+        "ig_unfollow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 136762,
+          "lastError": null
+        },
+        "fb_dm": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137631,
+          "lastError": null
+        },
+        "fb_follow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 138145,
+          "lastError": null
+        },
+        "fb_unfollow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 138044,
+          "lastError": null
+        },
+        "li_dm": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137194,
+          "lastError": null
+        },
+        "li_connect": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137346,
+          "lastError": null
+        },
+        "li_follow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137873,
+          "lastError": null
+        },
+        "li_unfollow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137420,
+          "lastError": null
+        },
+        "tiktok_dm": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137500,
+          "lastError": null
+        },
+        "tiktok_follow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137448,
+          "lastError": null
+        },
+        "youtube_dm": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137595,
+          "lastError": null
+        },
+        "youtube_subscribe": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 138225,
+          "lastError": null
+        },
+        "x_dm": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137248,
+          "lastError": null
+        },
+        "x_follow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 138310,
+          "lastError": null
+        },
+        "x_unfollow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 136609,
+          "lastError": null
+        },
+        "x_reply": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 138026,
+          "lastError": null
+        },
+        "reddit_dm": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137997,
+          "lastError": null
+        },
+        "reddit_follow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137718,
+          "lastError": null
+        },
+        "reddit_comment": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 136758,
+          "lastError": null
+        },
+        "reddit_post": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137649,
+          "lastError": null
+        },
+        "snapchat_dm": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137086,
+          "lastError": null
+        },
+        "snapchat_follow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137995,
+          "lastError": null
+        },
+        "pinterest_dm": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137514,
+          "lastError": null
+        },
+        "pinterest_follow": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 137750,
+          "lastError": null
+        },
+        "pinterest_save_pin": {
+          "runs": 4,
+          "passed": 4,
+          "failed": 0,
+          "totalMs": 136744,
+          "lastError": null
+        }
+      }
+    }
+  },
+  "chaos": [
+    {
+      "variant": "rate-limit-hit",
+      "run": 1,
+      "label": "STAGE 2 — chaos:rate-limit-hit #1",
+      "code": 0,
+      "took": 9011
+    },
+    {
+      "variant": "rate-limit-hit",
+      "run": 2,
+      "label": "STAGE 2 — chaos:rate-limit-hit #2",
+      "code": 0,
+      "took": 8574
+    },
+    {
+      "variant": "rate-limit-hit",
+      "run": 3,
+      "label": "STAGE 2 — chaos:rate-limit-hit #3",
+      "code": 0,
+      "took": 8426
+    },
+    {
+      "variant": "rate-limit-hit",
+      "run": 4,
+      "label": "STAGE 2 — chaos:rate-limit-hit #4",
+      "code": 0,
+      "took": 8496
+    },
+    {
+      "variant": "rate-limit-hit",
+      "run": 5,
+      "label": "STAGE 2 — chaos:rate-limit-hit #5",
+      "code": 0,
+      "took": 8587
+    },
+    {
+      "variant": "network-flap",
+      "run": 1,
+      "label": "STAGE 2 — chaos:network-flap #1",
+      "code": 0,
+      "took": 18344
+    },
+    {
+      "variant": "network-flap",
+      "run": 2,
+      "label": "STAGE 2 — chaos:network-flap #2",
+      "code": 0,
+      "took": 18314
+    },
+    {
+      "variant": "network-flap",
+      "run": 3,
+      "label": "STAGE 2 — chaos:network-flap #3",
+      "code": 0,
+      "took": 18375
+    },
+    {
+      "variant": "network-flap",
+      "run": 4,
+      "label": "STAGE 2 — chaos:network-flap #4",
+      "code": 0,
+      "took": 18593
+    },
+    {
+      "variant": "network-flap",
+      "run": 5,
+      "label": "STAGE 2 — chaos:network-flap #5",
+      "code": 0,
+      "took": 18309
+    },
+    {
+      "variant": "concurrent-recordings",
+      "run": 1,
+      "label": "STAGE 2 — chaos:concurrent-recordings #1",
+      "code": 0,
+      "took": 17501
+    },
+    {
+      "variant": "concurrent-recordings",
+      "run": 2,
+      "label": "STAGE 2 — chaos:concurrent-recordings #2",
+      "code": 0,
+      "took": 17492
+    },
+    {
+      "variant": "concurrent-recordings",
+      "run": 3,
+      "label": "STAGE 2 — chaos:concurrent-recordings #3",
+      "code": 0,
+      "took": 17456
+    },
+    {
+      "variant": "concurrent-recordings",
+      "run": 4,
+      "label": "STAGE 2 — chaos:concurrent-recordings #4",
+      "code": 0,
+      "took": 17402
+    },
+    {
+      "variant": "concurrent-recordings",
+      "run": 5,
+      "label": "STAGE 2 — chaos:concurrent-recordings #5",
+      "code": 0,
+      "took": 17590
+    },
+    {
+      "variant": "vnc-drop",
+      "run": 1,
+      "label": "STAGE 2 — chaos:vnc-drop #1",
+      "code": 0,
+      "took": 20330
+    },
+    {
+      "variant": "vnc-drop",
+      "run": 2,
+      "label": "STAGE 2 — chaos:vnc-drop #2",
+      "code": 0,
+      "took": 20427
+    },
+    {
+      "variant": "vnc-drop",
+      "run": 3,
+      "label": "STAGE 2 — chaos:vnc-drop #3",
+      "code": 0,
+      "took": 20219
+    },
+    {
+      "variant": "vnc-drop",
+      "run": 4,
+      "label": "STAGE 2 — chaos:vnc-drop #4",
+      "code": 0,
+      "took": 20246
+    },
+    {
+      "variant": "vnc-drop",
+      "run": 5,
+      "label": "STAGE 2 — chaos:vnc-drop #5",
+      "code": 0,
+      "took": 20241
+    },
+    {
+      "variant": "modal-close-mid-record",
+      "run": 1,
+      "label": "STAGE 2 — chaos:modal-close-mid-record #1",
+      "code": 0,
+      "took": 12187
+    },
+    {
+      "variant": "modal-close-mid-record",
+      "run": 2,
+      "label": "STAGE 2 — chaos:modal-close-mid-record #2",
+      "code": 0,
+      "took": 12311
+    },
+    {
+      "variant": "modal-close-mid-record",
+      "run": 3,
+      "label": "STAGE 2 — chaos:modal-close-mid-record #3",
+      "code": 0,
+      "took": 12191
+    },
+    {
+      "variant": "modal-close-mid-record",
+      "run": 4,
+      "label": "STAGE 2 — chaos:modal-close-mid-record #4",
+      "code": 0,
+      "took": 12383
+    },
+    {
+      "variant": "modal-close-mid-record",
+      "run": 5,
+      "label": "STAGE 2 — chaos:modal-close-mid-record #5",
+      "code": 0,
+      "took": 12101
+    }
+  ],
+  "memory": {
+    "label": "STAGE 3 — memory leak (50 cycles)",
+    "code": 0,
+    "took": 26707
+  },
+  "a11y": [
+    {
+      "tab": "overview",
+      "label": "STAGE 4 — a11y on overview",
+      "code": 0,
+      "took": 6508
+    },
+    {
+      "tab": "your-automations",
+      "label": "STAGE 4 — a11y on your-automations",
+      "code": 0,
+      "took": 4944
+    },
+    {
+      "tab": "live-view",
+      "label": "STAGE 4 — a11y on live-view",
+      "code": 0,
+      "took": 6447
+    },
+    {
+      "tab": "maintenance",
+      "label": "STAGE 4 — a11y on maintenance",
+      "code": 0,
+      "took": 6634
+    }
+  ]
+}

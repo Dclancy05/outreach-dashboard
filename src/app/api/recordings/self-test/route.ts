@@ -15,13 +15,19 @@ async function vpsUrl(): Promise<string> {
   )
 }
 
-// 5 selector strategies in order of preference
+// 6 selector strategies in order of preference. The first 5 are
+// deterministic — Phase E adds `agent_repair` as a final fallback that
+// asks a Claude Code subagent (via agent-runner — NOT a direct Anthropic
+// API call) to look at a screenshot and propose new selectors. See
+// src/lib/automations/agent-repair.ts for the integration; this is the
+// only strategy that costs money per invocation, so it runs last.
 const STRATEGIES = [
   "original",       // 1. Recorded selectors as-is
   "text_based",     // 2. Find by visible text content
   "shadow_dom",     // 3. Deep shadow DOM traversal (like LinkedIn fix)
   "xpath",          // 4. XPath fallbacks
-  "coordinates",    // 5. Last resort: click by coordinates
+  "coordinates",    // 5. Click by coordinates
+  "agent_repair",   // 6. Phase E — AI selector repair via agent-runner subagent
 ] as const
 
 type Strategy = typeof STRATEGIES[number]
@@ -151,36 +157,23 @@ function buildFindExpression(strategy: Strategy, step: {
       if (!step.fallback_coordinates) return null
       // We'll handle this via CDP Input.dispatchMouseEvent, not evaluate
       return null
+
+    case "agent_repair":
+      // Phase E — handled by runAgentRepairForStep, not via Runtime.evaluate.
+      // Returning null tells the caller to dispatch to the agent path.
+      return null
   }
 }
 
-// Safe test targets per platform/action
-const TEST_TARGETS: Record<string, Record<string, { url: string; name: string; skipSend?: boolean }>> = {
-  ig: {
-    dm: { url: "https://www.instagram.com/starbucks/", name: "Starbucks", skipSend: true },
-    follow: { url: "https://www.instagram.com/starbucks/", name: "Starbucks" },
-    unfollow: { url: "https://www.instagram.com/starbucks/", name: "Starbucks" },
-  },
-  fb: {
-    dm: { url: "https://www.facebook.com/Starbucks", name: "Starbucks", skipSend: true },
-    follow: { url: "https://www.facebook.com/Starbucks", name: "Starbucks" },
-    unfollow: { url: "https://www.facebook.com/Starbucks", name: "Starbucks" },
-  },
-  li: {
-    dm: { url: "https://www.linkedin.com/in/satyanadella/", name: "Satya Nadella", skipSend: true },
-    connect: { url: "https://www.linkedin.com/in/satyanadella/", name: "Satya Nadella", skipSend: true },
-    follow: { url: "https://www.linkedin.com/in/satyanadella/", name: "Satya Nadella" },
-    unfollow: { url: "https://www.linkedin.com/in/satyanadella/", name: "Satya Nadella" },
-  },
-  tiktok: {
-    dm: { url: "https://www.tiktok.com/@starbucks", name: "Starbucks", skipSend: true },
-    follow: { url: "https://www.tiktok.com/@starbucks", name: "Starbucks" },
-  },
-  youtube: {
-    dm: { url: "https://www.youtube.com/@MrBeast", name: "MrBeast", skipSend: true },
-    subscribe: { url: "https://www.youtube.com/@MrBeast", name: "MrBeast" },
-  },
-}
+// Safe test targets per (platform, action) — backed by the single source of
+// truth in `src/lib/automations/platform-action-targets.ts`. Edit there, not
+// here. The shape conversion preserves the legacy `{ url, name, skipSend? }`
+// interface this route consumes.
+import { buildLegacyTestTargets } from "@/lib/automations/platform-action-targets"
+import { setPipelinePhase } from "@/lib/automations/pipeline-status"
+import { repairFailedStep } from "@/lib/automations/agent-repair"
+const TEST_TARGETS: Record<string, Record<string, { url: string; name: string; skipSend?: boolean }>> =
+  buildLegacyTestTargets()
 
 async function runCDPCommand(method: string, params: Record<string, unknown> = {}) {
   try {
@@ -196,6 +189,130 @@ async function runCDPCommand(method: string, params: Record<string, unknown> = {
   }
 }
 
+/**
+ * Phase E — agent_repair strategy implementation. Captures a screenshot of
+ * the current page, asks the agent-runner subagent for a new selector, then
+ * tries the agent's suggestions in order. Returns success on the first
+ * selector that finds + clicks an element, or success on coordinates as a
+ * last resort. Never throws — failures are returned as `{ success: false }`.
+ *
+ * The screenshot is fire-and-forget: if Page.captureScreenshot fails or the
+ * VPS doesn't support it, the agent gets called with no screenshot path
+ * and degrades to text-only reasoning.
+ */
+async function runAgentRepairForStep(args: {
+  step: {
+    description: string
+    selectors: string[]
+    fallback_text?: string
+    fallback_coordinates?: { x: number; y: number }
+    params: Record<string, unknown>
+  }
+  platform: string
+  actionType: string
+  targetUrl: string
+  /** automation_id for the per-automation cost cap (Phase E-2) */
+  automationId?: string | null
+}): Promise<{ success: boolean; error?: string; selector?: string; costCents?: number }> {
+  const { step, platform, actionType, targetUrl, automationId } = args
+
+  // 1. Screenshot capture (Bug #25):
+  // The original design was to write the screenshot to a sibling-readable
+  // path on the VPS so the agent could Read it. But Vercel routes can't
+  // write to the VPS filesystem, AND the agent's Read tool can't read
+  // data URLs. So screenshot pass-through is BROKEN as designed.
+  //
+  // For now, pass null so the agent skill knows there's no screenshot and
+  // works from the failed-selector + step-description text only. The agent
+  // skill's "insufficient screenshot" branch handles this case explicitly.
+  //
+  // Future: write the screenshot to Supabase storage and pass a signed URL
+  // the agent can fetch. Tracked as a follow-up.
+  const screenshotPath: string | null = null
+  // Capture the bytes anyway so Sentry can include them when we later add
+  // observability for failed self-tests. Cheap on a passing run because we
+  // never reach the agent_repair branch.
+  try {
+    await runCDPCommand("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: false,
+    })
+  } catch {
+    // Screenshot capture is best-effort; nothing else depends on it.
+  }
+
+  // 2. Ask the agent. Helper never throws; bad output → empty selectors.
+  // Phase E-2: pass automationId so the per-automation cost cap is checked
+  // before the runner is invoked.
+  const repair = await repairFailedStep({
+    automationId: automationId ?? null,
+    stepDescription: step.description,
+    targetText: step.fallback_text ?? null,
+    attemptedSelectors: step.selectors || [],
+    targetUrl,
+    screenshotPath,
+    platform,
+    actionType,
+  })
+  // Convert costUsd (decimal) → cost cents (int) for the test_log column.
+  const costCents = Math.round((repair.costUsd || 0) * 100)
+  if (!repair.ok) {
+    return { success: false, error: repair.error || "agent unreachable", costCents }
+  }
+  if (
+    (!repair.selectors || repair.selectors.length === 0) &&
+    !repair.coordinates
+  ) {
+    return { success: false, error: "agent returned no usable hint", costCents }
+  }
+
+  // 3. Try each suggested selector in order via Runtime.evaluate.
+  // Pass the selector as an IIFE argument with JSON.stringify so any
+  // characters in the selector (backslashes, quotes, newlines) are
+  // safely encoded — the previous `replace(/'/g, "\\'")` could be
+  // broken by `\\'` patterns and led to a JS injection if the agent
+  // returned a malicious selector. Bug #1 fix.
+  for (const sel of repair.selectors || []) {
+    try {
+      const expr = `(function(s){try{const el=document.querySelector(s);if(el){el.click();return{found:true,selector:s};}}catch(e){return{found:false,err:String(e)};}return{found:false};})(${JSON.stringify(sel)})`
+      const r = await runCDPCommand("Runtime.evaluate", {
+        expression: expr,
+        returnByValue: true,
+      })
+      const v = r?.result?.value
+      if (v?.found) {
+        return { success: true, selector: sel, costCents }
+      }
+    } catch {
+      // try next
+    }
+  }
+
+  // 4. Coordinates last resort.
+  if (repair.coordinates) {
+    try {
+      await runCDPCommand("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: repair.coordinates.x,
+        y: repair.coordinates.y,
+        button: "left",
+        clickCount: 1,
+      })
+      await runCDPCommand("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: repair.coordinates.x,
+        y: repair.coordinates.y,
+        button: "left",
+      })
+      return { success: true, selector: `coords(${repair.coordinates.x},${repair.coordinates.y})`, costCents }
+    } catch (e) {
+      return { success: false, error: `coordinate click failed: ${String(e)}`, costCents }
+    }
+  }
+
+  return { success: false, error: "all agent suggestions missed", costCents }
+}
+
 async function runTestWithStrategy(
   strategy: Strategy,
   script: Array<{
@@ -206,9 +323,14 @@ async function runTestWithStrategy(
   }>,
   platform: string,
   actionType: string,
-  testTarget: { url: string; name: string; skipSend?: boolean }
-): Promise<{ success: boolean; error?: string; stepsCompleted: number }> {
+  testTarget: { url: string; name: string; skipSend?: boolean },
+  /** Phase E-2 — automation_id for the per-automation cost cap. */
+  automationId?: string | null
+): Promise<{ success: boolean; error?: string; stepsCompleted: number; costCents?: number }> {
   let stepsCompleted = 0
+  // Phase E-2: aggregate cost across all agent_repair invocations within
+  // a single runTestWithStrategy call. Stays 0 for deterministic strategies.
+  let costCentsAccrued = 0
 
   for (const step of script) {
     try {
@@ -259,13 +381,14 @@ async function runTestWithStrategy(
         // For DM test, use a safe test message
         const typeText = testTarget.skipSend ? "[TEST - not sending]" : text
 
-        // First try to focus the input
+        // First try to focus the input. Use JSON.stringify on the selector
+        // so backslashes / quotes can't break out of the JS string (Bug #1).
         if (strategy === "original" || strategy === "text_based") {
           const selectors = step.selectors || []
           for (const sel of selectors) {
             try {
               await runCDPCommand("Runtime.evaluate", {
-                expression: `document.querySelector('${sel.replace(/'/g, "\\'")}')?.focus()`,
+                expression: `(function(s){try{document.querySelector(s)?.focus();}catch(e){}})(${JSON.stringify(sel)})`,
               })
               break
             } catch {}
@@ -296,13 +419,40 @@ async function runTestWithStrategy(
             y: step.fallback_coordinates.y,
             button: "left",
           })
+        } else if (strategy === "agent_repair") {
+          // Phase E — last-resort AI selector repair. Call agent-runner with
+          // the failed step + a screenshot; try the agent's proposed selectors
+          // in order, falling back to coordinates if it returns any. The
+          // helper never throws; if the runner is unreachable we still get a
+          // structured error and just fail this step (which falls through to
+          // the next strategy in the for-loop, which is none — so the test
+          // fails honestly).
+          const repaired = await runAgentRepairForStep({
+            step,
+            platform,
+            actionType,
+            targetUrl: testTarget.url,
+            automationId: automationId ?? null,
+          })
+          // Phase E-2: tally cost cents whether or not the call succeeded —
+          // we still pay the runner for unsuccessful attempts.
+          if (typeof repaired.costCents === "number") {
+            costCentsAccrued += repaired.costCents
+          }
+          if (!repaired.success) {
+            throw new Error(
+              `agent_repair: ${repaired.error || "no fix produced"}`
+            )
+          }
         } else {
           const expr = buildFindExpression(strategy, step)
           if (!expr) {
-            // Strategy doesn't apply to this step, try basic selector
+            // Strategy doesn't apply to this step, try basic selector.
+            // JSON.stringify the selector so it can't break out of the JS
+            // string (Bug #1).
             if (step.selectors.length > 0) {
-              const fallbackExpr = `document.querySelector('${step.selectors[0].replace(/'/g, "\\'")}')?.click()`
-              const result = await runCDPCommand("Runtime.evaluate", { expression: fallbackExpr })
+              const fallbackExpr = `(function(s){try{document.querySelector(s)?.click();}catch(e){return{err:String(e)};}return{};})(${JSON.stringify(step.selectors[0])})`
+              const result = await runCDPCommand("Runtime.evaluate", { expression: fallbackExpr, returnByValue: true })
               if (result.error) throw new Error(`Click failed: ${result.error}`)
             }
           } else {
@@ -329,11 +479,12 @@ async function runTestWithStrategy(
         success: false,
         error: `Step ${step.step} (${step.description}): ${String(e)}`,
         stepsCompleted,
+        costCents: costCentsAccrued,
       }
     }
   }
 
-  return { success: true, stepsCompleted }
+  return { success: true, stepsCompleted, costCents: costCentsAccrued }
 }
 
 export async function POST(req: Request) {
@@ -344,6 +495,10 @@ export async function POST(req: Request) {
     if (!script_id && !automation_id) {
       return NextResponse.json({ error: "script_id or automation_id required" }, { status: 400 })
     }
+
+    // Phase D — surface real progress to the RecordingModal poll. The
+    // recording_id is resolved below from the script/automation record so
+    // we update phase as soon as we know it.
 
     // Tier 1 path — automation_id loads from the `automations` table (new
     // ManualStepBuilder-fed flow). Map its `steps` JSONB into the same
@@ -424,6 +579,11 @@ export async function POST(req: Request) {
     const recordTable = isAutomationsTable ? "automations" : "automation_scripts"
     const recordId = (script_id || automation_id) as string
 
+    // Phase D — surface real progress now that we know which recording we
+    // belong to. recording_id lives on both legacy + new rows.
+    const recordingId = (scriptRecord.recording_id as string | null) || null
+    await setPipelinePhase(recordingId, "self_testing")
+
     const testTarget = TEST_TARGETS[platform]?.[action_type]
     if (!testTarget) {
       // No safe test target — mark as active based on script generation alone
@@ -456,7 +616,14 @@ export async function POST(req: Request) {
       const startTime = Date.now()
 
       try {
-        const result = await runTestWithStrategy(strategy, script, platform, action_type, testTarget)
+        const result = await runTestWithStrategy(
+          strategy,
+          script,
+          platform,
+          action_type,
+          testTarget,
+          isAutomationsTable ? recordId : null
+        )
         const duration = Date.now() - startTime
 
         // Log the attempt — automation_test_log only has script_id today;
@@ -464,6 +631,16 @@ export async function POST(req: Request) {
         // doesn't FK-fail. Future migration can add automation_id.
         await supabase.from("automation_test_log").insert({
           script_id: isAutomationsTable ? null : recordId,
+          // Phase D migration 20260505_test_log_automation_id.sql adds this
+          // FK so the failure card + Maintenance auto-repair badge can
+          // aggregate attempts per Tier-1 automation row.
+          automation_id: isAutomationsTable ? recordId : null,
+          // Phase E migration 20260506_repair_attribution.sql adds this so
+          // the Maintenance "Repaired by AI" badge can detect AI-fixed rows.
+          repaired_by_ai: strategy === "agent_repair",
+          // Phase E-2 migration 20260506_repair_cost_tracking.sql — feeds the
+          // per-automation $2 cost cap enforced by repairFailedStep().
+          cost_cents: typeof result.costCents === "number" ? result.costCents : null,
           attempt_number: attemptNum,
           strategy,
           test_target: testTarget.url,
@@ -484,6 +661,13 @@ export async function POST(req: Request) {
 
         await supabase.from("automation_test_log").insert({
           script_id: isAutomationsTable ? null : recordId,
+          // Phase D migration 20260505_test_log_automation_id.sql adds this
+          // FK so the failure card + Maintenance auto-repair badge can
+          // aggregate attempts per Tier-1 automation row.
+          automation_id: isAutomationsTable ? recordId : null,
+          // Phase E migration 20260506_repair_attribution.sql adds this so
+          // the Maintenance "Repaired by AI" badge can detect AI-fixed rows.
+          repaired_by_ai: strategy === "agent_repair",
           attempt_number: attemptNum,
           strategy,
           test_target: testTarget.url,
@@ -493,6 +677,12 @@ export async function POST(req: Request) {
         })
       }
     }
+
+    // Phase D — record terminal phase before flipping automation status.
+    await setPipelinePhase(
+      recordingId,
+      winningStrategy ? "active" : "needs_rerecording"
+    )
 
     // Update record status — `automations` table doesn't have all the
     // columns automation_scripts has (test_attempts, last_test_result,

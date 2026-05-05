@@ -31,7 +31,7 @@ async function postHandler(req: NextRequest) {
   }
   try {
     const body = await req.json()
-    const { sessionId, name, platform, action_type, tags } = body
+    const { sessionId, name, platform, action_type, tags, discard } = body
     const VPS_URL =
       (await getSecret("VPS_URL")) ||
       (await getSecret("RECORDING_SERVER_URL")) ||
@@ -48,6 +48,14 @@ async function postHandler(req: NextRequest) {
 
     if (!res.ok) return NextResponse.json(vpsData, { status: res.status })
 
+    // Bug #17 — discard path. The user clicked "Discard" mid-recording on
+    // the partial-save confirm dialog; release VPS resources but skip the
+    // DB row + async pipeline. The VPS already stopped its recording when
+    // we hit /stop above; we just don't persist or post-process anything.
+    if (discard === true) {
+      return NextResponse.json({ success: true, discarded: true })
+    }
+
     // Insert into Supabase
     const { data, error } = await supabase.from("recordings").insert({
       name: name || "Untitled Recording",
@@ -63,16 +71,26 @@ async function postHandler(req: NextRequest) {
 
     const recordingId = data.id
     const baseUrl = getBaseUrl(req)
+    // Bug #20 — forward the user's auth cookie to internal pipeline calls.
+    // /api/recordings/* is gated by middleware (admin_session cookie); a
+    // bare fetch from runPipelineAsync would 401 and the entire async
+    // pipeline (analyze → build → self-test) would silently never run.
+    // Capture the cookie now (req goes out of scope after we return).
+    const authCookie = req.headers.get("cookie") || ""
 
     // Kick off the async pipeline (don't await — let it run in background)
     // We fire-and-forget so the user gets immediate feedback
-    runPipelineAsync(baseUrl, recordingId, platform, action_type).catch(e =>
+    runPipelineAsync(baseUrl, recordingId, platform, action_type, authCookie).catch(e =>
       console.error("Pipeline error for recording", recordingId, e)
     )
 
     return NextResponse.json({
       success: true,
       recording: data,
+      // Phase D: surface the id at the top level too so the RecordingModal
+      // can `setRecordingId(data.recording_id)` and start polling
+      // /api/recordings/[id]/pipeline-status without picking through nested.
+      recording_id: recordingId,
       pipeline_status: "started",
     })
   } catch (e: any) {
@@ -82,13 +100,20 @@ async function postHandler(req: NextRequest) {
 
 export const POST = withAudit("POST /api/recordings/stop", postHandler as any)
 
-async function runPipelineAsync(baseUrl: string, recordingId: string, platform: string, actionType: string) {
+async function runPipelineAsync(baseUrl: string, recordingId: string, platform: string, actionType: string, authCookie: string) {
+  // Bug #20 fix — every internal fetch must carry the user's auth cookie
+  // so middleware allows it through. Without this the pipeline silently
+  // never ran in production.
+  const authHeaders = {
+    "Content-Type": "application/json",
+    ...(authCookie ? { cookie: authCookie } : {}),
+  } as Record<string, string>
   try {
     // Step 1: Analyze the recording
     console.log(`[Pipeline] Analyzing recording ${recordingId}...`)
     const analyzeRes = await fetch(`${baseUrl}/api/recordings/analyze`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders,
       body: JSON.stringify({ recording_id: recordingId }),
     })
     const analyzeData = await analyzeRes.json()
@@ -111,7 +136,7 @@ async function runPipelineAsync(baseUrl: string, recordingId: string, platform: 
     console.log(`[Pipeline] Building automation for ${recordingId} (${analyzeData.step_count} steps)...`)
     const buildRes = await fetch(`${baseUrl}/api/recordings/build-automation`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders,
       body: JSON.stringify({
         recording_id: recordingId,
         steps: analyzeData.steps,
@@ -130,7 +155,7 @@ async function runPipelineAsync(baseUrl: string, recordingId: string, platform: 
     console.log(`[Pipeline] Self-testing script ${buildData.script_id}...`)
     const testRes = await fetch(`${baseUrl}/api/recordings/self-test`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders,
       body: JSON.stringify({ script_id: buildData.script_id }),
     })
     const testData = await testRes.json()

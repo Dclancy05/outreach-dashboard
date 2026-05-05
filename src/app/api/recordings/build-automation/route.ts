@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { setPipelinePhase } from "@/lib/automations/pipeline-status"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -119,35 +120,120 @@ const PLATFORM_SELECTORS: Record<string, Record<string, string[]>> = {
       'tp-yt-paper-button#button',
     ],
   },
+  // ─── Phase C — newly-supported platforms. Selectors are seed values
+  // captured by hand from the live UIs as of 2026-05; the self-test +
+  // auto-repair pipeline will refine these over time. ───
+  x: {
+    dm_button: [
+      '[data-testid="DM_Button"]',
+      'a[aria-label*="Message" i]',
+      'div[role="button"][aria-label*="Send via Direct Message" i]',
+    ],
+    follow_button: [
+      '[data-testid$="-follow"]',
+      'div[role="button"]:has-text("Follow")',
+      'button:has-text("Follow")',
+    ],
+    unfollow_button: [
+      '[data-testid$="-unfollow"]',
+      'div[role="button"]:has-text("Following")',
+      'button:has-text("Unfollow")',
+    ],
+    reply_button: [
+      '[data-testid="reply"]',
+      'div[role="button"][aria-label*="Reply" i]',
+    ],
+    message_input: [
+      '[data-testid="dmComposerTextInput"]',
+      'div[role="textbox"][contenteditable="true"]',
+      '[data-testid="tweetTextarea_0"]',
+    ],
+    send_button: [
+      '[data-testid="dmComposerSendButton"]',
+      '[data-testid="tweetButton"]',
+      'div[role="button"][aria-label="Reply"]',
+    ],
+  },
+  reddit: {
+    chat_button: [
+      'a[aria-label*="Open chat" i]',
+      'button:has-text("Chat")',
+      'a[href*="/chat/"]',
+    ],
+    follow_button: [
+      'button:has-text("Follow")',
+      'shreddit-async-loader button:has-text("Follow")',
+    ],
+    comment_box: [
+      'shreddit-composer textarea',
+      'div[role="textbox"][contenteditable="true"]',
+      'textarea[name="comment"]',
+    ],
+    submit_comment_button: [
+      'button:has-text("Comment")',
+      'shreddit-composer button[type="submit"]',
+    ],
+    post_button: [
+      'a[href*="/submit"]',
+      'button:has-text("Create a post")',
+    ],
+    message_input: [
+      'div[role="textbox"][contenteditable="true"]',
+      'textarea[placeholder*="message" i]',
+    ],
+    send_button: [
+      'button[aria-label="send" i]',
+      'button:has-text("Send")',
+    ],
+  },
+  snapchat: {
+    chat_button: [
+      'div[aria-label*="Chat" i]',
+      'button[aria-label*="Send Chat" i]',
+    ],
+    add_friend_button: [
+      'button:has-text("Add Friend")',
+      'button:has-text("+ Add")',
+      'div[role="button"]:has-text("Add Friend")',
+    ],
+    message_input: [
+      'div[contenteditable="true"][role="textbox"]',
+      'textarea[placeholder*="Send a chat" i]',
+    ],
+    send_button: [
+      'button[aria-label="Send" i]',
+      'div[role="button"][aria-label="Send"]',
+    ],
+  },
+  pinterest: {
+    follow_button: [
+      'button[data-test-id="follow-button"]',
+      'button:has-text("Follow")',
+    ],
+    save_pin_button: [
+      'button[data-test-id="board-dropdown-save-button"]',
+      'button:has-text("Save")',
+    ],
+    message_button: [
+      'button[aria-label*="Message" i]',
+      'a[href*="/inbox/"]',
+    ],
+    message_input: [
+      'div[contenteditable="true"][role="textbox"]',
+      'textarea[placeholder*="Send a message" i]',
+    ],
+    send_button: [
+      'button[aria-label="Send" i]',
+      'button:has-text("Send")',
+    ],
+  },
 }
 
-// Test targets for safe self-testing
-const SAFE_TEST_TARGETS: Record<string, Record<string, string>> = {
-  ig: {
-    dm: "https://www.instagram.com/starbucks/",
-    follow: "https://www.instagram.com/starbucks/",
-    unfollow: "https://www.instagram.com/starbucks/",
-  },
-  fb: {
-    dm: "https://www.facebook.com/Starbucks",
-    follow: "https://www.facebook.com/Starbucks",
-    unfollow: "https://www.facebook.com/Starbucks",
-  },
-  li: {
-    dm: "https://www.linkedin.com/in/satyanadella/",
-    connect: "https://www.linkedin.com/in/satyanadella/",
-    follow: "https://www.linkedin.com/in/satyanadella/",
-    unfollow: "https://www.linkedin.com/in/satyanadella/",
-  },
-  tiktok: {
-    dm: "https://www.tiktok.com/@starbucks",
-    follow: "https://www.tiktok.com/@starbucks",
-  },
-  youtube: {
-    dm: "https://www.youtube.com/@MrBeast",
-    subscribe: "https://www.youtube.com/@MrBeast",
-  },
-}
+// Test targets for safe self-testing — backed by the single source of truth
+// in `src/lib/automations/platform-action-targets.ts`. To add or change a
+// safe target for any (platform, action) pair, edit that file, NOT here.
+import { buildLegacySafeTestTargets } from "@/lib/automations/platform-action-targets"
+const SAFE_TEST_TARGETS: Record<string, Record<string, string>> = buildLegacySafeTestTargets()
 
 interface RecordingAction {
   step_number: number
@@ -322,6 +408,9 @@ export async function POST(req: Request) {
     if (!recording_id) {
       return NextResponse.json({ error: "recording_id required" }, { status: 400 })
     }
+
+    // Phase D — surface real progress to the RecordingModal poll.
+    await setPipelinePhase(recording_id, "building")
 
     // If steps not provided, fetch from recording_actions
     let actions: RecordingAction[] = steps || []

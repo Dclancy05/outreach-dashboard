@@ -1,0 +1,200 @@
+{
+  "ran_at": "2026-05-05T15:47:15.265Z",
+  "finished_at": "2026-05-05T16:18:18.865Z",
+  "took_ms": 1863599,
+  "total_runs": 54,
+  "passed": 54,
+  "failed": 0,
+  "pass_rate": "1.0000",
+  "by_combo": {
+    "ig_dm": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 68882,
+      "lastError": null
+    },
+    "ig_follow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 68947,
+      "lastError": null
+    },
+    "ig_unfollow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69109,
+      "lastError": null
+    },
+    "fb_dm": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 68889,
+      "lastError": null
+    },
+    "fb_follow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 68896,
+      "lastError": null
+    },
+    "fb_unfollow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69378,
+      "lastError": null
+    },
+    "li_dm": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69007,
+      "lastError": null
+    },
+    "li_connect": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69192,
+      "lastError": null
+    },
+    "li_follow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69272,
+      "lastError": null
+    },
+    "li_unfollow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 68859,
+      "lastError": null
+    },
+    "tiktok_dm": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 68963,
+      "lastError": null
+    },
+    "tiktok_follow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69014,
+      "lastError": null
+    },
+    "youtube_dm": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69082,
+      "lastError": null
+    },
+    "youtube_subscribe": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69588,
+      "lastError": null
+    },
+    "x_dm": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69174,
+      "lastError": null
+    },
+    "x_follow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69248,
+      "lastError": null
+    },
+    "x_unfollow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 68441,
+      "lastError": null
+    },
+    "x_reply": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69223,
+      "lastError": null
+    },
+    "reddit_dm": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69321,
+      "lastError": null
+    },
+    "reddit_follow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69078,
+      "lastError": null
+    },
+    "reddit_comment": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69020,
+      "lastError": null
+    },
+    "reddit_post": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69691,
+      "lastError": null
+    },
+    "snapchat_dm": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69132,
+      "lastError": null
+    },
+    "snapchat_follow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 68868,
+      "lastError": null
+    },
+    "pinterest_dm": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 68169,
+      "lastError": null
+    },
+    "pinterest_follow": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 69222,
+      "lastError": null
+    },
+    "pinterest_save_pin": {
+      "runs": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalMs": 67916,
+      "lastError": null
+    }
+  }
+}

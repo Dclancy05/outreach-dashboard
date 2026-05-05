@@ -1,0 +1,116 @@
+{
+  "ran_at": "2026-05-05T05:32:26.118Z",
+  "finished_at": "2026-05-05T05:58:20.129Z",
+  "took_ms": 1554010,
+  "total_runs": 45,
+  "passed": 45,
+  "failed": 0,
+  "pass_rate": "1.0000",
+  "by_combo": {
+    "ig_dm": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 104738,
+      "lastError": null
+    },
+    "ig_follow": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103761,
+      "lastError": null
+    },
+    "ig_unfollow": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103681,
+      "lastError": null
+    },
+    "fb_dm": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103499,
+      "lastError": null
+    },
+    "fb_follow": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103458,
+      "lastError": null
+    },
+    "fb_unfollow": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103345,
+      "lastError": null
+    },
+    "li_dm": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103758,
+      "lastError": null
+    },
+    "li_connect": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103361,
+      "lastError": null
+    },
+    "li_follow": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103319,
+      "lastError": null
+    },
+    "tiktok_dm": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103514,
+      "lastError": null
+    },
+    "tiktok_follow": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 102391,
+      "lastError": null
+    },
+    "youtube_subscribe": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103585,
+      "lastError": null
+    },
+    "x_dm": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 104022,
+      "lastError": null
+    },
+    "x_follow": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 104232,
+      "lastError": null
+    },
+    "reddit_follow": {
+      "runs": 3,
+      "passed": 3,
+      "failed": 0,
+      "totalMs": 103330,
+      "lastError": null
+    }
+  }
+}

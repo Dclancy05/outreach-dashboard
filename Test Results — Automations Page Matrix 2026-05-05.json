@@ -1,0 +1,46 @@
+{
+  "ran_at": "2026-05-05T05:16:51.342Z",
+  "finished_at": "2026-05-05T05:28:23.075Z",
+  "took_ms": 691733,
+  "total_runs": 20,
+  "passed": 20,
+  "failed": 0,
+  "pass_rate": "1.0000",
+  "by_combo": {
+    "ig_dm": {
+      "runs": 4,
+      "passed": 4,
+      "failed": 0,
+      "totalMs": 138717,
+      "lastError": null
+    },
+    "ig_follow": {
+      "runs": 4,
+      "passed": 4,
+      "failed": 0,
+      "totalMs": 139061,
+      "lastError": null
+    },
+    "fb_dm": {
+      "runs": 4,
+      "passed": 4,
+      "failed": 0,
+      "totalMs": 138180,
+      "lastError": null
+    },
+    "li_dm": {
+      "runs": 4,
+      "passed": 4,
+      "failed": 0,
+      "totalMs": 137839,
+      "lastError": null
+    },
+    "tiktok_follow": {
+      "runs": 4,
+      "passed": 4,
+      "failed": 0,
+      "totalMs": 137929,
+      "lastError": null
+    }
+  }
+}

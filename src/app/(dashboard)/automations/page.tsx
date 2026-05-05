@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback, Fragment } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Wand2, Play, Square, Trash2, X, CheckCircle, AlertTriangle,
@@ -29,6 +29,15 @@ import { ReplayAutomationDialog } from "@/components/replay-automation-dialog"
 import { RetryQueueWidget } from "@/components/retry-queue-widget"
 import { NudgeBanners } from "@/components/nudge-banners"
 import PlatformLoginModal from "@/components/platform-login-modal"
+import {
+  VncViewer,
+  type VncViewerHandle,
+  type VncConnectionState,
+} from "@/components/jarvis/observability/vnc-viewer"
+import PopupTrustBar from "@/components/popup-trust-bar"
+import { useDummySelection } from "@/lib/hooks/use-dummy-selection"
+import { TabErrorBoundary } from "@/components/automations/tab-error-boundary"
+import * as Sentry from "@sentry/nextjs"
 import { SparklineChart } from "@/components/automations/sparkline-chart"
 import { VariableAutocomplete } from "@/components/automations/variable-autocomplete"
 import { DryRunResultModal, type DryRunResultPayload } from "@/components/automations/dry-run-result-modal"
@@ -316,6 +325,433 @@ const RECORDING_GUIDES: Record<string, { steps: GuideStep[]; exampleSearch: stri
       { title: "Stop Recording", description: "Come back and hit the stop button!" },
     ]
   },
+
+  // ─── X / Twitter ───
+  x_dm: {
+    exampleSearch: "elonmusk",
+    exampleTip: "Try searching 'elonmusk' on X",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin", tip: "Recording captures your mouse clicks and keystrokes" },
+      { title: "Open X", description: "In the browser, go to x.com", tip: "You should already be logged in" },
+      { title: "Go to a profile", description: "Search for anyone and click their profile" },
+      { title: "Click the message icon", description: "Look for the small envelope icon near the Follow button" },
+      { title: "Type a test message", description: "Type anything — 'hello' works fine", tip: "If the user has DMs locked, X will show a paywall — pick a different account" },
+      { title: "Send it", description: "Press Enter or click the send arrow" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the X DM flow" },
+    ]
+  },
+  x_follow: {
+    exampleSearch: "elonmusk",
+    exampleTip: "Try searching 'elonmusk' on X",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open X", description: "In the browser, go to x.com" },
+      { title: "Go to a profile", description: "Search for anyone and click their profile" },
+      { title: "Click Follow", description: "Hit the 'Follow' button on their profile" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  x_unfollow: {
+    exampleSearch: "elonmusk",
+    exampleTip: "Try someone you already follow",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open X", description: "In the browser, go to x.com" },
+      { title: "Go to a profile you follow", description: "Search for someone you're already following" },
+      { title: "Hover the Following button", description: "Hover over 'Following' — it changes to 'Unfollow'" },
+      { title: "Click Unfollow", description: "Click the button (now showing 'Unfollow')" },
+      { title: "Confirm", description: "If X shows a confirm dialog, click Unfollow again" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  x_reply: {
+    exampleSearch: "elonmusk",
+    exampleTip: "Find any of their recent posts",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open X", description: "In the browser, go to x.com" },
+      { title: "Find a post to reply to", description: "Open any tweet (a post) by clicking on it" },
+      { title: "Click the reply icon", description: "The speech-bubble icon under the post" },
+      { title: "Type a test reply", description: "Type anything — 'great post' works fine" },
+      { title: "Send it", description: "Click 'Reply' to send" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the X reply flow" },
+    ]
+  },
+
+  // ─── Reddit ───
+  reddit_dm: {
+    exampleSearch: "u/spez",
+    exampleTip: "u/spez (Reddit cofounder) is a safe public test target",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin", tip: "Recording captures your mouse clicks and keystrokes" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com", tip: "You should already be logged in" },
+      { title: "Go to a profile", description: "Click on any redditor's username (or visit reddit.com/user/spez)" },
+      { title: "Click Chat", description: "Hit the 'Chat' button on their profile", tip: "Some users disable chat — pick another if Chat doesn't appear" },
+      { title: "Type a test message", description: "Type anything — 'hello' works fine" },
+      { title: "Send it", description: "Press Enter or click the send arrow" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the Reddit chat flow" },
+    ]
+  },
+  reddit_follow: {
+    exampleSearch: "u/spez",
+    exampleTip: "u/spez is a safe public test target",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com" },
+      { title: "Go to a profile", description: "Click on any redditor's username" },
+      { title: "Click Follow", description: "Hit the 'Follow' button on their profile" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  reddit_comment: {
+    exampleSearch: "r/test",
+    exampleTip: "r/test is the official sandbox subreddit — comments are welcome there",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com" },
+      { title: "Open a post", description: "Click into any post (try one in r/test)" },
+      { title: "Click the comment box", description: "Click 'Add a comment' or the text field at the bottom" },
+      { title: "Type a test comment", description: "Type anything — 'test' works fine" },
+      { title: "Hit Comment", description: "Click the 'Comment' button to submit" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  reddit_post: {
+    exampleSearch: "r/test",
+    exampleTip: "Always test post submissions in r/test — it's built for sandbox traffic",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com" },
+      { title: "Go to r/test", description: "In the search bar type 'r/test' and open the subreddit" },
+      { title: "Click Create Post", description: "Hit the '+ Create a post' button" },
+      { title: "Pick the Text tab", description: "Make sure 'Text' is selected (not Image / Link / Poll)" },
+      { title: "Fill title + body", description: "Title: 'test'. Body: 'test'." },
+      { title: "Click Post", description: "Submit the post" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the Reddit post flow" },
+    ]
+  },
+
+  // ─── Snapchat ───
+  snapchat_dm: {
+    exampleSearch: "team.snapchat",
+    exampleTip: "team.snapchat is Snapchat's official welcome account — safe to message",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Snapchat web", description: "In the browser, go to web.snapchat.com", tip: "You should already be logged in" },
+      { title: "Open Chats", description: "Click the chat icon (speech bubble) on the left" },
+      { title: "Pick or start a chat", description: "Click an existing chat with team.snapchat, or start a new one" },
+      { title: "Type a test message", description: "Type anything — 'hello' works fine" },
+      { title: "Send it", description: "Press Enter or click the send arrow" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "Snapchat's web client is sensitive — keep tests rare" },
+    ]
+  },
+  snapchat_follow: {
+    exampleSearch: "team.snapchat",
+    exampleTip: "team.snapchat is the safest follow target",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Snapchat web", description: "In the browser, go to web.snapchat.com" },
+      { title: "Find an account", description: "Use search to find 'team.snapchat' or any public account" },
+      { title: "Open the profile", description: "Click into the profile from the search results" },
+      { title: "Click Add Friend", description: "Hit '+ Add Friend' (Snapchat's version of follow)" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+
+  // ─── Pinterest ───
+  pinterest_dm: {
+    exampleSearch: "starbucks",
+    exampleTip: "Starbucks Pinterest is a safe target — they get tons of messages",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin", tip: "Recording captures your mouse clicks and keystrokes" },
+      { title: "Open Pinterest", description: "In the browser, go to pinterest.com", tip: "You should already be logged in" },
+      { title: "Find a profile", description: "Search for any Pinterest account (try 'starbucks')" },
+      { title: "Open the profile", description: "Click into their profile page" },
+      { title: "Click Message", description: "Hit the message / chat icon (paper plane near the Follow button)", tip: "Not every Pinterest account has DMs enabled" },
+      { title: "Type a test message", description: "Type anything — 'hello' works fine" },
+      { title: "Send it", description: "Click Send" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the Pinterest DM flow" },
+    ]
+  },
+  pinterest_follow: {
+    exampleSearch: "starbucks",
+    exampleTip: "Try following 'starbucks' on Pinterest",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Pinterest", description: "In the browser, go to pinterest.com" },
+      { title: "Find a profile", description: "Search for any Pinterest account" },
+      { title: "Open the profile", description: "Click into their profile page" },
+      { title: "Click Follow", description: "Hit the red 'Follow' button" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  pinterest_save_pin: {
+    exampleSearch: "starbucks",
+    exampleTip: "Save a pin from any popular profile",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Pinterest", description: "In the browser, go to pinterest.com" },
+      { title: "Open a pin", description: "Find any pin and click it open" },
+      { title: "Click Save", description: "Hit the red 'Save' button on the pin" },
+      { title: "Pick a board", description: "Select an existing board (or 'Create board' for a new one)" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the Pinterest save-pin flow" },
+    ]
+  },
+
+  /* ─── Phase C-2 — Lead enrichment scrape guides ─── */
+  // These guides walk the user through extracting a single field
+  // (follower count, bio, etc.) from a public profile. The recording
+  // captures: navigate → find element → highlight/copy → stop. George
+  // learns the selector chain so future runs scrape that field
+  // unattended for new leads.
+
+  // Instagram enrichment
+  ig_scrape_follower_count: {
+    exampleSearch: "starbucks",
+    exampleTip: "Try a public IG profile like 'starbucks'",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Instagram", description: "In the browser, go to instagram.com" },
+      { title: "Search for a profile", description: "Use the search bar to find any business" },
+      { title: "Open the profile", description: "Click their username to open the profile page" },
+      { title: "Click the 'followers' link", description: "It's between Posts and Following at the top of the profile", tip: "George needs to see WHERE the count is, even if you don't open the modal" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will pull the number from the same spot every run" },
+    ]
+  },
+  ig_scrape_following_count: {
+    exampleSearch: "starbucks",
+    exampleTip: "Try a public IG profile like 'starbucks'",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Instagram", description: "In the browser, go to instagram.com" },
+      { title: "Open any profile", description: "Search and click into any public business profile" },
+      { title: "Click the 'following' link", description: "It's the third metric at the top (Posts / Followers / Following)" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  ig_scrape_post_count: {
+    exampleSearch: "starbucks",
+    exampleTip: "Try any IG profile",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Instagram", description: "In the browser, go to instagram.com" },
+      { title: "Open any profile", description: "Search and click into any public profile" },
+      { title: "Click the 'posts' label", description: "First metric at the top of the profile" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  ig_scrape_bio: {
+    exampleSearch: "starbucks",
+    exampleTip: "Pick a profile with a real bio (avoid empty profiles)",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Instagram", description: "In the browser, go to instagram.com" },
+      { title: "Open any profile", description: "Search and click into any public profile" },
+      { title: "Click anywhere in the bio text", description: "The text under the username + name. Just a click is enough — George reads the whole block." },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  ig_scrape_category: {
+    exampleSearch: "starbucks",
+    exampleTip: "Business profiles show a category right above the bio",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Instagram", description: "In the browser, go to instagram.com" },
+      { title: "Open a business profile", description: "Personal profiles don't have categories — pick a business (e.g., 'starbucks')" },
+      { title: "Click the category line", description: "It's the small grey text right under the name (e.g., 'Coffee Shop')" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will grab the category text on every run" },
+    ]
+  },
+
+  // Facebook enrichment
+  fb_scrape_follower_count: {
+    exampleSearch: "Starbucks",
+    exampleTip: "Try a Facebook page like 'Starbucks'",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Facebook", description: "In the browser, go to facebook.com" },
+      { title: "Search for a page", description: "Find a public business page" },
+      { title: "Open the page", description: "Click into the page" },
+      { title: "Click 'Followers'", description: "Usually under the page name in the About section" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  fb_scrape_following_count: {
+    exampleSearch: "Starbucks",
+    exampleTip: "Pages don't 'follow' but profiles do — for pages, this scrapes 'page likes' instead",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Facebook", description: "In the browser, go to facebook.com" },
+      { title: "Open a page", description: "Search and click into any business page" },
+      { title: "Click 'Following' (or 'Likes')", description: "Either metric — George can scrape whichever the page exposes" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  fb_scrape_post_count: {
+    exampleSearch: "Starbucks",
+    exampleTip: "Active pages have higher post counts",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Facebook", description: "In the browser, go to facebook.com" },
+      { title: "Open any page", description: "Search and click into a business page" },
+      { title: "Scroll to the Posts section", description: "Or click the 'Posts' tab if the page has tabs" },
+      { title: "Click any post date stamp", description: "George uses the count visible in the page header" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  fb_scrape_bio: {
+    exampleSearch: "Starbucks",
+    exampleTip: "The 'About' tab usually has the longest text",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Facebook", description: "In the browser, go to facebook.com" },
+      { title: "Open any page", description: "Search and click into a business page" },
+      { title: "Click 'About'", description: "Or 'Intro' if the page has it on the left rail" },
+      { title: "Click anywhere in the bio text", description: "George reads the full block — one click is enough" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  fb_scrape_category: {
+    exampleSearch: "Starbucks",
+    exampleTip: "Categories like 'Coffee shop' or 'Restaurant' show right under the page name",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Facebook", description: "In the browser, go to facebook.com" },
+      { title: "Open a business page", description: "Personal profiles don't have categories" },
+      { title: "Click the category text", description: "Right under the page name in the header" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+
+  // LinkedIn enrichment
+  li_scrape_follower_count: {
+    exampleSearch: "Satya Nadella",
+    exampleTip: "Most profiles + company pages show follower count",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open LinkedIn", description: "In the browser, go to linkedin.com" },
+      { title: "Open any profile or company page", description: "Search and click in" },
+      { title: "Click the 'followers' link", description: "Below the name on a profile, or in the header on a company page" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  li_scrape_following_count: {
+    exampleSearch: "Satya Nadella",
+    exampleTip: "Profile pages show 'connections' which is functionally the same",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open LinkedIn", description: "In the browser, go to linkedin.com" },
+      { title: "Open any profile", description: "Search and click in" },
+      { title: "Click 'connections' or 'following'", description: "Whichever metric the profile exposes" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  li_scrape_post_count: {
+    exampleSearch: "Satya Nadella",
+    exampleTip: "The 'Activity' section shows post count",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open LinkedIn", description: "In the browser, go to linkedin.com" },
+      { title: "Open any profile", description: "Search and click in" },
+      { title: "Scroll to 'Activity'", description: "Section partway down the profile" },
+      { title: "Click 'Show all posts'", description: "Or any post — George reads the visible count" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  li_scrape_bio: {
+    exampleSearch: "Satya Nadella",
+    exampleTip: "The headline text under the name is the bio",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open LinkedIn", description: "In the browser, go to linkedin.com" },
+      { title: "Open any profile", description: "Search and click in" },
+      { title: "Click the headline", description: "Text directly under the person's name (e.g., 'CEO at Microsoft')" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  li_scrape_category: {
+    exampleSearch: "Microsoft",
+    exampleTip: "For company pages, the industry tag shows below the name",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open LinkedIn", description: "In the browser, go to linkedin.com" },
+      { title: "Open a company page", description: "Search 'Microsoft' or any company" },
+      { title: "Click the industry text", description: "Small text under the company name (e.g., 'Software Development')" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+
+  // X / Twitter enrichment
+  x_scrape_follower_count: {
+    exampleSearch: "elonmusk",
+    exampleTip: "X shows followers + following right under the bio",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open X", description: "In the browser, go to x.com" },
+      { title: "Open any profile", description: "Search 'elonmusk' or any public account" },
+      { title: "Click 'Followers'", description: "Below the bio, next to 'Following'" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  x_scrape_bio: {
+    exampleSearch: "elonmusk",
+    exampleTip: "The bio is the description text under the username",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open X", description: "In the browser, go to x.com" },
+      { title: "Open any profile", description: "Search and click in" },
+      { title: "Click the bio text", description: "Multi-line description below the username" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+
+  // Reddit enrichment
+  reddit_scrape_karma: {
+    exampleSearch: "u/spez",
+    exampleTip: "u/spez (Reddit's CEO) has tons of karma — safe to scrape",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com/user/spez" },
+      { title: "Find the karma count", description: "Right side of the profile shows 'Post karma' and 'Comment karma'" },
+      { title: "Click the karma number", description: "Either one — George will pull both" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  reddit_scrape_bio: {
+    exampleSearch: "u/spez",
+    exampleTip: "The 'About' text under the avatar is the bio",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com/user/spez" },
+      { title: "Find the About section", description: "Right rail of the profile" },
+      { title: "Click anywhere in the About text", description: "George will read the whole block" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+
+  // Pinterest enrichment
+  pinterest_scrape_follower_count: {
+    exampleSearch: "starbucks",
+    exampleTip: "Pinterest shows followers right under the username",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Pinterest", description: "In the browser, go to pinterest.com" },
+      { title: "Open any profile", description: "Search and click into a public account" },
+      { title: "Click 'followers'", description: "Below the username in the profile header" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  pinterest_scrape_bio: {
+    exampleSearch: "starbucks",
+    exampleTip: "The bio is the description text under the username",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Pinterest", description: "In the browser, go to pinterest.com" },
+      { title: "Open any profile", description: "Search and click in" },
+      { title: "Click the bio text", description: "Description text under the username + handle" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
 }
 
 /* ─── Automation Definitions ─── */
@@ -440,17 +876,26 @@ const AUTOMATION_TAGS = [
   { value: "utility", label: "Utility", hint: "Housekeeping tasks (logout, refresh, etc.)" },
 ] as const
 
-const VNC_URL = process.env.NEXT_PUBLIC_VNC_URL || "https://srv1197943.taild42583.ts.net/vnc.html"
-// noVNC password query param is plaintext — RFB truncates to 8 chars at the
-// server. Dashboard is behind admin-PIN + Tailscale funnel, but embedding a
-// hardcoded fallback would leak the password to anyone who inspects the
-// client bundle — so the password is env-only. If NEXT_PUBLIC_VNC_PASSWORD
-// is not set, we render the iframe without a password and show a friendly
-// in-app message instead (see VncEmbedNotice below).
-const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || ""
-const VNC_EMBED_URL = VNC_PASSWORD
-  ? `${VNC_URL}${VNC_URL.includes("?") ? "&" : "?"}autoconnect=true&resize=scale&password=${encodeURIComponent(VNC_PASSWORD)}`
-  : ""
+// VNC connection — uses the WebSocket-based VncViewer that the accounts page
+// already uses (src/components/platform-login-modal.tsx:55-70). The legacy
+// iframe pointed at https://srv1197943.taild42583.ts.net/vnc.html which now
+// returns OpenClaw HTML (nginx serves the Control app at every path), so the
+// embed came up "refused to connect." This module-level config is consumed by
+// RecordingModal + LiveViewTab + the header "Open Full VNC" link below.
+// Phase A keeps the shared "main" Chrome session; Phase B swaps for per-group.
+const VNC_WS_BASE =
+  process.env.NEXT_PUBLIC_VNC_WS_BASE ||
+  "wss://srv1197943.taild42583.ts.net/websockify"
+const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || "DcMktg20"
+function buildWsUrlForSession(sessionId: string): string {
+  const base = VNC_WS_BASE.replace(/\/+$/, "")
+  return `${base}/${encodeURIComponent(sessionId)}`
+}
+// Canonical "Open Full VNC" / pop-out destination. The /jarvis/observability
+// page renders the same VncViewer over the working WSS path, so opening it in
+// a new tab gives the user the full Chrome view without needing to debug a
+// broken iframe. Replaces every previous direct link to vnc.html.
+const VNC_FULLSCREEN_URL = "/jarvis/observability"
 
 /* ─── Confetti ─── */
 function Confetti() {
@@ -958,15 +1403,51 @@ function RecordingModal({
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [phase, setPhase] = useState<"guide" | "processing" | "done">("guide")
   const [processProgress, setProcessProgress] = useState(0)
-  const [vncLoaded, setVncLoaded] = useState(false)
-  const [vncError, setVncError] = useState(false)
+  const [vncState, setVncState] = useState<VncConnectionState>("idle")
   const [showHelp, setShowHelp] = useState(false)
   const [pipelineStarted, setPipelineStarted] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
+  const [startInfo, setStartInfo] = useState<{
+    target_url: string | null
+    cookies_injected: { ok: boolean; captured_at?: string; deployable?: boolean; hint?: string; error?: string } | null
+    navigated: { ok: boolean; url?: string; error?: string } | null
+  }>({ target_url: null, cookies_injected: null, navigated: null })
+  // Phase D — real pipeline progress polled from /api/recordings/[id]/pipeline-status
+  const [recordingId, setRecordingId] = useState<string | null>(null)
+  const [pipelinePhase, setPipelinePhase] = useState<
+    "analyzing" | "building" | "self_testing" | "auto_repairing" | "active" | "needs_rerecording" | null
+  >(null)
+  const [recentAttempts, setRecentAttempts] = useState<Array<{
+    strategy: string; status: string; error?: string | null; ran_at?: string | null
+  }>>([])
+  const [lastPipelineError, setLastPipelineError] = useState<string | null>(null)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
-  const popoutOpenedRef = useRef(false)
+  const viewerRef = useRef<VncViewerHandle | null>(null)
+
+  // Dummy group + active account — same selection LiveViewTab persists. Used
+  // to tell `/api/recordings/start` which Chrome profile (cookies) to load
+  // before the user starts recording.
+  const dummy = useDummySelection()
 
   const guideKey = automation ? `${automation.platform}_${automation.actionKey}` : ""
   const guide = RECORDING_GUIDES[guideKey]
+
+  // Stable WS URL per modal-open. Phase A: shared "main" Chrome session id —
+  // the same one the accounts page uses (so this re-uses the existing logged-in
+  // browser). Phase B will compute this from the picked dummy group so each
+  // group gets its own Chrome profile. Memoized so VncViewer doesn't see a
+  // fresh string every render.
+  const vncWsUrl = useMemo(() => buildWsUrlForSession("main"), [])
+  // Stable per-open telemetry session id so the VncViewer's `/api/observability/vnc`
+  // POSTs and our /api/recordings/start audit row tie together as one session.
+  // crypto.randomUUID() instead of Math.random() — CodeQL rule
+  // "insecure randomness in a security context" treats Math.random as
+  // unsafe even for correlation-only ids; the Web Crypto API satisfies
+  // it cleanly. Supported in all browsers + Node 19+.
+  const recordingSessionId = useMemo(
+    () => `rec_${crypto.randomUUID().slice(0, 12)}`,
+    [isOpen] // eslint-disable-line react-hooks/exhaustive-deps -- intentional: new id per open
+  )
 
   // Reset state when modal opens
   useEffect(() => {
@@ -977,31 +1458,26 @@ function RecordingModal({
       setSessionId(null)
       setPhase("guide")
       setProcessProgress(0)
-      setVncLoaded(false)
-      setVncError(false)
+      setVncState("idle")
       setShowHelp(false)
+      setStartError(null)
+      setStartInfo({ target_url: null, cookies_injected: null, navigated: null })
+      setRecordingId(null)
+      setPipelinePhase(null)
+      setRecentAttempts([])
+      setLastPipelineError(null)
+      // Re-fetch dummy selection in case the user changed it on Live View tab
+      // since the modal was last opened. Cheap (one Supabase row).
+      void dummy.reload()
     }
+    // BUG FIX: do NOT add `dummy` to deps. The hook returns a fresh object
+    // every render, which would refire this effect on every render and
+    // immediately reset isRecording/sessionId/etc — making the modal
+    // unusable (Start Recording → state flashes true → effect re-runs →
+    // back to false). isOpen transitions are the only thing we want to
+    // trigger reset on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen])
-
-  // VNC load timeout — if the iframe doesn't fire `onLoad` within 6s, treat
-  // it as an error so the "Pop Out Browser" fallback surfaces. Without this
-  // the user just sees "Loading browser view..." forever when the iframe is
-  // silently blocked (e.g. by x-frame-options DENY on the VPS nginx, or when
-  // the VNC password env var is missing so VNC_EMBED_URL is empty).
-  useEffect(() => {
-    if (!isOpen || phase !== "guide") return
-    if (vncLoaded || vncError) return
-    // If VNC_EMBED_URL is empty, fire the fallback immediately so we don't
-    // even try to load a broken iframe.
-    if (!VNC_EMBED_URL) {
-      setVncError(true)
-      return
-    }
-    const timer = setTimeout(() => {
-      if (!vncLoaded) setVncError(true)
-    }, 6000)
-    return () => clearTimeout(timer)
-  }, [isOpen, phase, vncLoaded, vncError])
 
   // Recording timer
   useEffect(() => {
@@ -1013,45 +1489,179 @@ function RecordingModal({
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [isRecording])
 
-  // Fake processing progress
+  // Phase D — real progress poll. Hits /api/recordings/[id]/pipeline-status
+  // every 1500ms while phase === "processing"; the backend writes
+  // pipeline_phase + pipeline_percent at each step (analyzing → building →
+  // self_testing → active|needs_rerecording). Falls back to a slow gentle
+  // animation if recording_id is missing OR the endpoint hasn't been
+  // populated yet (preview deploys ahead of the migration just see NULL).
   useEffect(() => {
-    if (phase === "processing") {
-      const interval = setInterval(() => {
-        setProcessProgress(p => {
-          if (p >= 100) {
-            clearInterval(interval)
-            setTimeout(() => setPhase("done"), 500)
-            return 100
-          }
-          // Speed varies — fast at start, slows in middle, fast at end
-          const increment = p < 30 ? 8 : p < 70 ? 3 : p < 90 ? 5 : 10
-          return Math.min(p + increment, 100)
-        })
-      }, 200)
-      return () => clearInterval(interval)
+    if (phase !== "processing") return
+
+    let cancelled = false
+    let consecutiveNullPhases = 0
+    const PRE_MIGRATION_GRACE = 12 // ~18s before falling back to fake progress
+
+    async function poll() {
+      if (!recordingId) {
+        // No id yet — gentle fake progress so the bar isn't frozen.
+        setProcessProgress(p => Math.min(p + 2, 25))
+        return
+      }
+      try {
+        const res = await fetch(`/api/recordings/${recordingId}/pipeline-status`, { cache: "no-store" })
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled) return
+        const newPhase = (data?.phase as typeof pipelinePhase) || null
+        const newPercent = typeof data?.percent === "number" ? data.percent : null
+        if (newPhase) {
+          consecutiveNullPhases = 0
+          setPipelinePhase(newPhase)
+        } else {
+          consecutiveNullPhases++
+        }
+        if (newPercent != null) {
+          // Monotonic — never let the bar go backward (avoids weird visual)
+          setProcessProgress(p => Math.max(p, newPercent))
+        } else if (consecutiveNullPhases > PRE_MIGRATION_GRACE) {
+          // Migration not applied → degrade to legacy fake animation
+          setProcessProgress(p => (p >= 95 ? 95 : Math.min(p + 5, 95)))
+        }
+        if (Array.isArray(data?.recent_attempts)) {
+          setRecentAttempts(data.recent_attempts)
+        }
+        if (data?.last_error) {
+          setLastPipelineError(data.last_error)
+        }
+        // Terminal phases — flip to done
+        if (newPhase === "active" || newPhase === "needs_rerecording") {
+          setProcessProgress(100)
+          setTimeout(() => { if (!cancelled) setPhase("done") }, 500)
+        }
+      } catch {
+        // Swallow — next poll tick will retry
+      }
     }
-  }, [phase])
+
+    // Fire immediately + interval
+    void poll()
+    const interval = setInterval(poll, 1500)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [phase, recordingId])
+
+  // Safety net — if we never get a real phase signal AND no recording_id,
+  // still complete after 8s so the user isn't stuck forever.
+  useEffect(() => {
+    if (phase !== "processing" || recordingId) return
+    const t = setTimeout(() => {
+      setProcessProgress(100)
+      setTimeout(() => setPhase("done"), 500)
+    }, 8000)
+    return () => clearTimeout(t)
+  }, [phase, recordingId])
 
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`
 
   const startRecording = async () => {
+    setStartError(null)
     try {
-      const res = await fetch("/api/recordings/start", { method: "POST" })
+      const res = await fetch("/api/recordings/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: automation?.platform,
+          action_type: automation?.actionKey,
+          account_group_id: dummy.group?.id,
+          account_id: dummy.selectedAccountId || undefined,
+        }),
+      })
       const data = await res.json()
-      if (data.success) {
-        setSessionId(data.sessionId)
-        setIsRecording(true)
-        setRecordingTime(0)
-        setCurrentStep(1) // Auto-advance past "Click Start Recording"
+      if (res.status === 429) {
+        setStartError(
+          `Rate limited — try again in a minute${data?.retryAt ? ` (after ${new Date(data.retryAt).toLocaleTimeString()})` : ""}.`
+        )
+        return
       }
+      if (!res.ok || !data?.success) {
+        setStartError(data?.error || `Failed to start recording (HTTP ${res.status})`)
+        return
+      }
+      setSessionId(data.sessionId)
+      setStartInfo({
+        target_url: data.target_url ?? null,
+        cookies_injected: data.cookies_injected ?? null,
+        navigated: data.navigated ?? null,
+      })
+      setIsRecording(true)
+      setRecordingTime(0)
+      setCurrentStep(1) // Auto-advance past "Click Start Recording"
     } catch (e) {
-      console.error(e)
+      const msg = e instanceof Error ? e.message : "network error"
+      setStartError(msg)
+      try {
+        Sentry.addBreadcrumb({
+          category: "automations",
+          message: `startRecording threw: ${msg}`,
+          level: "error",
+        })
+        Sentry.setTag("feature", "automations")
+        Sentry.captureException(e)
+      } catch {}
     }
   }
+
+  // Phase F — confirm dialog + partial-save when the user tries to close
+  // mid-recording (X / ESC / outside-click / browser tab close). Without
+  // this, an accidental click discards the recording and the user has to
+  // start over. The "save partial" path stops recording cleanly so the
+  // backend gets the steps captured so far (status flips to draft).
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false)
+  const requestClose = useCallback(() => {
+    if (isRecording) {
+      setShowCloseConfirm(true)
+    } else {
+      onClose()
+    }
+  }, [isRecording, onClose])
+
+  // Browser-tab close intercept while recording — prompts the native
+  // "Leave site?" dialog so the user can't accidentally throw away a
+  // long recording session by closing the tab.
+  useEffect(() => {
+    if (!isRecording) return
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      e.preventDefault()
+      e.returnValue = "" // Chrome requires this for the prompt to show
+    }
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [isRecording])
+
+  // ESC closes the modal — runs through requestClose so the partial-save
+  // confirm fires when isRecording. Only active while the modal is open.
+  useEffect(() => {
+    if (!isOpen) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        if (showCloseConfirm) {
+          setShowCloseConfirm(false)
+          return
+        }
+        requestClose()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [isOpen, requestClose, showCloseConfirm])
 
   const stopRecording = async () => {
     setIsRecording(false)
     setPhase("processing")
+    setShowCloseConfirm(false)
     try {
       const res = await fetch("/api/recordings/stop", {
         method: "POST",
@@ -1070,8 +1680,22 @@ function RecordingModal({
       if (data.pipeline_status === "started") {
         setPipelineStarted(true)
       }
+      // Phase D — capture recording_id so the new pipeline-status poll can
+      // drive real progress instead of the fake 200ms timer.
+      if (data.recording_id || data.id) {
+        setRecordingId((data.recording_id || data.id) as string)
+      }
     } catch (e) {
       console.error(e)
+      try {
+        Sentry.addBreadcrumb({
+          category: "automations",
+          message: `stopRecording threw: ${e instanceof Error ? e.message : "unknown"}`,
+          level: "error",
+        })
+        Sentry.setTag("feature", "automations")
+        Sentry.captureException(e)
+      } catch {}
     }
   }
 
@@ -1123,14 +1747,84 @@ function RecordingModal({
         </motion.div>
       )}
 
-      {/* Close button */}
-      {phase === "guide" && !isRecording && (
+      {/* Close button — always present so the user can break out, even
+          mid-recording. requestClose() prompts the partial-save confirm
+          when isRecording so an accidental close doesn't lose work. */}
+      {phase === "guide" && (
         <button
-          onClick={onClose}
+          onClick={requestClose}
+          aria-label="Close recording"
           className="fixed top-4 right-4 z-[70] p-2 rounded-xl bg-muted/30 hover:bg-muted/50 transition-colors"
         >
           <X className="h-5 w-5" />
         </button>
+      )}
+
+      {/* Phase F — partial-recording save confirm dialog. Only renders
+          when the user tries to close mid-recording. "Save what we have"
+          calls stopRecording (steps so far flow through analyze/build/
+          self-test); "Discard" closes without saving anything. */}
+      {showCloseConfirm && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-background/80 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm closing recording"
+        >
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="max-w-md w-full rounded-2xl bg-card border border-border/50 p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-6 w-6 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <h3 className="text-lg font-bold mb-1">Recording in progress</h3>
+                <p className="text-sm text-muted-foreground">
+                  Save the steps you&apos;ve recorded so far, or throw it all away?
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                onClick={() => setShowCloseConfirm(false)}
+                className="px-4 py-2.5 rounded-xl bg-muted/40 hover:bg-muted/60 text-sm font-semibold transition-colors"
+              >
+                Keep recording
+              </button>
+              <button
+                onClick={() => { setShowCloseConfirm(false); void stopRecording() }}
+                className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors"
+              >
+                Save what we have
+              </button>
+              <button
+                onClick={() => {
+                  // Bug #17 fix — Discard previously left the VPS Chrome session
+                  // running indefinitely (only flipped local state). Fire-and-
+                  // forget POST to /api/recordings/stop with discard:true so the
+                  // VPS releases the session even though we're skipping the DB
+                  // save. Errors are swallowed because the user already decided
+                  // to discard; we just don't want to leak a Chrome.
+                  if (sessionId) {
+                    fetch("/api/recordings/stop", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ sessionId, discard: true }),
+                      keepalive: true,
+                    }).catch(() => {})
+                  }
+                  setShowCloseConfirm(false)
+                  setIsRecording(false)
+                  onClose()
+                }}
+                className="px-4 py-2.5 rounded-xl bg-red-500/80 hover:bg-red-500 text-white text-sm font-semibold transition-colors"
+              >
+                Discard
+              </button>
+            </div>
+          </motion.div>
+        </div>
       )}
 
       {/* Processing Phase */}
@@ -1159,16 +1853,124 @@ function RecordingModal({
                   style={{ width: `${processProgress}%` }}
                 />
               </div>
+              {/* Phase D — real status messages from the backend pipeline. */}
               <p className="text-xs text-muted-foreground">
-                {processProgress < 30 ? "Analyzing recording..." : processProgress < 60 ? "Identifying click patterns..." : processProgress < 90 ? "Building automation steps..." : "Almost done!"}
+                {pipelinePhase === "analyzing"
+                  ? "Analyzing recording..."
+                  : pipelinePhase === "building"
+                    ? "Building automation steps..."
+                    : pipelinePhase === "self_testing"
+                      ? "Testing on a safe target..."
+                      : pipelinePhase === "auto_repairing"
+                        ? "First try didn't work — George is figuring it out..."
+                        : pipelinePhase === "active"
+                          ? "Done — almost there!"
+                          : pipelinePhase === "needs_rerecording"
+                            ? "Hmm, this one's tricky — see what we tried..."
+                            : processProgress < 30
+                              ? "Getting started..."
+                              : processProgress < 60
+                                ? "Working on it..."
+                                : processProgress < 90
+                                  ? "Almost there..."
+                                  : "Wrapping up..."}
               </p>
             </div>
           </motion.div>
         </div>
       )}
 
-      {/* Done Phase */}
-      {phase === "done" && (
+      {/* Done Phase — Phase D branches on real result. If self-test failed
+          we show a failure card with what George tried; otherwise the
+          original celebration view. */}
+      {phase === "done" && pipelinePhase === "needs_rerecording" && (
+        <div className="h-full flex items-center justify-center p-8 overflow-y-auto">
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.3 }}
+            className="max-w-lg w-full space-y-5"
+          >
+            <div className="text-center">
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-amber-500/20 border-2 border-amber-500/40">
+                <AlertTriangle className="h-10 w-10 text-amber-400" />
+              </div>
+              <h2 className="text-2xl font-bold mt-4 mb-1">
+                Couldn&apos;t get this working automatically
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                George tried a few different ways but the {platformLabels[automation.platform]} {automation.action} steps didn&apos;t stick. Here&apos;s what he tried:
+              </p>
+            </div>
+
+            {recentAttempts.length > 0 ? (
+              <div className="rounded-xl border border-border/50 bg-card/60 backdrop-blur-xl p-3 space-y-2 text-xs">
+                {recentAttempts.slice(0, 6).map((a, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className={`mt-0.5 inline-flex items-center justify-center w-4 h-4 rounded-full ${a.status === "passed" ? "bg-emerald-500/30 text-emerald-300" : "bg-red-500/30 text-red-300"}`}>
+                      {a.status === "passed" ? "✓" : "✗"}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium">Strategy: <span className="font-mono">{a.strategy}</span></p>
+                      {a.error && (
+                        <p className="text-muted-foreground mt-0.5 break-all">{a.error.slice(0, 200)}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {lastPipelineError && !recentAttempts.some(a => a.error === lastPipelineError) && (
+                  <div className="pt-2 border-t border-border/30 text-muted-foreground">
+                    Last error: {lastPipelineError.slice(0, 200)}
+                  </div>
+                )}
+              </div>
+            ) : lastPipelineError ? (
+              <div className="rounded-xl border border-border/50 bg-card/60 backdrop-blur-xl p-3 text-xs text-muted-foreground">
+                {lastPipelineError.slice(0, 280)}
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                onClick={() => {
+                  // Re-record — return to the guide view, fresh state
+                  setPhase("guide")
+                  setCurrentStep(0)
+                  setRecordingTime(0)
+                  setRecordingId(null)
+                  setPipelinePhase(null)
+                  setRecentAttempts([])
+                  setLastPipelineError(null)
+                }}
+                className="flex items-center justify-center gap-2 py-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold transition-colors"
+              >
+                <RotateCcw className="h-4 w-4" />
+                Re-record
+              </button>
+              <button
+                onClick={handleDone}
+                className="flex items-center justify-center gap-2 py-3 rounded-xl bg-muted/40 hover:bg-muted/60 text-sm font-semibold transition-colors"
+              >
+                Save as draft
+              </button>
+              <a
+                href="/agency/observability"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 py-3 rounded-xl bg-muted/40 hover:bg-muted/60 text-sm font-semibold transition-colors"
+              >
+                <ExternalLink className="h-4 w-4" />
+                See full log
+              </a>
+            </div>
+
+            <p className="text-[11px] text-muted-foreground text-center">
+              The recording is saved on the server — you can come back to it from the Maintenance tab.
+            </p>
+          </motion.div>
+        </div>
+      )}
+      {phase === "done" && pipelinePhase !== "needs_rerecording" && (
         <div className="h-full flex items-center justify-center p-8">
           <Confetti />
           <motion.div
@@ -1188,14 +1990,18 @@ function RecordingModal({
             </motion.div>
             <div>
               <h2 className="text-3xl font-bold mb-2">
-                {pipelineStarted
-                  ? `🚀 ${platformLabels[automation.platform]} ${automation.action} is being set up!`
-                  : `✅ ${platformLabels[automation.platform]} ${automation.action} is now active!`}
+                {pipelinePhase === "active"
+                  ? `✅ ${platformLabels[automation.platform]} ${automation.action} is now active!`
+                  : pipelineStarted
+                    ? `🚀 ${platformLabels[automation.platform]} ${automation.action} is being set up!`
+                    : `✅ ${platformLabels[automation.platform]} ${automation.action} is now active!`}
               </h2>
               <p className="text-muted-foreground">
-                {pipelineStarted
-                  ? "George is analyzing your recording and building the automation. We're testing it now — you'll get a notification when it's ready!"
-                  : "George learned the steps and is ready to go."}
+                {pipelinePhase === "active"
+                  ? "George ran the test against a safe target and it worked. You're good to go."
+                  : pipelineStarted
+                    ? "George is analyzing your recording and building the automation. We're testing it now — you'll get a notification when it's ready!"
+                    : "George learned the steps and is ready to go."}
               </p>
             </div>
             <div className="flex flex-col gap-3">
@@ -1208,7 +2014,7 @@ function RecordingModal({
                 🎉 Awesome, let&apos;s go!
               </motion.button>
               <button
-                onClick={() => { setPhase("guide"); setCurrentStep(0); setRecordingTime(0) }}
+                onClick={() => { setPhase("guide"); setCurrentStep(0); setRecordingTime(0); setRecordingId(null); setPipelinePhase(null) }}
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
                 Record again (if something went wrong)
@@ -1230,59 +2036,120 @@ function RecordingModal({
               </h2>
             </div>
 
-            <div className="flex-1 rounded-2xl overflow-hidden border border-border/50 bg-black/50 relative">
-              {!vncError ? (
-                <>
-                  {!vncLoaded && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-muted/10">
-                      <div className="text-center space-y-3">
-                        <motion.div
-                          animate={{ rotate: 360 }}
-                          transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
-                        >
-                          <Monitor className="h-8 w-8 text-muted-foreground mx-auto" />
-                        </motion.div>
-                        <p className="text-sm text-muted-foreground">Loading browser view...</p>
-                      </div>
-                    </div>
-                  )}
-                  <iframe
-                    src={VNC_EMBED_URL}
-                    className="w-full h-full border-0"
-                    onLoad={() => setVncLoaded(true)}
-                    onError={() => setVncError(true)}
-                    allow="clipboard-read; clipboard-write"
-                  />
-                </>
-              ) : (
-                (() => {
-                  if (typeof window !== "undefined" && !popoutOpenedRef.current) {
-                    popoutOpenedRef.current = true
-                    window.open(VNC_URL, "_vnc", "width=1400,height=900")
-                  }
-                  return (
-                    <div className="h-full flex items-center justify-center p-8">
-                      <div className="text-center space-y-4 max-w-sm">
-                        <Monitor className="h-12 w-12 text-muted-foreground mx-auto" />
-                        <h3 className="text-lg font-semibold">Your browser is ready 🎯</h3>
-                        <p className="text-sm text-muted-foreground">Click below to pop it out in a new window. Keep that window open while you record — come back here to follow the steps.</p>
-                        <motion.a
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          href={VNC_EMBED_URL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-semibold transition-colors"
-                        >
-                          <ExternalLink className="h-5 w-5" />
-                          Pop Out Browser
-                        </motion.a>
-                        <p className="text-xs text-muted-foreground">Then come back to this screen to follow the steps →</p>
-                      </div>
-                    </div>
-                  )
-                })()
+            {/* Trust bar — same identity strip the accounts page sign-in modal
+                uses. Shows which account / proxy / Chrome profile we're about
+                to record against, plus live VNC connection state. Only renders
+                once the user has picked a dummy account on the Live View tab. */}
+            {dummy.selectedAccountId && (
+              <div className="mb-3">
+                <PopupTrustBar accountId={dummy.selectedAccountId} vncState={vncState} />
+              </div>
+            )}
+
+            {/* "No dummy account picked" hint — non-blocking; user can still
+                record (login manually inside VNC) but cookies won't pre-load. */}
+            {!dummy.selectedAccountId && !dummy.loading && (
+              <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="flex-1 text-xs">
+                  <p className="font-medium text-amber-300">Pick a dummy account first</p>
+                  <p className="text-muted-foreground mt-0.5">
+                    Open the <span className="font-semibold">Live View</span> tab and choose an account.
+                    Otherwise you&apos;ll need to log in manually inside the VNC window.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Start error banner (rate-limit / VPS down / etc.) */}
+            {startError && (
+              <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
+                <div className="flex-1 text-xs">
+                  <p className="font-medium text-red-300">Couldn&apos;t start the recording</p>
+                  <p className="text-muted-foreground mt-0.5">{startError}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Cookie / pre-nav status — only shown after a successful start so
+                the user knows the session was loaded with the right identity. */}
+            {isRecording && startInfo.target_url && (
+              <div className="mb-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 flex items-start gap-2 text-xs">
+                <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-medium text-emerald-300">
+                    Session loaded
+                    {startInfo.cookies_injected?.ok && " · cookies injected"}
+                    {startInfo.navigated?.ok && " · Chrome navigated"}
+                  </p>
+                  <p className="text-muted-foreground mt-0.5 break-all">
+                    Target: <span className="font-mono">{startInfo.target_url}</span>
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex-1 rounded-2xl overflow-hidden border border-border/50 bg-black/50 relative min-h-0 min-w-0">
+              {/* VNC viewer — same component the accounts page uses. Owns its
+                  own connection lifecycle (8-attempt exponential reconnect,
+                  visibility-pause, beforeunload cleanup) so we don't need a
+                  6s iframe-load timeout fallback anymore. min-h-0/min-w-0 lets
+                  the noVNC canvas scale DOWN to fit the pane. */}
+              <VncViewer
+                ref={viewerRef}
+                wsUrl={vncWsUrl}
+                password={VNC_PASSWORD || undefined}
+                onStateChange={setVncState}
+                sessionId={recordingSessionId}
+                className="h-full w-full"
+              />
+              {/* Connecting / reconnecting overlay — non-blocking hint. */}
+              {vncState !== "connected" && vncState !== "error" && (
+                <div className="pointer-events-none absolute inset-x-4 top-3 rounded-xl bg-black/55 backdrop-blur-sm border border-border/30 px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2">
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin text-violet-300" />
+                  {vncState === "reconnecting"
+                    ? "Reconnecting to the browser…"
+                    : vncState === "connecting"
+                      ? "Opening the secure browser…"
+                      : "Getting ready…"}
+                </div>
               )}
+              {/* Error banner with manual retry + open-in-new-tab fallback. */}
+              {vncState === "error" && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+                  <div className="text-center space-y-4 max-w-sm">
+                    <Monitor className="h-12 w-12 text-amber-400 mx-auto" />
+                    <h3 className="text-lg font-semibold">Lost the browser view</h3>
+                    <p className="text-sm text-muted-foreground">The recording is still running on the server — only the live view dropped.</p>
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => viewerRef.current?.reconnect()}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold transition-colors"
+                      >
+                        <RefreshCw className="h-4 w-4" /> Try again
+                      </button>
+                      <a
+                        href={VNC_FULLSCREEN_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/40 hover:bg-muted/60 text-sm font-semibold transition-colors"
+                      >
+                        <ExternalLink className="h-4 w-4" /> Open in new tab
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {/* Tiny status pill so the user always sees the connection state. */}
+              <div className="pointer-events-none absolute bottom-3 right-3 rounded-full px-2.5 py-1 text-[10px] font-medium backdrop-blur-sm border"
+                   style={{
+                     background: vncState === "connected" ? "rgba(16,185,129,0.18)" : vncState === "error" ? "rgba(239,68,68,0.18)" : "rgba(148,163,184,0.18)",
+                     borderColor: vncState === "connected" ? "rgba(16,185,129,0.35)" : vncState === "error" ? "rgba(239,68,68,0.35)" : "rgba(148,163,184,0.35)",
+                     color: vncState === "connected" ? "#34d399" : vncState === "error" ? "#fca5a5" : "#cbd5e1",
+                   }}>
+                {vncState}
+              </div>
             </div>
           </div>
 
@@ -1755,8 +2622,20 @@ function LiveViewTab() {
   const [selectedId, setSelectedId] = useState<string>("")
   const [warning, setWarning] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [iframeLoaded, setIframeLoaded] = useState(false)
-  const [iframeError, setIframeError] = useState(false)
+  const [vncState, setVncState] = useState<VncConnectionState>("idle")
+  const viewerRef = useRef<VncViewerHandle | null>(null)
+
+  // Phase A: shared "main" Chrome session id (matches RecordingModal +
+  // accounts page). Phase B will compute this from `group?.id` so each dummy
+  // group gets its own Chrome profile.
+  const vncWsUrl = useMemo(() => buildWsUrlForSession("main"), [])
+  // Stable telemetry session id per page mount. crypto.randomUUID() —
+  // see RecordingModal recordingSessionId for the full reasoning
+  // (CodeQL "insecure randomness" rule).
+  const telemetrySessionId = useMemo(
+    () => `liveview_${crypto.randomUUID().slice(0, 12)}`,
+    []
+  )
 
   const fetchSelection = useCallback(async () => {
     try {
@@ -1790,6 +2669,10 @@ function LiveViewTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ proxy_group_id: group.id, account_id: accountId || null }),
       })
+      // Re-bind the live view so the user sees a visual cue the swap happened.
+      // Phase A keeps "main" sessionId so this is just a UX nudge; Phase B will
+      // wire per-account session ids and the reconnect will load that profile.
+      viewerRef.current?.reconnect()
     } finally {
       setSaving(false)
     }
@@ -1862,48 +2745,77 @@ function LiveViewTab() {
         )}
       </div>
 
-      {/* noVNC iframe */}
+      {/* Live view — same VncViewer the accounts page uses, over the working
+          WSS path. Replaces the broken iframe-to-vnc.html embed. */}
       <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg overflow-hidden">
         <div className="flex items-center justify-between p-3 border-b border-border/30">
           <div className="flex items-center gap-2">
             <Monitor className="h-4 w-4 text-purple-400" />
-            <span className="text-sm font-semibold">Dummy Group Browser</span>
-            <span className="text-[10px] text-muted-foreground">(noVNC)</span>
+            <span className="text-sm font-semibold">Live View</span>
+            <span
+              className="text-[10px] font-medium px-1.5 py-0.5 rounded"
+              style={{
+                background: vncState === "connected" ? "rgba(16,185,129,0.18)" : vncState === "error" ? "rgba(239,68,68,0.18)" : "rgba(148,163,184,0.18)",
+                color: vncState === "connected" ? "#34d399" : vncState === "error" ? "#fca5a5" : "#cbd5e1",
+              }}
+            >
+              {vncState}
+            </span>
           </div>
-          <a
-            href={VNC_EMBED_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-muted/30 hover:bg-muted/50 transition-colors"
-          >
-            <ExternalLink className="h-3 w-3" /> Open in new tab
-          </a>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => viewerRef.current?.reconnect()}
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-muted/30 hover:bg-muted/50 transition-colors"
+              title="Reconnect the live view"
+            >
+              <RefreshCw className="h-3 w-3" /> Reconnect
+            </button>
+            <a
+              href={VNC_FULLSCREEN_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-muted/30 hover:bg-muted/50 transition-colors"
+            >
+              <ExternalLink className="h-3 w-3" /> Open in new tab
+            </a>
+          </div>
         </div>
-        <div className="relative aspect-[16/9] bg-black/50">
-          {!iframeError ? (
-            <>
-              {!iframeLoaded && (
-                <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm">
-                  <RefreshCw className="h-4 w-4 animate-spin mr-2" /> Loading noVNC…
-                </div>
-              )}
-              <iframe
-                src={VNC_EMBED_URL}
-                className="w-full h-full border-0"
-                onLoad={() => setIframeLoaded(true)}
-                onError={() => setIframeError(true)}
-                allow="clipboard-read; clipboard-write"
-              />
-            </>
-          ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
-              <Monitor className="h-10 w-10 text-muted-foreground mb-2" />
-              <p className="text-sm font-medium">Can&apos;t embed the browser here</p>
-              <a href={VNC_EMBED_URL} target="_blank" rel="noopener noreferrer"
-                className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold transition-colors"
-              >
-                <ExternalLink className="h-4 w-4" /> Open in new window
-              </a>
+        <div className="relative aspect-[16/9] bg-black/50 min-h-0 min-w-0">
+          <VncViewer
+            ref={viewerRef}
+            wsUrl={vncWsUrl}
+            password={VNC_PASSWORD || undefined}
+            onStateChange={setVncState}
+            sessionId={telemetrySessionId}
+            className="h-full w-full"
+          />
+          {vncState !== "connected" && vncState !== "error" && (
+            <div className="pointer-events-none absolute inset-x-3 top-2 rounded-lg bg-black/55 backdrop-blur-sm border border-border/30 px-2.5 py-1.5 text-[11px] text-muted-foreground flex items-center gap-2">
+              <RefreshCw className="h-3 w-3 animate-spin text-violet-300" />
+              {vncState === "reconnecting" ? "Reconnecting…" : "Connecting…"}
+            </div>
+          )}
+          {vncState === "error" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center bg-black/70 backdrop-blur-sm">
+              <Monitor className="h-10 w-10 text-amber-400 mb-2" />
+              <p className="text-sm font-medium">Lost the live view</p>
+              <p className="text-xs text-muted-foreground mt-1 max-w-xs">The Chrome session is still running on the server — only the live preview disconnected.</p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  onClick={() => viewerRef.current?.reconnect()}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold transition-colors"
+                >
+                  <RefreshCw className="h-4 w-4" /> Try again
+                </button>
+                <a
+                  href={VNC_FULLSCREEN_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/40 hover:bg-muted/60 text-sm font-semibold transition-colors"
+                >
+                  <ExternalLink className="h-4 w-4" /> Open in new tab
+                </a>
+              </div>
             </div>
           )}
         </div>
@@ -1932,13 +2844,25 @@ function MaintenanceTab() {
   const [dryRunOpen, setDryRunOpen] = useState(false)
   const [dryRunLoading, setDryRunLoading] = useState(false)
   const [dryRunResult, setDryRunResult] = useState<DryRunResultPayload | null>(null)
+  // Phase F-2 — AI-repair attribution. Map of automation_id → last repair info.
+  // Empty when the migration hasn't been applied (the API degrades cleanly).
+  const [repairs, setRepairs] = useState<Record<string, { last_repair_at: string; success: boolean | null; error: string | null }>>({})
 
   const load = useCallback(async () => {
     try {
       // Unified list so Maintenance surfaces extension-recorded automations too
-      const res = await fetch("/api/automations/list")
-      const data = await res.json()
+      const [listRes, repairRes] = await Promise.all([
+        fetch("/api/automations/list"),
+        fetch("/api/automations/repair-status"),
+      ])
+      const data = await listRes.json()
       setItems(data.data || [])
+      try {
+        const repairData = await repairRes.json()
+        if (repairData?.repairs) setRepairs(repairData.repairs)
+      } catch {
+        /* repair-status is best-effort — UI shows no badges if it fails */
+      }
     } catch {} finally { setLoading(false) }
   }, [])
 
@@ -2067,7 +2991,24 @@ function MaintenanceTab() {
                 const canDryRun = a.source !== "extension"
                 return (
                   <tr key={a.id} className="border-t border-border/20 hover:bg-muted/10 transition-colors">
-                    <td className="px-4 py-3 font-medium">{a.name}</td>
+                    <td className="px-4 py-3 font-medium">
+                      <div className="flex items-center gap-2">
+                        <span>{a.name}</span>
+                        {/* Phase F-2 — "Repaired by AI" badge.
+                            Only renders when the v_automation_last_repair view
+                            has a row for this automation (i.e., self-test
+                            successfully used the agent_repair strategy at least
+                            once). Hover for the timestamp. */}
+                        {repairs[a.id] && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full bg-violet-500/15 border border-violet-500/30 px-1.5 py-0.5 text-[9px] font-semibold text-violet-300"
+                            title={`Last AI repair: ${new Date(repairs[a.id].last_repair_at).toLocaleString()}${repairs[a.id].error ? ` (error: ${(repairs[a.id].error || "").slice(0, 100)})` : ""}`}
+                          >
+                            🤖 Fixed by George
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="inline-flex items-center gap-1.5 text-xs">
                         {PlatformIcon && <PlatformIcon className="h-4 w-4" />}
@@ -2526,10 +3467,13 @@ export default function AutomationsPage() {
       setToast(`⚠️ Can't test — ${auto.platform} needs login first. Use the red Log in button at the top.`)
       return
     }
-    // Pop open the VNC viewer FIRST so Dylan can watch the test run in the browser.
+    // Pop open the live VNC viewer (in /jarvis/observability) FIRST so Dylan
+    // can watch the test run in the browser. This uses the working WSS-based
+    // VncViewer instead of the legacy iframe-to-vnc.html that "refused to
+    // connect" since the VPS nginx repointed.
     try {
       window.open(
-        VNC_EMBED_URL,
+        VNC_FULLSCREEN_URL,
         "outreach-vnc",
         "width=1280,height=800,noopener,noreferrer"
       )
@@ -2917,7 +3861,7 @@ export default function AutomationsPage() {
           </div>
         </motion.div>
         <motion.a variants={item} whileHover={{ scale: 1.02, y: -2 }}
-          href={VNC_EMBED_URL} target="_blank" rel="noopener noreferrer"
+          href={VNC_FULLSCREEN_URL} target="_blank" rel="noopener noreferrer"
           className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-4 shadow-lg shadow-purple-500/10 hover:shadow-xl transition-shadow text-left group"
         >
           <div className="flex items-center gap-2 mb-1">
@@ -2965,11 +3909,14 @@ export default function AutomationsPage() {
 
         {/* ─── Overview tab ─── (populated in P2.G) */}
         <TabsContent value="overview" className="space-y-6 mt-6">
-          <OverviewTab />
+          <TabErrorBoundary tabName="Overview">
+            <OverviewTab />
+          </TabErrorBoundary>
         </TabsContent>
 
         {/* ─── Your Automations tab ─── (the legacy platform-cards grid lives here) */}
         <TabsContent value="your-automations" className="space-y-6 mt-6">
+        <TabErrorBoundary tabName="Your Automations">
 
       {/* Your Automations */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
@@ -3080,6 +4027,9 @@ export default function AutomationsPage() {
                           return (
                             <motion.div
                               key={`${auto.platform}-${auto.actionKey}`}
+                              data-slug={auto.slug}
+                              data-platform={auto.platform}
+                              data-action={auto.actionKey}
                               variants={item}
                               whileHover={{ scale: 1.02, y: -2 }}
                               onClick={needsRerec ? () => openRecordingModal(auto) : (!active && !settingUp ? () => openRecordingModal(auto) : undefined)}
@@ -3421,16 +4371,21 @@ export default function AutomationsPage() {
         </div>
       </motion.div>
 
+        </TabErrorBoundary>
         </TabsContent>
 
         {/* ─── Live View tab ─── (populated in P2.E) */}
         <TabsContent value="live-view" className="space-y-6 mt-6">
-          <LiveViewTab />
+          <TabErrorBoundary tabName="Live View">
+            <LiveViewTab />
+          </TabErrorBoundary>
         </TabsContent>
 
         {/* ─── Maintenance tab ─── (populated in P2.F) */}
         <TabsContent value="maintenance" className="space-y-6 mt-6">
-          <MaintenanceTab />
+          <TabErrorBoundary tabName="Maintenance">
+            <MaintenanceTab />
+          </TabErrorBoundary>
         </TabsContent>
       </Tabs>
 

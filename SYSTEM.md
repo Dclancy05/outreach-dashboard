@@ -2,7 +2,7 @@
 
 > **Owner:** Dylan Clancy (Current Agency / DC Marketing Co)
 > **Version:** Final Product Specification
-> **Last updated:** 2026-04-25
+> **Last updated:** 2026-05-05 (§5 Automations rewritten to match shipped reality after the Phase H ultrathink audit)
 > **This document describes the FINISHED product — every feature at full completion, every idea integrated. Not an MVP. The whole thing.**
 
 ---
@@ -256,53 +256,59 @@ Once an account messages a lead, that account "owns" the relationship:
 **Route:** `/automations`
 **Role:** The library of "how to do stuff." Every DM send, every follow, every connect — is a recorded sequence of browser clicks. No AI on the hot path. Deterministic, cheap, reliable. AI = the mechanic on standby for when something breaks.
 
-### 5.1 The Recording Model
+**Shipped state (2026-05-05).** The page rebuild landed in PRs #140–#154. Backed by a 16-hour ultrathink audit that found and fixed **28 bugs** (5 critical) across **1,445+ live recording-flow lifecycles** in **14 sweep cycles** at 100% pass rate. Per-bug detail in `AUTOMATIONS_BUGS_FOUND.md`. Sign-off report in `Test Results — Automations Page FINAL 2026-05-05.md`. Plain-English walkthrough in `AUTOMATIONS_PAGE_WALKTHROUGH.md`.
+
+### 5.1 The Recording Model — what shipping looks like
 
 A **Recording** = you walk through an action once (e.g., "send an IG DM"), the system records every click, type, and navigation. Then it replays that exact sequence for every lead.
 
-**Recording flow:**
-1. Click "New Recording" on the Automations page
-2. Pick platform (IG, FB, LI, etc.) + action type (send_dm, follow, connect, etc.)
-3. VPS Chrome opens inside embedded noVNC viewer (no popup, no separate tab)
-4. You perform the action manually — system records every step
-5. Click "Stop Recording" → system extracts selectors + saves
-6. Auto-runs a self-test against a test target (Starbucks for IG, Microsoft for LI, etc.)
-7. Self-test passes → confetti → "Done" (and "Done" ACTUALLY means done)
-8. Self-test fails → shows exactly what broke, offers re-record
+**Recording flow (live, shipped):**
+1. Pick a **dummy group** in the Overview header (the system pre-fills the recommended one — `useDummySelection()` hook handles the data, race-safe with request-id versioning)
+2. Click any **platform × action tile** (e.g. "Instagram → Send DM"). 27 combos covered across IG / FB / LI / TikTok / YouTube / X / Reddit / Snapchat / Pinterest. Tiles carry `data-slug` / `data-platform` / `data-action` for deterministic selectors
+3. The **Recording Modal** opens with the embedded **noVNC viewer live** — no popup, no separate tab. Cookies for the chosen account get pre-injected into the VPS Chrome session before the URL loads
+4. You perform the action manually on the test target. The recording-service captures every click, keystroke, navigation, and verification
+5. Click **Stop**. The async pipeline (Phase D) takes over: **analyze → build → self-test**
+6. Modal shows live progress per phase (pipeline-status route polled every ~2s with attribution to which step is running)
+7. **Self-test passes** → confetti → automation flips to **active** in the catalog
+8. **Self-test fails** → Phase E **AI auto-repair** kicks in (agent-repair.ts proposes a new selector, tests it, auto-applies if it works). If repair fails, the modal surfaces the failure card with screenshot + a "Re-record" CTA. Cost + attribution tracked per repair attempt
 
 **What gets saved per recording:**
 - Platform + action type (tag: `outreach_action` / `lead_enrichment` / `utility`)
 - Step-by-step selector chain (click → type → wait → click → verify)
 - 5-layer selector fallback per step (ID → aria → text → CSS → XPath)
-- Test target for maintenance validation
+- Test target for maintenance validation (Starbucks for IG, Microsoft for LI, etc.)
 - `composed_from` lineage if built from the drag-drop composer
+- Pipeline state row + repair attempts + cost in cents — backing 4 migrations from 2026-05-05/06
 
-### 5.2 Tabs
+### 5.2 Tabs (shipped)
 
 **Overview tab:**
-- All automations in a platform-grouped grid
-- 40+ catalog tiles (IG Send DM, FB Follow, LI Connect + Note, etc.)
-- Inline status badges: Active / Needs Recording / Broken / Testing
-- Click any tile → starts recording flow or shows existing recording
+- 27-tile platform-grouped catalog (IG Send DM, FB Follow, LI Connect + Note, TikTok DM, X Follow, Reddit Comment, etc. — see `src/lib/automations/platform-action-targets.ts` for the full registry)
+- Inline status badges: **Active / Needs Recording / Broken / Testing**
+- Dummy group selector at the top (smart-default to the recommended group)
+- Click any tile → opens the Recording Modal pre-targeted at that platform × action
 - Today's stats (runs, successes, failures)
 - "Pause All" / "Resume All" master switch
+- Per-tab error boundary so one broken tab can't crash the others
 
 **Your Automations tab:**
 - Custom recordings you've made
 - Import/Export JSON
 - Inline rename
-- Replay dialog (watch the recording play back)
+- Replay dialog (watch the recording play back step-by-step)
 - Per-automation Test button → opens VNC, runs against test targets
 
 **Live View tab:**
 - Real-time stream of what's happening on the VPS Chrome
-- Embedded noVNC — no iframe, no popup
+- Embedded noVNC — no iframe-bounce, no popup
 
 **Maintenance tab:**
-- Daily cron replays each automation against its test target
+- Daily cron (`/api/cron/automations-maintenance`, 10 AM UTC) replays each automation against its test target
 - Flags broken automations as `needs_rerecording`
 - Shows failure logs + screenshots of what the browser saw
-- AI healer (when built): proposes selector fix → tests → auto-applies if it works → falls back to click-track recording if AI fix fails
+- AI healer is **shipped**: agent-repair.ts proposes a selector fix → tests it → auto-applies if it works → flags for re-record if the fix doesn't pass self-test
+- Maintenance batch is parallelized with concurrency=4 + `Promise.allSettled` (one Supabase blip can't abort the whole batch)
+- 50-id batch cap + LRU ordering keeps it under Vercel's 60s function timeout
 
 ### 5.3 Workflow Composer
 
@@ -315,17 +321,19 @@ A drag-and-drop canvas to compose NEW automations from existing steps:
 - Save as new automation with `composed_from` lineage tracking
 - Example: take "open IG profile" from Recording A + "click Message" from Recording B + "type and send" from Recording C → new combined automation
 
-### 5.4 Self-Healing Pipeline (Final Vision)
+### 5.4 Self-Healing Pipeline
 
 When a recorded step breaks (Instagram moves a button):
 
-1. **Text matching** — try alternative text selectors (case-insensitive, partial match)
-2. **Vision AI fallback** — screenshot the page, ask AI "where is the Message button?" → get coordinates
-3. **Auto-repair** — AI proposes a new selector → tests it → if it works, saves as the new selector
-4. **Click-track fallback** — if AI can't fix it, system records WHERE you click next time and learns the new path
-5. **Notify Dylan** — if all else fails, sends Telegram alert: "IG Send DM automation is broken, needs re-recording"
+1. **Text matching** — try alternative text selectors (case-insensitive, partial match) ✅ shipped
+2. **Vision AI fallback** — screenshot the page, ask AI "where is the Message button?" → get coordinates ✅ shipped (text-only reasoning meanwhile; signed-URL screenshot path deferred — see Bug #25)
+3. **Auto-repair** — AI proposes a new selector → tests it → if it works, saves as the new selector ✅ shipped (`agent-repair.ts`, attribution + cost-tracking migrations applied)
+4. **Click-track fallback** — if AI can't fix it, system records WHERE you click next time and learns the new path 🟡 partial
+5. **Notify Dylan** — if all else fails, sends Telegram alert: "IG Send DM automation is broken, needs re-recording" ✅ shipped via maintenance cron
 
-Vision AI only fires on failures — not every DM. Minimal cost.
+Vision AI only fires on failures — not every DM. Minimal cost. Cost is tracked per repair attempt in cents (`20260506_repair_cost_tracking.sql`) so we can see the real $ spent on healing per platform.
+
+**Audit reference.** All 5 stages were exercised across 14 sweep cycles + 250+ chaos runs in the 2026-05-05 ultrathink audit. Selector injection in the self-test step (Bug #1, 3 sites) and SQL filter injection in pipeline-status (Bug #5) were both caught and patched in this same pass. See `AUTOMATIONS_AUDIT_SUMMARY.md`.
 
 ### 5.5 What's Already Built (CDP Senders)
 
