@@ -151,10 +151,20 @@ async function postHandler(req: Request) {
       { status: 502 }
     )
   }
-  if (startStatus >= 400 || !startData?.sessionId) {
-    return NextResponse.json(startData ?? { error: "VPS /start failed" }, {
-      status: startStatus,
-    })
+  // Bug #24 — guard sessionId type. If VPS returns a malformed body where
+  // sessionId is an object/array/number, downstream code would either
+  // serialize it weirdly (encodeURIComponent on object → "[object Object]")
+  // or crash. Reject explicitly so the client gets a clear 502 instead of
+  // a confusing downstream error.
+  if (
+    startStatus >= 400 ||
+    !startData?.sessionId ||
+    typeof startData.sessionId !== "string"
+  ) {
+    return NextResponse.json(
+      startData ?? { error: "VPS /start failed" },
+      { status: startStatus >= 400 ? startStatus : 502 }
+    )
   }
   const sessionId: string = startData.sessionId
 
