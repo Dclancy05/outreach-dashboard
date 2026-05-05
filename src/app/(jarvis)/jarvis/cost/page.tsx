@@ -1,16 +1,23 @@
 "use client"
 
 /**
- * /jarvis/cost — token spend dashboard.
+ * /jarvis/cost — usage + cost dashboard.
  *
- * Aggregates from workflow_runs.cost_usd over the last 30 days. Headline
- * shows today's spend vs daily cap, plus 30-day total / avg / total tokens.
- * Body shows a 30-day spark area chart, top agents, and top workflows.
+ * Two audiences:
+ *   • Subscription users (default): top section shows Claude subscription
+ *     reality — usage caps live at claude.ai, this page can't see them.
+ *     Below, we surface activity Jarvis DOES track locally: terminal
+ *     sessions, agent runs, audit events.
+ *   • API/SDK users: bottom section is the legacy spend dashboard
+ *     (workflow_runs.cost_usd) — only meaningful if you've actually
+ *     pointed an ANTHROPIC_API_KEY at workflows. For pure-subscription
+ *     setups this stays $0 and that's expected.
  */
 
 import { useEffect, useState } from "react"
+import Link from "next/link"
 import { motion, useReducedMotion } from "framer-motion"
-import { Activity, AlertTriangle, BarChart3, RefreshCw, Sparkles, TrendingUp, Zap } from "lucide-react"
+import { Activity, AlertTriangle, BarChart3, ExternalLink, Info, RefreshCw, Sparkles, TerminalSquare, TrendingUp, Zap } from "lucide-react"
 import { enterJarvis } from "@/components/jarvis/motion/presets"
 import { cn } from "@/lib/utils"
 
@@ -147,21 +154,51 @@ function TopList({
   )
 }
 
+interface UsageSnapshot {
+  terminalsActive: number
+  terminalsCap: number
+  agentRunsRecent: number
+  totalAuditEvents: number
+}
+
 export default function JarvisCostPage() {
   const reduced = useReducedMotion() ?? false
   const [data, setData] = useState<Summary | null>(null)
+  const [usage, setUsage] = useState<UsageSnapshot | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   async function refresh() {
     try {
-      const res = await fetch("/api/jarvis/cost-summary", { cache: "no-store" })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = (await res.json()) as Summary
+      // Fetch in parallel: API spend + local usage signals
+      const [costRes, termRes, runsRes, auditRes] = await Promise.all([
+        fetch("/api/jarvis/cost-summary", { cache: "no-store" }),
+        fetch("/api/terminals", { cache: "no-store" }).catch(() => null),
+        fetch("/api/runs?limit=200", { cache: "no-store" }).catch(() => null),
+        fetch("/api/jarvis/audit-log?limit=1", { cache: "no-store" }).catch(() => null),
+      ])
+      if (!costRes.ok) throw new Error(`HTTP ${costRes.status}`)
+      const json = (await costRes.json()) as Summary
       setData(json)
+
+      const term = termRes && termRes.ok ? await termRes.json() : null
+      const runs = runsRes && runsRes.ok ? await runsRes.json() : null
+      const audit = auditRes && auditRes.ok ? await auditRes.json() : null
+      // last-7-day window for agent runs
+      const sevenDaysAgo = Date.now() - 7 * 86400_000
+      const recentRuns = (runs?.runs || []).filter((r: { started_at?: string; created_at?: string }) => {
+        const ts = r.started_at || r.created_at
+        return ts && new Date(ts).getTime() >= sevenDaysAgo
+      }).length
+      setUsage({
+        terminalsActive: term?.capacity?.active ?? term?.sessions?.length ?? 0,
+        terminalsCap: term?.capacity?.soft_max ?? 8,
+        agentRunsRecent: recentRuns,
+        totalAuditEvents: audit?.total ?? audit?.entries?.length ?? 0,
+      })
       setError(null)
-    } catch (e: any) {
-      setError(e?.message || "fetch failed")
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "fetch failed")
     } finally {
       setLoading(false)
     }
@@ -177,10 +214,10 @@ export default function JarvisCostPage() {
     <motion.div {...enterJarvis} className="mx-auto w-full max-w-[1280px]">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-mem-text-muted">SPEND</p>
-          <h1 className="text-2xl font-medium text-mem-text-primary">Cost Dashboard</h1>
+          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-mem-text-muted">USAGE & COST</p>
+          <h1 className="text-2xl font-medium text-mem-text-primary">Usage Dashboard</h1>
           <p className="mt-1 text-sm text-mem-text-secondary">
-            AI workflow spend across the last 30 days. Auto-paused at the daily cap.
+            What Jarvis is doing for you, plus any API spend if you point a paid key at workflows.
           </p>
         </div>
         <button
@@ -193,6 +230,77 @@ export default function JarvisCostPage() {
         </button>
       </header>
 
+      {/* Subscription banner — explains why $ stays at zero for Max users */}
+      <div className="mb-4 flex items-start gap-3 rounded-xl border border-mem-accent/30 bg-mem-accent/5 p-4">
+        <Info className="mt-0.5 h-4 w-4 shrink-0 text-mem-accent" />
+        <div className="flex-1 text-sm text-mem-text-primary">
+          <p className="font-medium">You&apos;re on a Claude subscription.</p>
+          <p className="mt-1 text-mem-text-secondary">
+            Jarvis runs Claude through your <span className="text-mem-text-primary">Claude Max</span> login (no API
+            key, no per-token billing). The numbers below stay at <span className="font-mono text-mem-text-primary">$0</span>{" "}
+            unless you wire an <span className="font-mono">ANTHROPIC_API_KEY</span> into the workflow runner.
+            Subscription <span className="text-mem-text-primary">usage limits and reset timers</span> live on Claude&apos;s
+            side —{" "}
+            <a
+              href="https://claude.ai/settings/usage"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 font-medium text-mem-accent underline-offset-2 hover:underline"
+            >
+              check claude.ai/settings/usage <ExternalLink className="h-3 w-3" />
+            </a>
+            .
+          </p>
+        </div>
+      </div>
+
+      {/* Local usage Jarvis CAN see */}
+      {usage ? (
+        <section className="mb-6 rounded-xl border border-mem-border bg-mem-surface-1 p-5">
+          <h2 className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-mem-text-muted">
+            <Activity className="h-3.5 w-3.5" /> What Jarvis tracks locally
+          </h2>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <Link
+              href="/jarvis/terminals"
+              className="rounded-lg border border-mem-border bg-mem-surface-2 p-3 transition hover:border-mem-accent/40 hover:bg-mem-surface-3"
+            >
+              <div className="flex items-center gap-1.5 text-mem-text-muted">
+                <TerminalSquare className="h-3.5 w-3.5" />
+                <span className="font-mono text-[10px] uppercase tracking-wider">Active terminals</span>
+              </div>
+              <div className="mt-1 text-2xl font-medium text-mem-text-primary">
+                {usage.terminalsActive}
+                <span className="ml-1 text-sm font-normal text-mem-text-muted">/ {usage.terminalsCap} cap</span>
+              </div>
+              <div className="mt-0.5 text-xs text-mem-text-secondary">Persistent VPS sessions running now</div>
+            </Link>
+            <Link
+              href="/jarvis/agents?tab=runs"
+              className="rounded-lg border border-mem-border bg-mem-surface-2 p-3 transition hover:border-mem-accent/40 hover:bg-mem-surface-3"
+            >
+              <div className="flex items-center gap-1.5 text-mem-text-muted">
+                <Sparkles className="h-3.5 w-3.5" />
+                <span className="font-mono text-[10px] uppercase tracking-wider">Agent runs (7d)</span>
+              </div>
+              <div className="mt-1 text-2xl font-medium text-mem-text-primary">{usage.agentRunsRecent}</div>
+              <div className="mt-0.5 text-xs text-mem-text-secondary">Workflow + scheduled agent runs</div>
+            </Link>
+            <Link
+              href="/jarvis/audit"
+              className="rounded-lg border border-mem-border bg-mem-surface-2 p-3 transition hover:border-mem-accent/40 hover:bg-mem-surface-3"
+            >
+              <div className="flex items-center gap-1.5 text-mem-text-muted">
+                <Activity className="h-3.5 w-3.5" />
+                <span className="font-mono text-[10px] uppercase tracking-wider">Audit events</span>
+              </div>
+              <div className="mt-1 text-2xl font-medium text-mem-text-primary">{usage.totalAuditEvents}</div>
+              <div className="mt-0.5 text-xs text-mem-text-secondary">Every change Jarvis has logged</div>
+            </Link>
+          </div>
+        </section>
+      ) : null}
+
       {error && !data ? (
         <div className="rounded-xl border border-mem-status-stuck/40 bg-mem-status-stuck/10 p-4 text-sm text-mem-text-primary">
           Failed to load — {error}
@@ -201,6 +309,9 @@ export default function JarvisCostPage() {
 
       {data ? (
         <>
+          <h2 className="mb-3 mt-2 font-mono text-[10px] uppercase tracking-[0.18em] text-mem-text-muted">
+            API spend (only billed when ANTHROPIC_API_KEY is set)
+          </h2>
           {/* Headline metrics */}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
             <MetricCard

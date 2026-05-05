@@ -58,8 +58,8 @@ const TILES: SettingTile[] = [
   },
   {
     href: "/jarvis/cost",
-    title: "Cost dashboard",
-    hint: "Daily AI spend vs cap, top agents/workflows",
+    title: "Usage dashboard",
+    hint: "Sessions, agent runs, audit events, API spend",
     icon: DollarSign,
   },
   {
