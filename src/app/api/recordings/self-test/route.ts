@@ -154,33 +154,13 @@ function buildFindExpression(strategy: Strategy, step: {
   }
 }
 
-// Safe test targets per platform/action
-const TEST_TARGETS: Record<string, Record<string, { url: string; name: string; skipSend?: boolean }>> = {
-  ig: {
-    dm: { url: "https://www.instagram.com/starbucks/", name: "Starbucks", skipSend: true },
-    follow: { url: "https://www.instagram.com/starbucks/", name: "Starbucks" },
-    unfollow: { url: "https://www.instagram.com/starbucks/", name: "Starbucks" },
-  },
-  fb: {
-    dm: { url: "https://www.facebook.com/Starbucks", name: "Starbucks", skipSend: true },
-    follow: { url: "https://www.facebook.com/Starbucks", name: "Starbucks" },
-    unfollow: { url: "https://www.facebook.com/Starbucks", name: "Starbucks" },
-  },
-  li: {
-    dm: { url: "https://www.linkedin.com/in/satyanadella/", name: "Satya Nadella", skipSend: true },
-    connect: { url: "https://www.linkedin.com/in/satyanadella/", name: "Satya Nadella", skipSend: true },
-    follow: { url: "https://www.linkedin.com/in/satyanadella/", name: "Satya Nadella" },
-    unfollow: { url: "https://www.linkedin.com/in/satyanadella/", name: "Satya Nadella" },
-  },
-  tiktok: {
-    dm: { url: "https://www.tiktok.com/@starbucks", name: "Starbucks", skipSend: true },
-    follow: { url: "https://www.tiktok.com/@starbucks", name: "Starbucks" },
-  },
-  youtube: {
-    dm: { url: "https://www.youtube.com/@MrBeast", name: "MrBeast", skipSend: true },
-    subscribe: { url: "https://www.youtube.com/@MrBeast", name: "MrBeast" },
-  },
-}
+// Safe test targets per (platform, action) — backed by the single source of
+// truth in `src/lib/automations/platform-action-targets.ts`. Edit there, not
+// here. The shape conversion preserves the legacy `{ url, name, skipSend? }`
+// interface this route consumes.
+import { buildLegacyTestTargets } from "@/lib/automations/platform-action-targets"
+const TEST_TARGETS: Record<string, Record<string, { url: string; name: string; skipSend?: boolean }>> =
+  buildLegacyTestTargets()
 
 async function runCDPCommand(method: string, params: Record<string, unknown> = {}) {
   try {

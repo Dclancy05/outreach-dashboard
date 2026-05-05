@@ -121,33 +121,11 @@ const PLATFORM_SELECTORS: Record<string, Record<string, string[]>> = {
   },
 }
 
-// Test targets for safe self-testing
-const SAFE_TEST_TARGETS: Record<string, Record<string, string>> = {
-  ig: {
-    dm: "https://www.instagram.com/starbucks/",
-    follow: "https://www.instagram.com/starbucks/",
-    unfollow: "https://www.instagram.com/starbucks/",
-  },
-  fb: {
-    dm: "https://www.facebook.com/Starbucks",
-    follow: "https://www.facebook.com/Starbucks",
-    unfollow: "https://www.facebook.com/Starbucks",
-  },
-  li: {
-    dm: "https://www.linkedin.com/in/satyanadella/",
-    connect: "https://www.linkedin.com/in/satyanadella/",
-    follow: "https://www.linkedin.com/in/satyanadella/",
-    unfollow: "https://www.linkedin.com/in/satyanadella/",
-  },
-  tiktok: {
-    dm: "https://www.tiktok.com/@starbucks",
-    follow: "https://www.tiktok.com/@starbucks",
-  },
-  youtube: {
-    dm: "https://www.youtube.com/@MrBeast",
-    subscribe: "https://www.youtube.com/@MrBeast",
-  },
-}
+// Test targets for safe self-testing — backed by the single source of truth
+// in `src/lib/automations/platform-action-targets.ts`. To add or change a
+// safe target for any (platform, action) pair, edit that file, NOT here.
+import { buildLegacySafeTestTargets } from "@/lib/automations/platform-action-targets"
+const SAFE_TEST_TARGETS: Record<string, Record<string, string>> = buildLegacySafeTestTargets()
 
 interface RecordingAction {
   step_number: number

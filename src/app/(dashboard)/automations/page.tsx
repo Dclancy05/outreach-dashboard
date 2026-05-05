@@ -34,6 +34,8 @@ import {
   type VncViewerHandle,
   type VncConnectionState,
 } from "@/components/jarvis/observability/vnc-viewer"
+import PopupTrustBar from "@/components/popup-trust-bar"
+import { useDummySelection } from "@/lib/hooks/use-dummy-selection"
 import { SparklineChart } from "@/components/automations/sparkline-chart"
 import { VariableAutocomplete } from "@/components/automations/variable-autocomplete"
 import { DryRunResultModal, type DryRunResultPayload } from "@/components/automations/dry-run-result-modal"
@@ -975,8 +977,19 @@ function RecordingModal({
   const [vncState, setVncState] = useState<VncConnectionState>("idle")
   const [showHelp, setShowHelp] = useState(false)
   const [pipelineStarted, setPipelineStarted] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
+  const [startInfo, setStartInfo] = useState<{
+    target_url: string | null
+    cookies_injected: { ok: boolean; captured_at?: string; deployable?: boolean; hint?: string; error?: string } | null
+    navigated: { ok: boolean; url?: string; error?: string } | null
+  }>({ target_url: null, cookies_injected: null, navigated: null })
   const timerRef = useRef<NodeJS.Timeout | null>(null)
   const viewerRef = useRef<VncViewerHandle | null>(null)
+
+  // Dummy group + active account — same selection LiveViewTab persists. Used
+  // to tell `/api/recordings/start` which Chrome profile (cookies) to load
+  // before the user starts recording.
+  const dummy = useDummySelection()
 
   const guideKey = automation ? `${automation.platform}_${automation.actionKey}` : ""
   const guide = RECORDING_GUIDES[guideKey]
@@ -1009,8 +1022,13 @@ function RecordingModal({
       setProcessProgress(0)
       setVncState("idle")
       setShowHelp(false)
+      setStartError(null)
+      setStartInfo({ target_url: null, cookies_injected: null, navigated: null })
+      // Re-fetch dummy selection in case the user changed it on Live View tab
+      // since the modal was last opened. Cheap (one Supabase row).
+      void dummy.reload()
     }
-  }, [isOpen])
+  }, [isOpen, dummy])
 
   // Recording timer
   useEffect(() => {
@@ -1044,17 +1062,41 @@ function RecordingModal({
   const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, "0")}:${(s % 60).toString().padStart(2, "0")}`
 
   const startRecording = async () => {
+    setStartError(null)
     try {
-      const res = await fetch("/api/recordings/start", { method: "POST" })
+      const res = await fetch("/api/recordings/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: automation?.platform,
+          action_type: automation?.actionKey,
+          account_group_id: dummy.group?.id,
+          account_id: dummy.selectedAccountId || undefined,
+        }),
+      })
       const data = await res.json()
-      if (data.success) {
-        setSessionId(data.sessionId)
-        setIsRecording(true)
-        setRecordingTime(0)
-        setCurrentStep(1) // Auto-advance past "Click Start Recording"
+      if (res.status === 429) {
+        setStartError(
+          `Rate limited — try again in a minute${data?.retryAt ? ` (after ${new Date(data.retryAt).toLocaleTimeString()})` : ""}.`
+        )
+        return
       }
+      if (!res.ok || !data?.success) {
+        setStartError(data?.error || `Failed to start recording (HTTP ${res.status})`)
+        return
+      }
+      setSessionId(data.sessionId)
+      setStartInfo({
+        target_url: data.target_url ?? null,
+        cookies_injected: data.cookies_injected ?? null,
+        navigated: data.navigated ?? null,
+      })
+      setIsRecording(true)
+      setRecordingTime(0)
+      setCurrentStep(1) // Auto-advance past "Click Start Recording"
     } catch (e) {
-      console.error(e)
+      const msg = e instanceof Error ? e.message : "network error"
+      setStartError(msg)
     }
   }
 
@@ -1238,6 +1280,60 @@ function RecordingModal({
                 Recording: {platformLabels[automation.platform]} {automation.action}
               </h2>
             </div>
+
+            {/* Trust bar — same identity strip the accounts page sign-in modal
+                uses. Shows which account / proxy / Chrome profile we're about
+                to record against, plus live VNC connection state. Only renders
+                once the user has picked a dummy account on the Live View tab. */}
+            {dummy.selectedAccountId && (
+              <div className="mb-3">
+                <PopupTrustBar accountId={dummy.selectedAccountId} vncState={vncState} />
+              </div>
+            )}
+
+            {/* "No dummy account picked" hint — non-blocking; user can still
+                record (login manually inside VNC) but cookies won't pre-load. */}
+            {!dummy.selectedAccountId && !dummy.loading && (
+              <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="flex-1 text-xs">
+                  <p className="font-medium text-amber-300">Pick a dummy account first</p>
+                  <p className="text-muted-foreground mt-0.5">
+                    Open the <span className="font-semibold">Live View</span> tab and choose an account.
+                    Otherwise you&apos;ll need to log in manually inside the VNC window.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Start error banner (rate-limit / VPS down / etc.) */}
+            {startError && (
+              <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 flex items-start gap-2">
+                <AlertTriangle className="h-4 w-4 text-red-400 shrink-0 mt-0.5" />
+                <div className="flex-1 text-xs">
+                  <p className="font-medium text-red-300">Couldn&apos;t start the recording</p>
+                  <p className="text-muted-foreground mt-0.5">{startError}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Cookie / pre-nav status — only shown after a successful start so
+                the user knows the session was loaded with the right identity. */}
+            {isRecording && startInfo.target_url && (
+              <div className="mb-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 flex items-start gap-2 text-xs">
+                <CheckCircle className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-medium text-emerald-300">
+                    Session loaded
+                    {startInfo.cookies_injected?.ok && " · cookies injected"}
+                    {startInfo.navigated?.ok && " · Chrome navigated"}
+                  </p>
+                  <p className="text-muted-foreground mt-0.5 break-all">
+                    Target: <span className="font-mono">{startInfo.target_url}</span>
+                  </p>
+                </div>
+              </div>
+            )}
 
             <div className="flex-1 rounded-2xl overflow-hidden border border-border/50 bg-black/50 relative min-h-0 min-w-0">
               {/* VNC viewer — same component the accounts page uses. Owns its
