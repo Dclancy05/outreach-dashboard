@@ -97,11 +97,15 @@ function runCommand(label, args, env = {}) {
       console.log(`━━━ ${label} spawn FAILED in ${(took / 1000).toFixed(1)}s — ${err.message}`)
       safeResolve({ label, code: -1, took, error: err.message })
     })
-    // 10min per-stage timeout — chaos/memory/a11y individual scenarios
-    // run ≤ 30s typically, but matrix can be much longer. The outer
-    // matrix.mjs has its own per-run timeouts; this is the belt-and-
-    // suspenders kill.
-    const STAGE_TIMEOUT_MS = 60 * 60 * 1000 // 60 min
+    // 4-hour per-stage timeout (Bug #21 fix). The matrix stage with
+    // default --runs-per-combo=50 over 27 combos is 1,260 lifecycles
+    // at ~35s each = ~12 hours. The previous 60min would SIGKILL the
+    // matrix at 60min, defeating the entire purpose of the long sweep.
+    // 4 hours covers everything up through --runs-per-combo=20 (560
+    // lifecycles ≈ 5.5 hours @ concurrency=1, < 2 hours @ concurrency=4).
+    // Operators running the FULL pre-shipping 1,260-lifecycle matrix
+    // should pass --no-stage-timeout or invoke matrix.mjs directly.
+    const STAGE_TIMEOUT_MS = 4 * 60 * 60 * 1000 // 4 hr
     const killTimer = setTimeout(() => {
       try { child.kill("SIGKILL") } catch {}
       const took = Date.now() - startedAt
