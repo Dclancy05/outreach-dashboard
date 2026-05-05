@@ -15,13 +15,19 @@ async function vpsUrl(): Promise<string> {
   )
 }
 
-// 5 selector strategies in order of preference
+// 6 selector strategies in order of preference. The first 5 are
+// deterministic — Phase E adds `agent_repair` as a final fallback that
+// asks a Claude Code subagent (via agent-runner — NOT a direct Anthropic
+// API call) to look at a screenshot and propose new selectors. See
+// src/lib/automations/agent-repair.ts for the integration; this is the
+// only strategy that costs money per invocation, so it runs last.
 const STRATEGIES = [
   "original",       // 1. Recorded selectors as-is
   "text_based",     // 2. Find by visible text content
   "shadow_dom",     // 3. Deep shadow DOM traversal (like LinkedIn fix)
   "xpath",          // 4. XPath fallbacks
-  "coordinates",    // 5. Last resort: click by coordinates
+  "coordinates",    // 5. Click by coordinates
+  "agent_repair",   // 6. Phase E — AI selector repair via agent-runner subagent
 ] as const
 
 type Strategy = typeof STRATEGIES[number]
@@ -151,6 +157,11 @@ function buildFindExpression(strategy: Strategy, step: {
       if (!step.fallback_coordinates) return null
       // We'll handle this via CDP Input.dispatchMouseEvent, not evaluate
       return null
+
+    case "agent_repair":
+      // Phase E — handled by runAgentRepairForStep, not via Runtime.evaluate.
+      // Returning null tells the caller to dispatch to the agent path.
+      return null
   }
 }
 
@@ -160,6 +171,7 @@ function buildFindExpression(strategy: Strategy, step: {
 // interface this route consumes.
 import { buildLegacyTestTargets } from "@/lib/automations/platform-action-targets"
 import { setPipelinePhase } from "@/lib/automations/pipeline-status"
+import { repairFailedStep } from "@/lib/automations/agent-repair"
 const TEST_TARGETS: Record<string, Record<string, { url: string; name: string; skipSend?: boolean }>> =
   buildLegacyTestTargets()
 
@@ -175,6 +187,114 @@ async function runCDPCommand(method: string, params: Record<string, unknown> = {
   } catch (e) {
     return { error: String(e) }
   }
+}
+
+/**
+ * Phase E — agent_repair strategy implementation. Captures a screenshot of
+ * the current page, asks the agent-runner subagent for a new selector, then
+ * tries the agent's suggestions in order. Returns success on the first
+ * selector that finds + clicks an element, or success on coordinates as a
+ * last resort. Never throws — failures are returned as `{ success: false }`.
+ *
+ * The screenshot is fire-and-forget: if Page.captureScreenshot fails or the
+ * VPS doesn't support it, the agent gets called with no screenshot path
+ * and degrades to text-only reasoning.
+ */
+async function runAgentRepairForStep(args: {
+  step: {
+    description: string
+    selectors: string[]
+    fallback_text?: string
+    fallback_coordinates?: { x: number; y: number }
+    params: Record<string, unknown>
+  }
+  platform: string
+  actionType: string
+  targetUrl: string
+}): Promise<{ success: boolean; error?: string; selector?: string }> {
+  const { step, platform, actionType, targetUrl } = args
+
+  // 1. Try to capture a screenshot. The agent reads it via the screenshot
+  //    path (best-effort — the VPS Chrome may not support this CDP method).
+  let screenshotPath: string | null = null
+  try {
+    const result = await runCDPCommand("Page.captureScreenshot", {
+      format: "png",
+      captureBeyondViewport: false,
+    })
+    const dataUrl = result?.result?.data
+    if (dataUrl && typeof dataUrl === "string") {
+      // We can't write to disk on Vercel, so we pass the base64 inline as
+      // a `data:image/png;base64,…` "path" — the agent's Read tool can
+      // handle either a real path or a data URL.
+      screenshotPath = `data:image/png;base64,${dataUrl}`
+    }
+  } catch {
+    // Screenshot is optional — agent runs without it
+  }
+
+  // 2. Ask the agent. Helper never throws; bad output → empty selectors.
+  const repair = await repairFailedStep({
+    automationId: null, // populated by caller for the audit log; agent doesn't need it
+    stepDescription: step.description,
+    targetText: step.fallback_text ?? null,
+    attemptedSelectors: step.selectors || [],
+    targetUrl,
+    screenshotPath,
+    platform,
+    actionType,
+  })
+  if (!repair.ok) {
+    return { success: false, error: repair.error || "agent unreachable" }
+  }
+  if (
+    (!repair.selectors || repair.selectors.length === 0) &&
+    !repair.coordinates
+  ) {
+    return { success: false, error: "agent returned no usable hint" }
+  }
+
+  // 3. Try each suggested selector in order via Runtime.evaluate.
+  for (const sel of repair.selectors || []) {
+    try {
+      const escaped = sel.replace(/'/g, "\\'")
+      const expr = `(function(){const el=document.querySelector('${escaped}');if(el){el.click();return{found:true,selector:'${escaped}'};}return{found:false};})()`
+      const r = await runCDPCommand("Runtime.evaluate", {
+        expression: expr,
+        returnByValue: true,
+      })
+      const v = r?.result?.value
+      if (v?.found) {
+        return { success: true, selector: sel }
+      }
+    } catch {
+      // try next
+    }
+  }
+
+  // 4. Coordinates last resort.
+  if (repair.coordinates) {
+    try {
+      await runCDPCommand("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        x: repair.coordinates.x,
+        y: repair.coordinates.y,
+        button: "left",
+        clickCount: 1,
+      })
+      await runCDPCommand("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: repair.coordinates.x,
+        y: repair.coordinates.y,
+        button: "left",
+      })
+      return { success: true, selector: `coords(${repair.coordinates.x},${repair.coordinates.y})` }
+    } catch (e) {
+      return { success: false, error: `coordinate click failed: ${String(e)}` }
+    }
+  }
+
+  return { success: false, error: "all agent suggestions missed" }
 }
 
 async function runTestWithStrategy(
@@ -277,6 +397,25 @@ async function runTestWithStrategy(
             y: step.fallback_coordinates.y,
             button: "left",
           })
+        } else if (strategy === "agent_repair") {
+          // Phase E — last-resort AI selector repair. Call agent-runner with
+          // the failed step + a screenshot; try the agent's proposed selectors
+          // in order, falling back to coordinates if it returns any. The
+          // helper never throws; if the runner is unreachable we still get a
+          // structured error and just fail this step (which falls through to
+          // the next strategy in the for-loop, which is none — so the test
+          // fails honestly).
+          const repaired = await runAgentRepairForStep({
+            step,
+            platform,
+            actionType,
+            targetUrl: testTarget.url,
+          })
+          if (!repaired.success) {
+            throw new Error(
+              `agent_repair: ${repaired.error || "no fix produced"}`
+            )
+          }
         } else {
           const expr = buildFindExpression(strategy, step)
           if (!expr) {
@@ -458,6 +597,9 @@ export async function POST(req: Request) {
           // FK so the failure card + Maintenance auto-repair badge can
           // aggregate attempts per Tier-1 automation row.
           automation_id: isAutomationsTable ? recordId : null,
+          // Phase E migration 20260506_repair_attribution.sql adds this so
+          // the Maintenance "Repaired by AI" badge can detect AI-fixed rows.
+          repaired_by_ai: strategy === "agent_repair",
           attempt_number: attemptNum,
           strategy,
           test_target: testTarget.url,
@@ -482,6 +624,9 @@ export async function POST(req: Request) {
           // FK so the failure card + Maintenance auto-repair badge can
           // aggregate attempts per Tier-1 automation row.
           automation_id: isAutomationsTable ? recordId : null,
+          // Phase E migration 20260506_repair_attribution.sql adds this so
+          // the Maintenance "Repaired by AI" badge can detect AI-fixed rows.
+          repaired_by_ai: strategy === "agent_repair",
           attempt_number: attemptNum,
           strategy,
           test_target: testTarget.url,
