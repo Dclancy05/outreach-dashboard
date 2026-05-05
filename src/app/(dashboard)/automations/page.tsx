@@ -1470,7 +1470,14 @@ function RecordingModal({
       // since the modal was last opened. Cheap (one Supabase row).
       void dummy.reload()
     }
-  }, [isOpen, dummy])
+    // BUG FIX: do NOT add `dummy` to deps. The hook returns a fresh object
+    // every render, which would refire this effect on every render and
+    // immediately reset isRecording/sessionId/etc — making the modal
+    // unusable (Start Recording → state flashes true → effect re-runs →
+    // back to false). isOpen transitions are the only thing we want to
+    // trigger reset on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen])
 
   // Recording timer
   useEffect(() => {

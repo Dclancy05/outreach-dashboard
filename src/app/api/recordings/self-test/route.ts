@@ -261,10 +261,14 @@ async function runAgentRepairForStep(args: {
   }
 
   // 3. Try each suggested selector in order via Runtime.evaluate.
+  // Pass the selector as an IIFE argument with JSON.stringify so any
+  // characters in the selector (backslashes, quotes, newlines) are
+  // safely encoded — the previous `replace(/'/g, "\\'")` could be
+  // broken by `\\'` patterns and led to a JS injection if the agent
+  // returned a malicious selector. Bug #1 fix.
   for (const sel of repair.selectors || []) {
     try {
-      const escaped = sel.replace(/'/g, "\\'")
-      const expr = `(function(){const el=document.querySelector('${escaped}');if(el){el.click();return{found:true,selector:'${escaped}'};}return{found:false};})()`
+      const expr = `(function(s){try{const el=document.querySelector(s);if(el){el.click();return{found:true,selector:s};}}catch(e){return{found:false,err:String(e)};}return{found:false};})(${JSON.stringify(sel)})`
       const r = await runCDPCommand("Runtime.evaluate", {
         expression: expr,
         returnByValue: true,
@@ -371,13 +375,14 @@ async function runTestWithStrategy(
         // For DM test, use a safe test message
         const typeText = testTarget.skipSend ? "[TEST - not sending]" : text
 
-        // First try to focus the input
+        // First try to focus the input. Use JSON.stringify on the selector
+        // so backslashes / quotes can't break out of the JS string (Bug #1).
         if (strategy === "original" || strategy === "text_based") {
           const selectors = step.selectors || []
           for (const sel of selectors) {
             try {
               await runCDPCommand("Runtime.evaluate", {
-                expression: `document.querySelector('${sel.replace(/'/g, "\\'")}')?.focus()`,
+                expression: `(function(s){try{document.querySelector(s)?.focus();}catch(e){}})(${JSON.stringify(sel)})`,
               })
               break
             } catch {}
@@ -436,10 +441,12 @@ async function runTestWithStrategy(
         } else {
           const expr = buildFindExpression(strategy, step)
           if (!expr) {
-            // Strategy doesn't apply to this step, try basic selector
+            // Strategy doesn't apply to this step, try basic selector.
+            // JSON.stringify the selector so it can't break out of the JS
+            // string (Bug #1).
             if (step.selectors.length > 0) {
-              const fallbackExpr = `document.querySelector('${step.selectors[0].replace(/'/g, "\\'")}')?.click()`
-              const result = await runCDPCommand("Runtime.evaluate", { expression: fallbackExpr })
+              const fallbackExpr = `(function(s){try{document.querySelector(s)?.click();}catch(e){return{err:String(e)};}return{};})(${JSON.stringify(step.selectors[0])})`
+              const result = await runCDPCommand("Runtime.evaluate", { expression: fallbackExpr, returnByValue: true })
               if (result.error) throw new Error(`Click failed: ${result.error}`)
             }
           } else {
