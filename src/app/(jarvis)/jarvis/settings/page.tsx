@@ -24,12 +24,15 @@ import {
   ExternalLink,
   FileText,
   Keyboard,
+  Moon,
   Palette,
   Plug,
   Settings as SettingsIcon,
+  Sun,
   User,
 } from "lucide-react"
 import { enterJarvis } from "@/components/jarvis/motion/presets"
+import { useTheme } from "@/contexts/theme-context"
 
 type SettingTile = {
   href: string
@@ -81,6 +84,7 @@ const TILES: SettingTile[] = [
 
 export default function JarvisSettingsPage() {
   const reduced = useReducedMotion() ?? false
+  const { theme, toggleTheme } = useTheme()
 
   return (
     <motion.div {...enterJarvis} className="mx-auto w-full max-w-[1024px]">
@@ -126,9 +130,6 @@ export default function JarvisSettingsPage() {
         <header className="mb-3 flex items-center gap-2">
           <Keyboard className="h-4 w-4 text-mem-text-secondary" />
           <h3 className="text-sm font-medium text-mem-text-primary">Keyboard shortcuts</h3>
-          <span className="ml-auto font-mono text-[10px] uppercase tracking-wider text-mem-text-muted">
-            customize coming soon
-          </span>
         </header>
         <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {[
@@ -158,19 +159,42 @@ export default function JarvisSettingsPage() {
         </ul>
       </section>
 
-      {/* Theme placeholder */}
+      {/* Theme toggle */}
       <section className="mt-4 rounded-xl border border-mem-border bg-mem-surface-1 p-5">
         <header className="mb-3 flex items-center gap-2">
           <Palette className="h-4 w-4 text-mem-text-secondary" />
           <h3 className="text-sm font-medium text-mem-text-primary">Theme</h3>
-          <span className="ml-auto font-mono text-[10px] uppercase tracking-wider text-mem-text-muted">
-            dark · light · system
-          </span>
         </header>
-        <p className="text-sm text-mem-text-secondary">
-          Currently dark with violet accent (warm-dark palette). Light + system theme toggle is queued for a future
-          ship — the colors are already CSS-variable backed, so the swap will be instant once the toggle lands.
-        </p>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-mem-text-primary">
+              {theme === "dark" ? "Dark mode" : "Light mode"}
+            </p>
+            <p className="mt-0.5 text-[12px] text-mem-text-secondary">
+              {theme === "dark"
+                ? "Warm-dark palette with violet accent."
+                : "Bright palette for daylight work."}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+            className="inline-flex h-9 items-center gap-2 rounded-md border border-mem-border bg-mem-surface-2 px-3 text-sm text-mem-text-primary transition-colors hover:border-mem-border-strong hover:bg-mem-surface-3"
+          >
+            {theme === "dark" ? (
+              <>
+                <Sun className="h-4 w-4 text-amber-400" />
+                <span>Switch to light</span>
+              </>
+            ) : (
+              <>
+                <Moon className="h-4 w-4 text-violet-400" />
+                <span>Switch to dark</span>
+              </>
+            )}
+          </button>
+        </div>
       </section>
     </motion.div>
   )
