@@ -190,11 +190,16 @@ export default function JarvisCostPage() {
         const ts = r.started_at || r.created_at
         return ts && new Date(ts).getTime() >= sevenDaysAgo
       }).length
+      // Audit-log API returns { rows, facets: { actions: [{name, count}] } }
+      // Sum facet counts to get the total events tracked.
+      const auditTotal = Array.isArray(audit?.facets?.actions)
+        ? audit.facets.actions.reduce((sum: number, a: { count?: number }) => sum + (a.count || 0), 0)
+        : 0
       setUsage({
         terminalsActive: term?.capacity?.active ?? term?.sessions?.length ?? 0,
         terminalsCap: term?.capacity?.soft_max ?? 8,
         agentRunsRecent: recentRuns,
-        totalAuditEvents: audit?.total ?? audit?.entries?.length ?? 0,
+        totalAuditEvents: auditTotal,
       })
       setError(null)
     } catch (e: unknown) {
