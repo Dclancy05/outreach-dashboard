@@ -1,6 +1,6 @@
 ---
 name: automation-selector-repair
-description: Phase E — when an automation's self-test fails because the recorded selector no longer finds its element (target site shipped a redesign, ship a new aria-label, etc.), this agent reasons from the failed-selector chain + step description + visible target text and proposes new selectors. Called by /api/recordings/self-test as the 6th "agent_repair" strategy after the 5 deterministic ones (original, text_based, shadow_dom, xpath, coordinates) all fail. Output is strict JSON consumed by the test runner — no human-readable prose. (Note: screenshot input is currently disabled per Bug #25 — Vercel routes can't write to VPS filesystem and Claude Code's Read tool can't decode data URLs. Follow-up: Supabase storage signed URL.)
+description: Phase E — when an automation's self-test fails because the recorded selector no longer finds its element (target site shipped a redesign, ship a new aria-label, etc.), this agent reasons from the failed-selector chain + step description + visible target text + a screenshot of the failed page, and proposes new selectors. Called by /api/recordings/self-test as the 6th "agent_repair" strategy after the 5 deterministic ones (original, text_based, shadow_dom, xpath, coordinates) all fail. Output is strict JSON consumed by the test runner — no human-readable prose.
 tools: Read, Bash, Grep, mcp__chrome_devtools__*
 ---
 
@@ -15,7 +15,13 @@ The caller (the self-test route) hands you a structured prompt with:
 - **Visible target text** — the button label / link text the user clicked, if captured.
 - **Failed selectors** — the chain of CSS / xpath / text selectors that already returned no element.
 - **Page URL** — where the test was running.
-- **Screenshot path** — currently always `null` (see Bug #25: Vercel routes can't write to VPS filesystem and Claude Code's Read tool can't decode data URLs). Tracked follow-up: ship via Supabase storage signed URL. Until then you reason from the failed-selector text + step description ONLY.
+- **Screenshot URL** — received as a Supabase storage signed URL (5-min TTL). You must download the PNG locally first and then Read the local path:
+
+  ```bash
+  curl -s -o /tmp/repair-screenshot.png "${screenshot_url}"
+  ```
+
+  Then `Read /tmp/repair-screenshot.png` to view it. The Read tool cannot decode the URL directly — always go through `/tmp`. If the URL is missing or `null`, skip the download and reason from the step description + failed selectors only.
 - **Platform / action** keys — extra context.
 
 ## Your output
@@ -88,6 +94,6 @@ Field rules:
 
 ## Failure modes to expect
 
-- **Screenshot path missing or empty** — return `selectors: []` with `confidence: 0.1` and reasoning `"no screenshot supplied"`.
+- **Screenshot URL missing, expired, or curl fails** — return `selectors: []` with `confidence: 0.1` and reasoning `"no screenshot supplied"`. Do not retry the curl; the URL has a 5-minute TTL and a fresh signed URL is minted on every repair attempt.
 - **Page is showing a captcha or rate-limit warning** — same. Don't try to navigate around it; the test should fail loudly so the operator knows the account needs a cool-down.
 - **Page is showing the platform's "we suspect automation" interstitial** — return `selectors: []` with `confidence: 0` and reasoning `"target platform showing automation-detection interstitial — abort, account needs warmup"`.

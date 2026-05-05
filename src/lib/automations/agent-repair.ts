@@ -54,8 +54,18 @@ export interface RepairInput {
   /**
    * Path on the VPS where the screenshot is saved (sibling-readable, e.g.
    * /dev/shm/automation-repair/<run_id>/<step>.png). The agent reads it.
+   *
+   * @deprecated Vercel routes can't write to the VPS filesystem. Kept for
+   * backward compat — new callers should pass `screenshotUrl` instead.
    */
   screenshotPath?: string | null
+  /**
+   * Bug #25 fix: Supabase storage signed URL (5-min TTL) the subagent can
+   * `curl` and then Read off the local /tmp path. When present, the prompt
+   * tells the agent exactly how to fetch + view the screenshot. When null,
+   * the agent degrades to text-only reasoning (same as before).
+   */
+  screenshotUrl?: string | null
   /** Platform key — gives the agent additional context */
   platform?: string | null
   /** Action key — gives the agent additional context */
@@ -107,7 +117,18 @@ CONTEXT:
 SELECTORS WE ALREADY TRIED (all failed):
 ${selList}
 
-${input.screenshotPath ? `SCREENSHOT: ${input.screenshotPath} — read this file with the Read tool to see exactly what the page looked like.` : "SCREENSHOT: (not available)"}
+${
+  input.screenshotUrl
+    ? `SCREENSHOT: A signed URL is available below (Supabase storage, 5-minute TTL). Download it locally first, then Read the local file:
+
+  curl -s -o /tmp/repair-screenshot.png "${input.screenshotUrl}"
+  Read /tmp/repair-screenshot.png
+
+The signed URL: ${input.screenshotUrl}`
+    : input.screenshotPath
+      ? `SCREENSHOT: ${input.screenshotPath} — read this file with the Read tool to see exactly what the page looked like.`
+      : "SCREENSHOT: (not available)"
+}
 
 YOUR JOB:
 Look at the screenshot (if available). Identify the element the user wanted to interact with. Return strict JSON in this exact shape:
@@ -210,6 +231,10 @@ export async function repairFailedStep(
         vars: {
           automation_id: input.automationId,
           screenshot_path: input.screenshotPath || null,
+          // Bug #25 fix: signed URL (Supabase storage, 5-min TTL) the agent
+          // can curl + Read. Replaces the legacy filesystem path that could
+          // never work from Vercel.
+          screenshot_url: input.screenshotUrl || null,
           target_url: input.targetUrl,
           platform: input.platform || null,
           action_type: input.actionType || null,
