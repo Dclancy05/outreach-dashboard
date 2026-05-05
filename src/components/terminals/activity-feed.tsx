@@ -55,7 +55,7 @@ const KIND_META: Record<string, { icon: typeof PlayCircle; color: string; label:
   crashed: { icon: AlertTriangle, color: "text-red-400", label: "crashed" },
   respawned: { icon: RotateCw, color: "text-amber-300", label: "respawned" },
   cost_cap_tripped: { icon: DollarSign, color: "text-orange-300", label: "cost cap tripped" },
-  wallclock_warning: { icon: Clock, color: "text-amber-300", label: "running long" },
+  wallclock_warning: { icon: Clock, color: "text-amber-300", label: "still running" },
   file_changed: { icon: FilePen, color: "text-zinc-300", label: "edited" },
 }
 
@@ -158,7 +158,7 @@ function EventDetail({ kind, payload }: { kind: string; payload: Record<string, 
     )
   }
   if (kind === "wallclock_warning" && typeof payload.age_min === "number") {
-    return <div className="text-[11px] text-amber-300">{Math.round(Number(payload.age_min) / 60 * 10) / 10}h running</div>
+    return <div className="text-[11px] text-amber-300">running for {Math.round(Number(payload.age_min) / 60 * 10) / 10}h</div>
   }
   if (kind === "crashed" && payload.crashes) {
     return <div className="text-[11px] text-red-300">crash #{payload.crashes as number}</div>

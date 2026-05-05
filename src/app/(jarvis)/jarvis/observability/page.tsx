@@ -59,10 +59,13 @@ export default function JarvisObservabilityPage() {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
   // Read public env once. Vercel inlines NEXT_PUBLIC_* into the bundle.
+  // Default to the Tailscale Funnel-exposed websockify endpoint that the VPS
+  // already serves at /websockify. Override with NEXT_PUBLIC_VNC_WS_URL if
+  // you spin up VNC at a different host/path.
   const wsUrl = useMemo<string | null>(() => {
     const fromEnv = process.env.NEXT_PUBLIC_VNC_WS_URL
     if (fromEnv && fromEnv.length > 0) return fromEnv
-    return null
+    return "wss://srv1197943.taild42583.ts.net/websockify"
   }, [])
   const password = useMemo<string | undefined>(() => {
     return process.env.NEXT_PUBLIC_VNC_PASSWORD || undefined
