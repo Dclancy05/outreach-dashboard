@@ -15,7 +15,7 @@ The caller (the self-test route) hands you a structured prompt with:
 - **Visible target text** — the button label / link text the user clicked, if captured.
 - **Failed selectors** — the chain of CSS / xpath / text selectors that already returned no element.
 - **Page URL** — where the test was running.
-- **Screenshot path** — a PNG file on the VPS at `/dev/shm/automation-repair/<run_id>/<step>.png`. Read it with the Read tool. This is the most important input.
+- **Screenshot path** — currently always `null` (see Bug #25: Vercel routes can't write to VPS filesystem and Claude Code's Read tool can't decode data URLs). Tracked follow-up: ship via Supabase storage signed URL. Until then you reason from the failed-selector text + step description ONLY.
 - **Platform / action** keys — extra context.
 
 ## Your output

@@ -216,23 +216,29 @@ async function runAgentRepairForStep(args: {
 }): Promise<{ success: boolean; error?: string; selector?: string; costCents?: number }> {
   const { step, platform, actionType, targetUrl, automationId } = args
 
-  // 1. Try to capture a screenshot. The agent reads it via the screenshot
-  //    path (best-effort — the VPS Chrome may not support this CDP method).
-  let screenshotPath: string | null = null
+  // 1. Screenshot capture (Bug #25):
+  // The original design was to write the screenshot to a sibling-readable
+  // path on the VPS so the agent could Read it. But Vercel routes can't
+  // write to the VPS filesystem, AND the agent's Read tool can't read
+  // data URLs. So screenshot pass-through is BROKEN as designed.
+  //
+  // For now, pass null so the agent skill knows there's no screenshot and
+  // works from the failed-selector + step-description text only. The agent
+  // skill's "insufficient screenshot" branch handles this case explicitly.
+  //
+  // Future: write the screenshot to Supabase storage and pass a signed URL
+  // the agent can fetch. Tracked as a follow-up.
+  const screenshotPath: string | null = null
+  // Capture the bytes anyway so Sentry can include them when we later add
+  // observability for failed self-tests. Cheap on a passing run because we
+  // never reach the agent_repair branch.
   try {
-    const result = await runCDPCommand("Page.captureScreenshot", {
+    await runCDPCommand("Page.captureScreenshot", {
       format: "png",
       captureBeyondViewport: false,
     })
-    const dataUrl = result?.result?.data
-    if (dataUrl && typeof dataUrl === "string") {
-      // We can't write to disk on Vercel, so we pass the base64 inline as
-      // a `data:image/png;base64,…` "path" — the agent's Read tool can
-      // handle either a real path or a data URL.
-      screenshotPath = `data:image/png;base64,${dataUrl}`
-    }
   } catch {
-    // Screenshot is optional — agent runs without it
+    // Screenshot capture is best-effort; nothing else depends on it.
   }
 
   // 2. Ask the agent. Helper never throws; bad output → empty selectors.
