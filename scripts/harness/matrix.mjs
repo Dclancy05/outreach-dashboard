@@ -163,6 +163,12 @@ function runOnce(combo, runN) {
       subOut,
     ];
     const startedAt = Date.now();
+    let resolved = false;
+    const safeResolve = (r) => {
+      if (resolved) return;
+      resolved = true;
+      resolve(r);
+    };
     const child = spawn("node", args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, HARNESS_OUTPUT: subOut },
@@ -171,7 +177,30 @@ function runOnce(combo, runN) {
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
+    // Bug #4 fix — without an error handler, a failed spawn (ENOENT, perm
+    // denied, etc.) would leave the promise unresolved and the matrix hung
+    // indefinitely. Error handler ensures we always resolve.
+    child.on("error", (err) => {
+      const took = Date.now() - startedAt;
+      safeResolve({
+        slug, runN, passed: false, code: -1, took,
+        assertionLines: [],
+        stderr: `spawn error: ${err.message}`.slice(0, 500),
+      });
+    });
+    // Belt-and-suspenders timeout — if a single run-mjs invocation gets
+    // stuck (e.g., browser hangs on page load), kill it after 5min so the
+    // matrix can move on.
+    const killTimer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      safeResolve({
+        slug, runN, passed: false, code: -2, took: Date.now() - startedAt,
+        assertionLines: [],
+        stderr: `killed after 5min timeout`.slice(0, 500),
+      });
+    }, 5 * 60_000);
     child.on("exit", (code) => {
+      clearTimeout(killTimer);
       const took = Date.now() - startedAt;
       const passed = code === 0;
       // Pull assertion lines for the report.
@@ -179,7 +208,7 @@ function runOnce(combo, runN) {
         .split("\n")
         .filter((l) => /[✅❌]/.test(l))
         .map((l) => l.trim());
-      resolve({ slug, runN, passed, code, took, assertionLines, stderr: stderr.slice(0, 500) });
+      safeResolve({ slug, runN, passed, code, took, assertionLines, stderr: stderr.slice(0, 500) });
     });
   });
 }

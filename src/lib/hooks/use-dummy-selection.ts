@@ -13,7 +13,7 @@
  * it just consumes `/api/automations/dummy-selection` (existing GET + POST).
  */
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 export interface DummyGroup {
   id: string
@@ -53,11 +53,25 @@ export function useDummySelection(): DummySelection {
   const [loading, setLoading] = useState(true)
   const [warning, setWarning] = useState<string | null>(null)
 
+  // Bug #3 fix — race protection. RecordingModal calls reload() on every
+  // open and LiveViewTab also calls it on mount. Without a request id,
+  // two reloads in flight could resolve out of order: the older response
+  // wins and overwrites the newer state with stale data. Each reload
+  // bumps the id; stale responses (id < latest) are discarded.
+  const reqIdRef = useRef(0)
+  // Cancellation on unmount so the trailing setState doesn't fire on a
+  // dead component.
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
+
   const reload = useCallback(async () => {
+    const myId = ++reqIdRef.current
     setLoading(true)
     try {
       const res = await fetch("/api/automations/dummy-selection")
       const data = await res.json()
+      // Discard stale responses (someone else already started a newer reload).
+      if (myId !== reqIdRef.current || !mountedRef.current) return
       if (data?.error) {
         setWarning(data.error)
         setGroup(null)
@@ -80,9 +94,12 @@ export function useDummySelection(): DummySelection {
       setAccounts(data.accounts || [])
       setSelectedId(data?.selection?.account_id || "")
     } catch (e) {
+      if (myId !== reqIdRef.current || !mountedRef.current) return
       setWarning((e as Error).message || "Failed to load dummy selection")
     } finally {
-      setLoading(false)
+      // Only the latest in-flight reload clears loading; an older finishing
+      // late shouldn't flip the spinner off while a newer one's still pending.
+      if (myId === reqIdRef.current && mountedRef.current) setLoading(false)
     }
   }, [])
 
