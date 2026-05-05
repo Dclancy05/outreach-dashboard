@@ -497,6 +497,261 @@ const RECORDING_GUIDES: Record<string, { steps: GuideStep[]; exampleSearch: stri
       { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the Pinterest save-pin flow" },
     ]
   },
+
+  /* ─── Phase C-2 — Lead enrichment scrape guides ─── */
+  // These guides walk the user through extracting a single field
+  // (follower count, bio, etc.) from a public profile. The recording
+  // captures: navigate → find element → highlight/copy → stop. George
+  // learns the selector chain so future runs scrape that field
+  // unattended for new leads.
+
+  // Instagram enrichment
+  ig_scrape_follower_count: {
+    exampleSearch: "starbucks",
+    exampleTip: "Try a public IG profile like 'starbucks'",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Instagram", description: "In the browser, go to instagram.com" },
+      { title: "Search for a profile", description: "Use the search bar to find any business" },
+      { title: "Open the profile", description: "Click their username to open the profile page" },
+      { title: "Click the 'followers' link", description: "It's between Posts and Following at the top of the profile", tip: "George needs to see WHERE the count is, even if you don't open the modal" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will pull the number from the same spot every run" },
+    ]
+  },
+  ig_scrape_following_count: {
+    exampleSearch: "starbucks",
+    exampleTip: "Try a public IG profile like 'starbucks'",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Instagram", description: "In the browser, go to instagram.com" },
+      { title: "Open any profile", description: "Search and click into any public business profile" },
+      { title: "Click the 'following' link", description: "It's the third metric at the top (Posts / Followers / Following)" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  ig_scrape_post_count: {
+    exampleSearch: "starbucks",
+    exampleTip: "Try any IG profile",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Instagram", description: "In the browser, go to instagram.com" },
+      { title: "Open any profile", description: "Search and click into any public profile" },
+      { title: "Click the 'posts' label", description: "First metric at the top of the profile" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  ig_scrape_bio: {
+    exampleSearch: "starbucks",
+    exampleTip: "Pick a profile with a real bio (avoid empty profiles)",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Instagram", description: "In the browser, go to instagram.com" },
+      { title: "Open any profile", description: "Search and click into any public profile" },
+      { title: "Click anywhere in the bio text", description: "The text under the username + name. Just a click is enough — George reads the whole block." },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  ig_scrape_category: {
+    exampleSearch: "starbucks",
+    exampleTip: "Business profiles show a category right above the bio",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Instagram", description: "In the browser, go to instagram.com" },
+      { title: "Open a business profile", description: "Personal profiles don't have categories — pick a business (e.g., 'starbucks')" },
+      { title: "Click the category line", description: "It's the small grey text right under the name (e.g., 'Coffee Shop')" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will grab the category text on every run" },
+    ]
+  },
+
+  // Facebook enrichment
+  fb_scrape_follower_count: {
+    exampleSearch: "Starbucks",
+    exampleTip: "Try a Facebook page like 'Starbucks'",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Facebook", description: "In the browser, go to facebook.com" },
+      { title: "Search for a page", description: "Find a public business page" },
+      { title: "Open the page", description: "Click into the page" },
+      { title: "Click 'Followers'", description: "Usually under the page name in the About section" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  fb_scrape_following_count: {
+    exampleSearch: "Starbucks",
+    exampleTip: "Pages don't 'follow' but profiles do — for pages, this scrapes 'page likes' instead",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Facebook", description: "In the browser, go to facebook.com" },
+      { title: "Open a page", description: "Search and click into any business page" },
+      { title: "Click 'Following' (or 'Likes')", description: "Either metric — George can scrape whichever the page exposes" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  fb_scrape_post_count: {
+    exampleSearch: "Starbucks",
+    exampleTip: "Active pages have higher post counts",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Facebook", description: "In the browser, go to facebook.com" },
+      { title: "Open any page", description: "Search and click into a business page" },
+      { title: "Scroll to the Posts section", description: "Or click the 'Posts' tab if the page has tabs" },
+      { title: "Click any post date stamp", description: "George uses the count visible in the page header" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  fb_scrape_bio: {
+    exampleSearch: "Starbucks",
+    exampleTip: "The 'About' tab usually has the longest text",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Facebook", description: "In the browser, go to facebook.com" },
+      { title: "Open any page", description: "Search and click into a business page" },
+      { title: "Click 'About'", description: "Or 'Intro' if the page has it on the left rail" },
+      { title: "Click anywhere in the bio text", description: "George reads the full block — one click is enough" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  fb_scrape_category: {
+    exampleSearch: "Starbucks",
+    exampleTip: "Categories like 'Coffee shop' or 'Restaurant' show right under the page name",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Facebook", description: "In the browser, go to facebook.com" },
+      { title: "Open a business page", description: "Personal profiles don't have categories" },
+      { title: "Click the category text", description: "Right under the page name in the header" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+
+  // LinkedIn enrichment
+  li_scrape_follower_count: {
+    exampleSearch: "Satya Nadella",
+    exampleTip: "Most profiles + company pages show follower count",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open LinkedIn", description: "In the browser, go to linkedin.com" },
+      { title: "Open any profile or company page", description: "Search and click in" },
+      { title: "Click the 'followers' link", description: "Below the name on a profile, or in the header on a company page" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  li_scrape_following_count: {
+    exampleSearch: "Satya Nadella",
+    exampleTip: "Profile pages show 'connections' which is functionally the same",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open LinkedIn", description: "In the browser, go to linkedin.com" },
+      { title: "Open any profile", description: "Search and click in" },
+      { title: "Click 'connections' or 'following'", description: "Whichever metric the profile exposes" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  li_scrape_post_count: {
+    exampleSearch: "Satya Nadella",
+    exampleTip: "The 'Activity' section shows post count",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open LinkedIn", description: "In the browser, go to linkedin.com" },
+      { title: "Open any profile", description: "Search and click in" },
+      { title: "Scroll to 'Activity'", description: "Section partway down the profile" },
+      { title: "Click 'Show all posts'", description: "Or any post — George reads the visible count" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  li_scrape_bio: {
+    exampleSearch: "Satya Nadella",
+    exampleTip: "The headline text under the name is the bio",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open LinkedIn", description: "In the browser, go to linkedin.com" },
+      { title: "Open any profile", description: "Search and click in" },
+      { title: "Click the headline", description: "Text directly under the person's name (e.g., 'CEO at Microsoft')" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  li_scrape_category: {
+    exampleSearch: "Microsoft",
+    exampleTip: "For company pages, the industry tag shows below the name",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open LinkedIn", description: "In the browser, go to linkedin.com" },
+      { title: "Open a company page", description: "Search 'Microsoft' or any company" },
+      { title: "Click the industry text", description: "Small text under the company name (e.g., 'Software Development')" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+
+  // X / Twitter enrichment
+  x_scrape_follower_count: {
+    exampleSearch: "elonmusk",
+    exampleTip: "X shows followers + following right under the bio",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open X", description: "In the browser, go to x.com" },
+      { title: "Open any profile", description: "Search 'elonmusk' or any public account" },
+      { title: "Click 'Followers'", description: "Below the bio, next to 'Following'" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  x_scrape_bio: {
+    exampleSearch: "elonmusk",
+    exampleTip: "The bio is the description text under the username",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open X", description: "In the browser, go to x.com" },
+      { title: "Open any profile", description: "Search and click in" },
+      { title: "Click the bio text", description: "Multi-line description below the username" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+
+  // Reddit enrichment
+  reddit_scrape_karma: {
+    exampleSearch: "u/spez",
+    exampleTip: "u/spez (Reddit's CEO) has tons of karma — safe to scrape",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com/user/spez" },
+      { title: "Find the karma count", description: "Right side of the profile shows 'Post karma' and 'Comment karma'" },
+      { title: "Click the karma number", description: "Either one — George will pull both" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  reddit_scrape_bio: {
+    exampleSearch: "u/spez",
+    exampleTip: "The 'About' text under the avatar is the bio",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com/user/spez" },
+      { title: "Find the About section", description: "Right rail of the profile" },
+      { title: "Click anywhere in the About text", description: "George will read the whole block" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+
+  // Pinterest enrichment
+  pinterest_scrape_follower_count: {
+    exampleSearch: "starbucks",
+    exampleTip: "Pinterest shows followers right under the username",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Pinterest", description: "In the browser, go to pinterest.com" },
+      { title: "Open any profile", description: "Search and click into a public account" },
+      { title: "Click 'followers'", description: "Below the username in the profile header" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  pinterest_scrape_bio: {
+    exampleSearch: "starbucks",
+    exampleTip: "The bio is the description text under the username",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Pinterest", description: "In the browser, go to pinterest.com" },
+      { title: "Open any profile", description: "Search and click in" },
+      { title: "Click the bio text", description: "Description text under the username + handle" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
 }
 
 /* ─── Automation Definitions ─── */
