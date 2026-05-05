@@ -53,6 +53,16 @@ export interface MaintenanceOptions {
   runType?: string
   /** Per-replay timeout, ms. Default 50s — replay can be slow. */
   timeoutMs?: number
+  /**
+   * Cap on the number of automations processed in one call. Bug #6 —
+   * Vercel's `maxDuration: 60` for the cron / manual routes means a
+   * naive loop over 100+ automations would be SIGKILL'd partway. Default
+   * 50 keeps the wallclock under the 60s ceiling assuming ~1s per
+   * automation including DB writes (replay timeout itself doesn't apply
+   * when the call returns fast). The cron's 6am ET schedule fires daily,
+   * so 50/day handles up to ~1500 active automations on a 30-day cycle.
+   */
+  maxAutomations?: number
 }
 
 export interface MaintenanceResult {
@@ -82,10 +92,18 @@ export async function runMaintenance(
   const runType = opts.runType || "maintenance"
   const timeoutMs = opts.timeoutMs ?? 50_000
 
+  const maxAutomations = opts.maxAutomations ?? 50
+
   let query = supabase
     .from("automations")
     .select("id, name, platform, status, steps, variables")
     .in("status", statuses)
+    // Bug #6 fix — order by least-recently tested first so the cron's
+    // batched coverage rotates through the fleet over time. Without
+    // this, the same first 50 alphabetical-by-id automations would get
+    // tested every day and the rest would never see maintenance.
+    .order("last_tested_at", { ascending: true, nullsFirst: true })
+    .limit(maxAutomations)
 
   if (opts.automationIds && opts.automationIds.length > 0) {
     query = query.in("id", opts.automationIds)
