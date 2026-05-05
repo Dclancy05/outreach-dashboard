@@ -132,17 +132,18 @@ export async function runMaintenance(
     steps: Step[] | null
     variables: Record<string, string> | null
   }>
-  const results: MaintenanceResult["results"] = []
 
-  for (const a of list) {
+  // Bug #14 fix — parallel batches. Vercel's 60s ceiling means a serial
+  // for-loop over even 20 automations could exceed budget if a few hit
+  // the per-replay 50s timeout. Process 4 at a time so the slowest 4
+  // dominates wallclock instead of the sum. Per-replay timeout already
+  // caps individual blast.
+  const CONCURRENCY = 4
+
+  async function runOne(a: typeof list[number]): Promise<MaintenanceResult["results"][number]> {
     const steps = Array.isArray(a.steps) ? a.steps : []
     if (!steps.length) {
-      results.push({
-        automation_id: a.id,
-        overall: "skipped",
-        detail: "no steps",
-      })
-      continue
+      return { automation_id: a.id, overall: "skipped", detail: "no steps" }
     }
 
     const { data: runRow } = await supabase
@@ -242,11 +243,21 @@ export async function runMaintenance(
       }
     }
 
-    results.push({
+    return {
       automation_id: a.id,
       overall,
       detail: lastError || undefined,
-    })
+    }
+  }
+
+  // Process in chunks of CONCURRENCY so a slow automation doesn't block
+  // the others. Promise.all waits for the chunk; next chunk starts when
+  // the slowest of the previous batch finishes.
+  const results: MaintenanceResult["results"] = []
+  for (let i = 0; i < list.length; i += CONCURRENCY) {
+    const batch = list.slice(i, i + CONCURRENCY)
+    const batchResults = await Promise.all(batch.map(runOne))
+    results.push(...batchResults)
   }
 
   return {
