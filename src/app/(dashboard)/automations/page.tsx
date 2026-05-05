@@ -36,6 +36,8 @@ import {
 } from "@/components/jarvis/observability/vnc-viewer"
 import PopupTrustBar from "@/components/popup-trust-bar"
 import { useDummySelection } from "@/lib/hooks/use-dummy-selection"
+import { TabErrorBoundary } from "@/components/automations/tab-error-boundary"
+import * as Sentry from "@sentry/nextjs"
 import { SparklineChart } from "@/components/automations/sparkline-chart"
 import { VariableAutocomplete } from "@/components/automations/variable-autocomplete"
 import { DryRunResultModal, type DryRunResultPayload } from "@/components/automations/dry-run-result-modal"
@@ -1338,12 +1340,66 @@ function RecordingModal({
     } catch (e) {
       const msg = e instanceof Error ? e.message : "network error"
       setStartError(msg)
+      try {
+        Sentry.addBreadcrumb({
+          category: "automations",
+          message: `startRecording threw: ${msg}`,
+          level: "error",
+        })
+        Sentry.setTag("feature", "automations")
+        Sentry.captureException(e)
+      } catch {}
     }
   }
+
+  // Phase F — confirm dialog + partial-save when the user tries to close
+  // mid-recording (X / ESC / outside-click / browser tab close). Without
+  // this, an accidental click discards the recording and the user has to
+  // start over. The "save partial" path stops recording cleanly so the
+  // backend gets the steps captured so far (status flips to draft).
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false)
+  const requestClose = useCallback(() => {
+    if (isRecording) {
+      setShowCloseConfirm(true)
+    } else {
+      onClose()
+    }
+  }, [isRecording, onClose])
+
+  // Browser-tab close intercept while recording — prompts the native
+  // "Leave site?" dialog so the user can't accidentally throw away a
+  // long recording session by closing the tab.
+  useEffect(() => {
+    if (!isRecording) return
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      e.preventDefault()
+      e.returnValue = "" // Chrome requires this for the prompt to show
+    }
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [isRecording])
+
+  // ESC closes the modal — runs through requestClose so the partial-save
+  // confirm fires when isRecording. Only active while the modal is open.
+  useEffect(() => {
+    if (!isOpen) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        if (showCloseConfirm) {
+          setShowCloseConfirm(false)
+          return
+        }
+        requestClose()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [isOpen, requestClose, showCloseConfirm])
 
   const stopRecording = async () => {
     setIsRecording(false)
     setPhase("processing")
+    setShowCloseConfirm(false)
     try {
       const res = await fetch("/api/recordings/stop", {
         method: "POST",
@@ -1369,6 +1425,15 @@ function RecordingModal({
       }
     } catch (e) {
       console.error(e)
+      try {
+        Sentry.addBreadcrumb({
+          category: "automations",
+          message: `stopRecording threw: ${e instanceof Error ? e.message : "unknown"}`,
+          level: "error",
+        })
+        Sentry.setTag("feature", "automations")
+        Sentry.captureException(e)
+      } catch {}
     }
   }
 
@@ -1420,14 +1485,66 @@ function RecordingModal({
         </motion.div>
       )}
 
-      {/* Close button */}
-      {phase === "guide" && !isRecording && (
+      {/* Close button — always present so the user can break out, even
+          mid-recording. requestClose() prompts the partial-save confirm
+          when isRecording so an accidental close doesn't lose work. */}
+      {phase === "guide" && (
         <button
-          onClick={onClose}
+          onClick={requestClose}
+          aria-label="Close recording"
           className="fixed top-4 right-4 z-[70] p-2 rounded-xl bg-muted/30 hover:bg-muted/50 transition-colors"
         >
           <X className="h-5 w-5" />
         </button>
+      )}
+
+      {/* Phase F — partial-recording save confirm dialog. Only renders
+          when the user tries to close mid-recording. "Save what we have"
+          calls stopRecording (steps so far flow through analyze/build/
+          self-test); "Discard" closes without saving anything. */}
+      {showCloseConfirm && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-background/80 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm closing recording"
+        >
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="max-w-md w-full rounded-2xl bg-card border border-border/50 p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="h-6 w-6 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <h3 className="text-lg font-bold mb-1">Recording in progress</h3>
+                <p className="text-sm text-muted-foreground">
+                  Save the steps you&apos;ve recorded so far, or throw it all away?
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                onClick={() => setShowCloseConfirm(false)}
+                className="px-4 py-2.5 rounded-xl bg-muted/40 hover:bg-muted/60 text-sm font-semibold transition-colors"
+              >
+                Keep recording
+              </button>
+              <button
+                onClick={() => { setShowCloseConfirm(false); void stopRecording() }}
+                className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold transition-colors"
+              >
+                Save what we have
+              </button>
+              <button
+                onClick={() => { setShowCloseConfirm(false); setIsRecording(false); onClose() }}
+                className="px-4 py-2.5 rounded-xl bg-red-500/80 hover:bg-red-500 text-white text-sm font-semibold transition-colors"
+              >
+                Discard
+              </button>
+            </div>
+          </motion.div>
+        </div>
       )}
 
       {/* Processing Phase */}
@@ -3483,11 +3600,14 @@ export default function AutomationsPage() {
 
         {/* ─── Overview tab ─── (populated in P2.G) */}
         <TabsContent value="overview" className="space-y-6 mt-6">
-          <OverviewTab />
+          <TabErrorBoundary tabName="Overview">
+            <OverviewTab />
+          </TabErrorBoundary>
         </TabsContent>
 
         {/* ─── Your Automations tab ─── (the legacy platform-cards grid lives here) */}
         <TabsContent value="your-automations" className="space-y-6 mt-6">
+        <TabErrorBoundary tabName="Your Automations">
 
       {/* Your Automations */}
       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
@@ -3939,16 +4059,21 @@ export default function AutomationsPage() {
         </div>
       </motion.div>
 
+        </TabErrorBoundary>
         </TabsContent>
 
         {/* ─── Live View tab ─── (populated in P2.E) */}
         <TabsContent value="live-view" className="space-y-6 mt-6">
-          <LiveViewTab />
+          <TabErrorBoundary tabName="Live View">
+            <LiveViewTab />
+          </TabErrorBoundary>
         </TabsContent>
 
         {/* ─── Maintenance tab ─── (populated in P2.F) */}
         <TabsContent value="maintenance" className="space-y-6 mt-6">
-          <MaintenanceTab />
+          <TabErrorBoundary tabName="Maintenance">
+            <MaintenanceTab />
+          </TabErrorBoundary>
         </TabsContent>
       </Tabs>
 
