@@ -239,6 +239,18 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
       sendOrBuffer(data)
     })
 
+    // Eagerly focus on mount. The WS-effect's onopen also focuses, but on a
+    // page refresh the WS may already be open by the time xterm is ready
+    // (terminalReady gates xterm-mount), so the onopen focus call hit a null
+    // xtermRef. This first focus runs as soon as xterm exists; the URL-bar
+    // retry ladder lives inside the WS-effect's focusXterm so we don't
+    // duplicate it here — just one direct attempt.
+    try {
+      term.focus()
+      const helper = container.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
+      helper?.focus({ preventScroll: true })
+    } catch { /* */ }
+
     // Cmd/Ctrl+F opens the in-pane search bar.
     const searchKeyHandler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
@@ -339,8 +351,43 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
       reconnectTimerRef.current = setTimeout(connect, delay)
     }
 
+    /**
+     * Focus xterm robustly. After a page refresh the browser's focus may
+     * still be on the URL bar or some other chrome element, and Chromium
+     * silently rejects programmatic .focus() calls in that window. Retry a
+     * few times over 1.5s — each attempt also explicitly focuses the xterm
+     * helper textarea (which is what actually receives keystrokes; xterm's
+     * own .focus() doesn't always reach it on reconnect).
+     */
     const focusXterm = () => {
-      try { xtermRef.current?.focus() } catch { /* */ }
+      const tryFocus = () => {
+        try {
+          xtermRef.current?.focus()
+        } catch { /* */ }
+        const helper = containerRef.current?.querySelector<HTMLTextAreaElement>(
+          ".xterm-helper-textarea",
+        )
+        try { helper?.focus({ preventScroll: true }) } catch { /* */ }
+      }
+      tryFocus()
+      // Retry ladder — gives the browser time to release URL-bar focus.
+      const retryDelays = [80, 250, 600, 1200]
+      for (const d of retryDelays) {
+        setTimeout(() => {
+          if (cancelled) return
+          // Skip retry if the user has already focused something else inside
+          // this pane or moved focus to another input — don't fight them.
+          const active = document.activeElement
+          const inOurHelper = active === containerRef.current?.querySelector(".xterm-helper-textarea")
+          const inAnotherInput =
+            active && active !== document.body &&
+            (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || (active as HTMLElement).isContentEditable) &&
+            !inOurHelper
+          if (inOurHelper) return
+          if (inAnotherInput) return
+          tryFocus()
+        }, d)
+      }
     }
 
     function connect() {
@@ -541,9 +588,38 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
 
   // Click anywhere in the pane container → focus xterm. Catches the case where
   // a user clicks a child element (e.g. the status overlay) and loses focus.
+  // Also explicitly focuses the helper textarea — calling .focus() on the
+  // xterm wrapper alone has been observed to leave the helper unfocused on
+  // some Chromium reconnect paths.
   const onPaneMouseDown = useCallback(() => {
     try { xtermRef.current?.focus() } catch { /* */ }
+    try {
+      containerRef.current
+        ?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
+        ?.focus({ preventScroll: true })
+    } catch { /* */ }
   }, [])
+
+  // Track focus state so we can show a "Click to type" hint when the helper
+  // textarea isn't focused. After a page refresh Chromium often parks focus
+  // on the URL bar / body, and our auto-focus retries can't override active
+  // browser-chrome focus — but we can at least tell the user clearly.
+  const [helperFocused, setHelperFocused] = useState(false)
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !terminalReady) return
+    const helper = container.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
+    if (!helper) return
+    const onFocus = () => setHelperFocused(true)
+    const onBlur = () => setHelperFocused(false)
+    helper.addEventListener("focus", onFocus)
+    helper.addEventListener("blur", onBlur)
+    setHelperFocused(document.activeElement === helper)
+    return () => {
+      helper.removeEventListener("focus", onFocus)
+      helper.removeEventListener("blur", onBlur)
+    }
+  }, [terminalReady])
 
   const overlayContent = useMemo(() => {
     if (state === "connecting" || state === "idle") {
@@ -602,6 +678,21 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     >
       <div ref={containerRef} className="absolute inset-0" />
       {overlayContent}
+      {/* "Click to type" hint when the WS is up but the helper textarea
+          isn't focused. Common after a page refresh — Chromium parks focus
+          on the URL bar / body and silently rejects programmatic .focus().
+          A subtle pill in the corner tells the user exactly what to do. */}
+      {state === "connected" && !helperFocused && (
+        <button
+          type="button"
+          onClick={onPaneMouseDown}
+          className="absolute bottom-2 right-2 z-10 inline-flex h-7 items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 text-[11px] font-medium text-amber-200 shadow-md backdrop-blur transition-colors hover:bg-amber-500/20"
+          aria-label="Click to focus terminal so you can type"
+        >
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+          Click to type
+        </button>
+      )}
       {searchOpen && (
         <SearchBar
           term={searchTerm}

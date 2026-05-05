@@ -340,7 +340,24 @@ export function TerminalsWorkspace({ focusOnMount }: Props = {}) {
     [visibleIds, sessions],
   )
 
-  const currentLayout = LAYOUTS.find((l) => l.n === layout) || LAYOUTS[0]
+  // The user's saved preference (e.g., 3x3 = up to 9 panes), capped from above.
+  const savedLayout = LAYOUTS.find((l) => l.n === layout) || LAYOUTS[0]
+  // The EFFECTIVE grid: smallest grid that holds the visible sessions, never
+  // larger than the saved preference. This avoids the
+  // 1-session-in-3x3-grid bug where the terminal pane shrinks to ~14 cols
+  // (1/9th of the workspace width) — too narrow for Claude Code to render
+  // anything readable. With this fix, a single session fills the whole pane,
+  // two sessions go side-by-side (2x2), and so on, regardless of what max
+  // size the user picked from the layout buttons.
+  const fitLayout = (() => {
+    const n = visibleSessions.length
+    if (n <= 1) return LAYOUTS[0] // grid-cols-1
+    if (n <= 4) return LAYOUTS[1] // grid-cols-2
+    if (n <= 9) return LAYOUTS[2] // grid-cols-3
+    return LAYOUTS[3]             // grid-cols-4
+  })()
+  const currentLayout =
+    LAYOUTS.indexOf(fitLayout) <= LAYOUTS.indexOf(savedLayout) ? fitLayout : savedLayout
 
   const onLoadLayout = (l: SavedLayout) => {
     setLayout(l.size)
