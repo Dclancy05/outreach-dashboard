@@ -651,7 +651,30 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     }
   }, [terminalReady])
 
+  // Debounce the "Reconnecting…" overlay — only show it after 800ms of
+  // continuous disconnection. Brief WS blips during normal operation
+  // (server hiccup, network jitter, watchdog cycle) reconnect in <100ms
+  // and don't deserve a full-screen overlay flash that wipes the user's
+  // visible context. Same for the initial "Connecting…" — most attaches
+  // complete in well under a second.
+  const [overlayVisible, setOverlayVisible] = useState(false)
+  useEffect(() => {
+    if (state === "connected") {
+      setOverlayVisible(false)
+      return
+    }
+    if (state === "error") {
+      // Errors are sticky and explicit — show immediately.
+      setOverlayVisible(true)
+      return
+    }
+    // connecting / disconnected / idle — debounce
+    const t = setTimeout(() => setOverlayVisible(true), 800)
+    return () => clearTimeout(t)
+  }, [state])
+
   const overlayContent = useMemo(() => {
+    if (!overlayVisible) return null
     if (state === "connecting" || state === "idle") {
       return (
         <Overlay>
@@ -699,7 +722,7 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
       )
     }
     return null
-  }, [state, error, forceReconnect, reloadPage])
+  }, [overlayVisible, state, error, forceReconnect, reloadPage])
 
   return (
     <div
