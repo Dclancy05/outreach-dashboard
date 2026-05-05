@@ -86,9 +86,12 @@ export async function GET(
       .map((a) => a.id as string)
       .filter(Boolean)
 
+    // Bug #23 fix: select the columns that actually exist in
+    // automation_test_log. self-test inserts {success, error_message,
+    // strategy, ...} — there is no `status` or `error` column.
     let query = supabase
       .from("automation_test_log")
-      .select("strategy, status, error, created_at")
+      .select("strategy, success, error_message, created_at")
       .order("created_at", { ascending: false })
       .limit(10)
 
@@ -109,8 +112,10 @@ export async function GET(
     if (Array.isArray(log)) {
       recentAttempts = log.map((r) => ({
         strategy: r.strategy as string,
-        status: r.status as string,
-        error: (r as { error?: string | null }).error ?? null,
+        // Translate boolean success → "passed" / "failed" string for the UI
+        // (the failure card in RecordingModal renders ✓/✗ based on this).
+        status: r.success === true ? "passed" : "failed",
+        error: (r as { error_message?: string | null }).error_message ?? null,
         ran_at: (r as { created_at?: string | null }).created_at ?? null,
       }))
     }
