@@ -188,11 +188,11 @@ export default function JarvisInboxPage() {
       </ul>
 
       <p className="mt-6 font-mono text-[10px] text-mem-text-muted">
-        Inbox auto-refreshes every 30s. New entries arrive via{" "}
+        Auto-refresh every 30s. Entries are written by background crons (deadman watchdog, AI scan, cookies-health) —{" "}
         <Link href="/jarvis/status" className="text-mem-accent underline-offset-2 hover:underline">
-          /jarvis/status crons
-        </Link>{" "}
-        and the seeder cron (every 15 min when the schedule is enabled).
+          see all on /jarvis/status
+        </Link>
+        .
       </p>
     </motion.div>
   )
