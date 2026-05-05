@@ -61,21 +61,42 @@ async function openRecordingModal(page, ev, log) {
 }
 
 async function vncDrop({ page, ev, log }) {
-  // Open the modal, let VNC connect, then forcibly close all websockets
-  // from the page side. The viewer should detect the drop and surface
-  // its reconnecting overlay.
-  log("→ vnc-drop: opening modal, then killing websockets")
-  await openRecordingModal(page, ev, log)
-  await page.evaluate(() => {
-    // Override WebSocket constructor for the rest of the session so any
-    // reconnect attempt also fails — exercises the "stuck in reconnecting"
-    // recovery UX, not just one-shot drop.
-    const sockets = window.__vncSockets || []
-    for (const s of sockets) {
-      try { s.close() } catch {}
+  // Bug #11 fix — `window.__vncSockets` was never populated anywhere in
+  // the codebase, so the previous implementation was a no-op. Instead,
+  // wrap the WebSocket constructor BEFORE opening the modal so we
+  // capture every WS the page creates. After the modal connects, drop
+  // them all. The viewer should detect the close and surface its
+  // reconnecting overlay.
+  log("→ vnc-drop: installing WebSocket capture, opening modal, then dropping")
+  await page.evaluateOnNewDocument(() => {
+    if (window.__wsCapture) return
+    window.__wsCapture = []
+    const OrigWS = window.WebSocket
+    const Wrapped = function (...args) {
+      const inst = new OrigWS(...args)
+      window.__wsCapture.push(inst)
+      return inst
     }
+    Wrapped.prototype = OrigWS.prototype
+    Wrapped.CONNECTING = OrigWS.CONNECTING
+    Wrapped.OPEN = OrigWS.OPEN
+    Wrapped.CLOSING = OrigWS.CLOSING
+    Wrapped.CLOSED = OrigWS.CLOSED
+    window.WebSocket = Wrapped
   }).catch(() => {})
-  ev("chaos.vnc_dropped", {})
+
+  await openRecordingModal(page, ev, log)
+  // Wait for the VNC handshake to start
+  await page.waitForTimeout(3000)
+  const dropped = await page.evaluate(() => {
+    const sockets = window.__wsCapture || []
+    let count = 0
+    for (const s of sockets) {
+      try { s.close(); count++ } catch {}
+    }
+    return count
+  }).catch(() => 0)
+  ev("chaos.vnc_dropped", { sockets_closed: dropped })
   await page.waitForTimeout(8000) // Watch the reconnect attempts
 }
 

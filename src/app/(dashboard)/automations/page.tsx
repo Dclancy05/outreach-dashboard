@@ -4009,6 +4009,9 @@ export default function AutomationsPage() {
                           return (
                             <motion.div
                               key={`${auto.platform}-${auto.actionKey}`}
+                              data-slug={auto.slug}
+                              data-platform={auto.platform}
+                              data-action={auto.actionKey}
                               variants={item}
                               whileHover={{ scale: 1.02, y: -2 }}
                               onClick={needsRerec ? () => openRecordingModal(auto) : (!active && !settingUp ? () => openRecordingModal(auto) : undefined)}
