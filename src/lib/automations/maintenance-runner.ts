@@ -251,13 +251,27 @@ export async function runMaintenance(
   }
 
   // Process in chunks of CONCURRENCY so a slow automation doesn't block
-  // the others. Promise.all waits for the chunk; next chunk starts when
-  // the slowest of the previous batch finishes.
+  // the others. Bug #19 — use Promise.allSettled so a single Supabase
+  // blip in one runOne doesn't reject the whole batch and abort the
+  // remaining automations. runOne is mostly defensive but the Supabase
+  // .insert() / .update() calls can throw on network errors that aren't
+  // caught internally.
   const results: MaintenanceResult["results"] = []
   for (let i = 0; i < list.length; i += CONCURRENCY) {
     const batch = list.slice(i, i + CONCURRENCY)
-    const batchResults = await Promise.all(batch.map(runOne))
-    results.push(...batchResults)
+    const settled = await Promise.allSettled(batch.map(runOne))
+    for (let j = 0; j < settled.length; j++) {
+      const s = settled[j]
+      if (s.status === "fulfilled") {
+        results.push(s.value)
+      } else {
+        results.push({
+          automation_id: batch[j].id,
+          overall: "failed",
+          detail: `runOne threw: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`,
+        })
+      }
+    }
   }
 
   return {
