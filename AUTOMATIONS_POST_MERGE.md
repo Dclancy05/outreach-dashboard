@@ -1,6 +1,6 @@
 # Automations Page — Post-Merge Setup Guide
 
-Read this once, **before** merging the 7 stacked PRs from the
+Read this once, **before** merging the 13 stacked PRs from the
 `automations-finish` work to main. It tells you what to apply, in what
 order, and how to verify nothing broke. The whole point of this work
 was to finish the recording flow without breaking the accounts/proxies
@@ -8,7 +8,11 @@ page — so the verification steps are deliberate.
 
 ## What got built
 
-7 stacked PRs (merge in order, top → bottom):
+13 stacked PRs (merge in order, top → bottom). Stack splits into the
+8 main phases and 5 follow-on PRs that close out the deferred polish
+items.
+
+### Main 8 phases
 
 | # | Phase | Title |
 |---|---|---|
@@ -19,6 +23,17 @@ page — so the verification steps are deliberate.
 | #144 | E | `feat(automations): AI auto-repair via agent-runner subagent` |
 | #145 | F | `feat(automations): tab error boundaries + partial-save + Sentry breadcrumbs` |
 | #146 | G | `test(automations): combo-matrix runner + 6-run live validation` |
+| #147 | H | `docs(automations): post-merge setup guide` (this file) |
+
+### Follow-on PRs (the deferred polish items)
+
+| # | Phase | Title |
+|---|---|---|
+| #148 | F-2 | `feat(automations): "Fixed by George" badge on Maintenance rows` |
+| #149 | E-2 | `feat(automations): per-automation $2 cost cap on AI auto-repair` |
+| #150 | G-2 | `test(automations): 5 chaos scenarios — vnc-drop, modal-close, rate-limit, network-flap, concurrent` |
+| #151 | G-3 | `test(automations): axe-core a11y + memory-leak scenarios + Test Results doc` |
+| #152 | C-2 | `feat(automations): 21 lead-enrichment recording guides — full strict coverage` |
 
 Each PR's `base` branch is the previous one — when you merge #140, GitHub
 will auto-update #141's base and so on. **Do NOT squash-merge** — the
@@ -26,19 +41,20 @@ intermediate commits carry the migration order context.
 
 ## Step-by-step
 
-### 1. Apply the SQL migrations FIRST (before merging Phase D / E)
+### 1. Apply the SQL migrations FIRST (before merging Phase D / E / E-2)
 
-Three migrations land across Phases D + E. Apply them to the production
-Supabase **before** merging the corresponding PRs so the new code paths
-have somewhere to write:
+Four migrations land across Phases D + E + E-2. Apply them to the
+production Supabase **before** merging the corresponding PRs so the
+new code paths have somewhere to write:
 
 ```bash
 psql $DATABASE_URL < migrations/20260505_recordings_pipeline_state.sql
 psql $DATABASE_URL < migrations/20260505_test_log_automation_id.sql
 psql $DATABASE_URL < migrations/20260506_repair_attribution.sql
+psql $DATABASE_URL < migrations/20260506_repair_cost_tracking.sql
 ```
 
-All three are **additive only** — they only add nullable columns / a view.
+All four are **additive only** — they only add nullable columns / a view.
 Rollback paths are documented inline in each `.sql` file.
 
 The code is migration-tolerant: if you merge before applying, nothing
