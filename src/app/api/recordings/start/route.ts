@@ -108,9 +108,12 @@ async function postHandler(req: Request) {
       (await getSecret("RECORDING_SERVER_URL")) ||
       "http://srv1197943.hstgr.cloud:3848"
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "unknown"
+    // Bug #16 — don't echo getSecret's error message (could leak secret
+    // values if the lookup error includes them). Log server-side, return
+    // a sanitized message to the client.
+    console.error("[recordings/start] VPS_URL secret lookup failed:", e)
     return NextResponse.json(
-      { error: "Failed to read VPS_URL secret", details: msg },
+      { error: "Failed to read VPS_URL secret" },
       { status: 500 }
     )
   }
