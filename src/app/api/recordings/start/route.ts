@@ -77,10 +77,16 @@ async function postHandler(req: Request) {
   }
 
   const body = await parseBody(req)
-  const platform = body.platform?.trim().toLowerCase()
-  const actionType = body.action_type?.trim().toLowerCase()
-  const accountId = body.account_id?.trim()
-  const groupId = body.account_group_id?.trim()
+  // Bug #7 fix — type guards. If client sends `{ account_id: 12345 }`
+  // (number), `body.account_id?.trim()` would throw "not a function"
+  // because numbers don't have .trim(). Guard each field with typeof
+  // checks so a malformed body returns 400 rather than crashing.
+  const asString = (v: unknown): string | undefined =>
+    typeof v === "string" ? v : undefined
+  const platform = asString(body.platform)?.trim().toLowerCase()
+  const actionType = asString(body.action_type)?.trim().toLowerCase()
+  const accountId = asString(body.account_id)?.trim()
+  const groupId = asString(body.account_group_id)?.trim()
 
   if (platform && !KNOWN_PLATFORMS.has(platform)) {
     return NextResponse.json(
