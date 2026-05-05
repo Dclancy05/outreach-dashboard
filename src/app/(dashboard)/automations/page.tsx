@@ -323,6 +323,178 @@ const RECORDING_GUIDES: Record<string, { steps: GuideStep[]; exampleSearch: stri
       { title: "Stop Recording", description: "Come back and hit the stop button!" },
     ]
   },
+
+  // ─── X / Twitter ───
+  x_dm: {
+    exampleSearch: "elonmusk",
+    exampleTip: "Try searching 'elonmusk' on X",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin", tip: "Recording captures your mouse clicks and keystrokes" },
+      { title: "Open X", description: "In the browser, go to x.com", tip: "You should already be logged in" },
+      { title: "Go to a profile", description: "Search for anyone and click their profile" },
+      { title: "Click the message icon", description: "Look for the small envelope icon near the Follow button" },
+      { title: "Type a test message", description: "Type anything — 'hello' works fine", tip: "If the user has DMs locked, X will show a paywall — pick a different account" },
+      { title: "Send it", description: "Press Enter or click the send arrow" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the X DM flow" },
+    ]
+  },
+  x_follow: {
+    exampleSearch: "elonmusk",
+    exampleTip: "Try searching 'elonmusk' on X",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open X", description: "In the browser, go to x.com" },
+      { title: "Go to a profile", description: "Search for anyone and click their profile" },
+      { title: "Click Follow", description: "Hit the 'Follow' button on their profile" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  x_unfollow: {
+    exampleSearch: "elonmusk",
+    exampleTip: "Try someone you already follow",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open X", description: "In the browser, go to x.com" },
+      { title: "Go to a profile you follow", description: "Search for someone you're already following" },
+      { title: "Hover the Following button", description: "Hover over 'Following' — it changes to 'Unfollow'" },
+      { title: "Click Unfollow", description: "Click the button (now showing 'Unfollow')" },
+      { title: "Confirm", description: "If X shows a confirm dialog, click Unfollow again" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  x_reply: {
+    exampleSearch: "elonmusk",
+    exampleTip: "Find any of their recent posts",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open X", description: "In the browser, go to x.com" },
+      { title: "Find a post to reply to", description: "Open any tweet (a post) by clicking on it" },
+      { title: "Click the reply icon", description: "The speech-bubble icon under the post" },
+      { title: "Type a test reply", description: "Type anything — 'great post' works fine" },
+      { title: "Send it", description: "Click 'Reply' to send" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the X reply flow" },
+    ]
+  },
+
+  // ─── Reddit ───
+  reddit_dm: {
+    exampleSearch: "u/spez",
+    exampleTip: "u/spez (Reddit cofounder) is a safe public test target",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin", tip: "Recording captures your mouse clicks and keystrokes" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com", tip: "You should already be logged in" },
+      { title: "Go to a profile", description: "Click on any redditor's username (or visit reddit.com/user/spez)" },
+      { title: "Click Chat", description: "Hit the 'Chat' button on their profile", tip: "Some users disable chat — pick another if Chat doesn't appear" },
+      { title: "Type a test message", description: "Type anything — 'hello' works fine" },
+      { title: "Send it", description: "Press Enter or click the send arrow" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the Reddit chat flow" },
+    ]
+  },
+  reddit_follow: {
+    exampleSearch: "u/spez",
+    exampleTip: "u/spez is a safe public test target",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com" },
+      { title: "Go to a profile", description: "Click on any redditor's username" },
+      { title: "Click Follow", description: "Hit the 'Follow' button on their profile" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  reddit_comment: {
+    exampleSearch: "r/test",
+    exampleTip: "r/test is the official sandbox subreddit — comments are welcome there",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com" },
+      { title: "Open a post", description: "Click into any post (try one in r/test)" },
+      { title: "Click the comment box", description: "Click 'Add a comment' or the text field at the bottom" },
+      { title: "Type a test comment", description: "Type anything — 'test' works fine" },
+      { title: "Hit Comment", description: "Click the 'Comment' button to submit" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  reddit_post: {
+    exampleSearch: "r/test",
+    exampleTip: "Always test post submissions in r/test — it's built for sandbox traffic",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Reddit", description: "In the browser, go to reddit.com" },
+      { title: "Go to r/test", description: "In the search bar type 'r/test' and open the subreddit" },
+      { title: "Click Create Post", description: "Hit the '+ Create a post' button" },
+      { title: "Pick the Text tab", description: "Make sure 'Text' is selected (not Image / Link / Poll)" },
+      { title: "Fill title + body", description: "Title: 'test'. Body: 'test'." },
+      { title: "Click Post", description: "Submit the post" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the Reddit post flow" },
+    ]
+  },
+
+  // ─── Snapchat ───
+  snapchat_dm: {
+    exampleSearch: "team.snapchat",
+    exampleTip: "team.snapchat is Snapchat's official welcome account — safe to message",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Snapchat web", description: "In the browser, go to web.snapchat.com", tip: "You should already be logged in" },
+      { title: "Open Chats", description: "Click the chat icon (speech bubble) on the left" },
+      { title: "Pick or start a chat", description: "Click an existing chat with team.snapchat, or start a new one" },
+      { title: "Type a test message", description: "Type anything — 'hello' works fine" },
+      { title: "Send it", description: "Press Enter or click the send arrow" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "Snapchat's web client is sensitive — keep tests rare" },
+    ]
+  },
+  snapchat_follow: {
+    exampleSearch: "team.snapchat",
+    exampleTip: "team.snapchat is the safest follow target",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Snapchat web", description: "In the browser, go to web.snapchat.com" },
+      { title: "Find an account", description: "Use search to find 'team.snapchat' or any public account" },
+      { title: "Open the profile", description: "Click into the profile from the search results" },
+      { title: "Click Add Friend", description: "Hit '+ Add Friend' (Snapchat's version of follow)" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+
+  // ─── Pinterest ───
+  pinterest_dm: {
+    exampleSearch: "starbucks",
+    exampleTip: "Starbucks Pinterest is a safe target — they get tons of messages",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin", tip: "Recording captures your mouse clicks and keystrokes" },
+      { title: "Open Pinterest", description: "In the browser, go to pinterest.com", tip: "You should already be logged in" },
+      { title: "Find a profile", description: "Search for any Pinterest account (try 'starbucks')" },
+      { title: "Open the profile", description: "Click into their profile page" },
+      { title: "Click Message", description: "Hit the message / chat icon (paper plane near the Follow button)", tip: "Not every Pinterest account has DMs enabled" },
+      { title: "Type a test message", description: "Type anything — 'hello' works fine" },
+      { title: "Send it", description: "Click Send" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the Pinterest DM flow" },
+    ]
+  },
+  pinterest_follow: {
+    exampleSearch: "starbucks",
+    exampleTip: "Try following 'starbucks' on Pinterest",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Pinterest", description: "In the browser, go to pinterest.com" },
+      { title: "Find a profile", description: "Search for any Pinterest account" },
+      { title: "Open the profile", description: "Click into their profile page" },
+      { title: "Click Follow", description: "Hit the red 'Follow' button" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!" },
+    ]
+  },
+  pinterest_save_pin: {
+    exampleSearch: "starbucks",
+    exampleTip: "Save a pin from any popular profile",
+    steps: [
+      { title: "Click Start Recording", description: "Hit the big red button below to begin" },
+      { title: "Open Pinterest", description: "In the browser, go to pinterest.com" },
+      { title: "Open a pin", description: "Find any pin and click it open" },
+      { title: "Click Save", description: "Hit the red 'Save' button on the pin" },
+      { title: "Pick a board", description: "Select an existing board (or 'Create board' for a new one)" },
+      { title: "Stop Recording", description: "Come back and hit the stop button!", tip: "George will learn the Pinterest save-pin flow" },
+    ]
+  },
 }
 
 /* ─── Automation Definitions ─── */

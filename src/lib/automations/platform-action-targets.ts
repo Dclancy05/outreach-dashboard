@@ -142,6 +142,89 @@ export const PLATFORM_ACTION_TARGETS: PlatformActionTargets = {
       testTargetName: "MrBeast",
     },
   },
+  // ─── Phase C — newly-supported platforms ───
+  x: {
+    dm: {
+      recordUrl: "https://x.com/messages",
+      testUrl: "https://x.com/elonmusk",
+      testTargetName: "@elonmusk",
+      skipSendOnTest: true,
+    },
+    follow: {
+      recordUrl: "https://x.com/elonmusk",
+      testUrl: "https://x.com/elonmusk",
+      testTargetName: "@elonmusk",
+    },
+    unfollow: {
+      recordUrl: "https://x.com/elonmusk",
+      testUrl: "https://x.com/elonmusk",
+      testTargetName: "@elonmusk",
+    },
+    reply: {
+      recordUrl: "https://x.com/elonmusk",
+      testUrl: "https://x.com/elonmusk",
+      testTargetName: "@elonmusk",
+      skipSendOnTest: true,
+    },
+  },
+  reddit: {
+    dm: {
+      recordUrl: "https://www.reddit.com/user/spez/",
+      testUrl: "https://www.reddit.com/user/spez/",
+      testTargetName: "u/spez",
+      skipSendOnTest: true,
+    },
+    follow: {
+      recordUrl: "https://www.reddit.com/user/spez/",
+      testUrl: "https://www.reddit.com/user/spez/",
+      testTargetName: "u/spez",
+    },
+    comment: {
+      recordUrl: "https://www.reddit.com/r/test/",
+      testUrl: "https://www.reddit.com/r/test/",
+      testTargetName: "r/test",
+      // r/test is the official sandbox; comments are welcome but we still
+      // skip the final submit so the test matrix doesn't post 50× per night.
+      skipSendOnTest: true,
+    },
+    post: {
+      recordUrl: "https://www.reddit.com/r/test/submit",
+      testUrl: "https://www.reddit.com/r/test/",
+      testTargetName: "r/test",
+      skipSendOnTest: true,
+    },
+  },
+  snapchat: {
+    dm: {
+      recordUrl: "https://web.snapchat.com/",
+      testUrl: "https://web.snapchat.com/",
+      testTargetName: "team.snapchat",
+      skipSendOnTest: true,
+    },
+    follow: {
+      recordUrl: "https://web.snapchat.com/",
+      testUrl: "https://web.snapchat.com/",
+      testTargetName: "team.snapchat",
+    },
+  },
+  pinterest: {
+    dm: {
+      recordUrl: "https://www.pinterest.com/starbucks/",
+      testUrl: "https://www.pinterest.com/starbucks/",
+      testTargetName: "Starbucks",
+      skipSendOnTest: true,
+    },
+    follow: {
+      recordUrl: "https://www.pinterest.com/starbucks/",
+      testUrl: "https://www.pinterest.com/starbucks/",
+      testTargetName: "Starbucks",
+    },
+    save_pin: {
+      recordUrl: "https://www.pinterest.com/starbucks/",
+      testUrl: "https://www.pinterest.com/starbucks/",
+      testTargetName: "Starbucks",
+    },
+  },
 }
 
 /**
