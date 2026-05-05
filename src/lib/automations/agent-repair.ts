@@ -247,15 +247,23 @@ export async function repairFailedStep(
       ? out.selectors.filter((s) => typeof s === "string").slice(0, 3)
       : []
 
+    // Bug #28 — validate coordinates are finite + in a sane range.
+    // typeof === "number" allows NaN/Infinity which would crash CDP
+    // Input.dispatchMouseEvent. Cap at 10000×10000 (larger than any
+    // realistic viewport) to reject garbage.
+    const coordsOk =
+      out.coordinates &&
+      Number.isFinite(out.coordinates.x) &&
+      Number.isFinite(out.coordinates.y) &&
+      out.coordinates.x >= 0 &&
+      out.coordinates.x <= 10000 &&
+      out.coordinates.y >= 0 &&
+      out.coordinates.y <= 10000
+
     return {
       ok: true,
       selectors,
-      coordinates:
-        out.coordinates &&
-        typeof out.coordinates.x === "number" &&
-        typeof out.coordinates.y === "number"
-          ? out.coordinates
-          : undefined,
+      coordinates: coordsOk ? out.coordinates : undefined,
       reasoning:
         typeof out.reasoning === "string" ? out.reasoning : "(no reasoning supplied)",
       confidence:
