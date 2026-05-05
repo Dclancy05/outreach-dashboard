@@ -68,7 +68,8 @@ async function vncDrop({ page, ev, log }) {
   // them all. The viewer should detect the close and surface its
   // reconnecting overlay.
   log("→ vnc-drop: installing WebSocket capture, opening modal, then dropping")
-  await page.evaluateOnNewDocument(() => {
+  // Playwright (not Puppeteer) — addInitScript runs before each page load.
+  await page.addInitScript(() => {
     if (window.__wsCapture) return
     window.__wsCapture = []
     const OrigWS = window.WebSocket
@@ -84,6 +85,10 @@ async function vncDrop({ page, ev, log }) {
     Wrapped.CLOSED = OrigWS.CLOSED
     window.WebSocket = Wrapped
   }).catch(() => {})
+  // The page already navigated by the time we enter this variant — reload
+  // so the init script applies. Trade: a few seconds of extra setup.
+  await page.reload({ waitUntil: "domcontentloaded" }).catch(() => {})
+  await page.waitForTimeout(800)
 
   await openRecordingModal(page, ev, log)
   // Wait for the VNC handshake to start
