@@ -96,12 +96,13 @@ export async function run({ page, ev, log, dashboardUrl, pin, opts }) {
   // platform name + action label.
   const clicked = await page.evaluate(
     ({ slug, platform, action }) => {
-      // Strategy 1: data-slug attribute (if a future PR adds it)
-      const bySlug = document.querySelector(
-        `[data-slug="${slug}"] button:not([disabled])`
-      );
-      if (bySlug) {
-        bySlug.click();
+      // Strategy 1: data-slug attribute on the tile itself (Phase F-2
+      // added these). The tile is a clickable <motion.div>, NOT a child
+      // button — the onClick is bound to the div via React. We dispatch
+      // a click event directly on the tile element.
+      const tileBySlug = document.querySelector(`[data-slug="${slug}"]`);
+      if (tileBySlug) {
+        tileBySlug.click();
         return { ok: true, strategy: "data-slug" };
       }
       // Strategy 2: tile contains both platform name + action text + a Record button
