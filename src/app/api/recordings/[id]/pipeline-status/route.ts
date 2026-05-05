@@ -39,6 +39,13 @@ export async function GET(
   if (!id || typeof id !== "string") {
     return NextResponse.json({ error: "id required" }, { status: 400 })
   }
+  // Bug #5 hardening: only accept canonical UUID format. The id flows
+  // into a PostgREST .or() filter where Supabase's normal parametrized
+  // escaping doesn't reach. By rejecting non-UUID inputs at the door,
+  // we guarantee no special characters can poison the filter string.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return NextResponse.json({ error: "invalid recording id format" }, { status: 400 })
+  }
 
   const { data, error } = await supabase
     .from("recordings")
@@ -59,6 +66,11 @@ export async function GET(
   // what George tried before giving up. Best-effort — if the table or
   // join fails, we still return the phase data so the modal poll keeps
   // working.
+  //
+  // Bug #5 fix: never interpolate untrusted input into a PostgREST
+  // .or() filter — that string goes into a Postgres query. Resolve the
+  // automation_ids server-side first via parametrized .eq(), then use
+  // .in() with the resulting array (which IS parametrized).
   let recentAttempts: Array<{
     strategy: string
     status: string
@@ -66,12 +78,34 @@ export async function GET(
     ran_at?: string | null
   }> = []
   try {
-    const { data: log } = await supabase
+    const { data: autos } = await supabase
+      .from("automations")
+      .select("id")
+      .eq("recording_id", id)
+    const automationIds = (autos || [])
+      .map((a) => a.id as string)
+      .filter(Boolean)
+
+    let query = supabase
       .from("automation_test_log")
       .select("strategy, status, error, created_at")
-      .or(`recording_id.eq.${id},automation_id.in.(select id from automations where recording_id=${id})`)
       .order("created_at", { ascending: false })
       .limit(10)
+
+    // If we have related automation rows, fetch test_log for either path
+    // (recording_id direct OR automation_id in the resolved list). Both
+    // sides of the .or() use parametrized .eq()/.in() helpers — Supabase
+    // properly escapes the values.
+    if (automationIds.length > 0) {
+      const inList = `(${automationIds.join(",")})`
+      query = query.or(
+        `recording_id.eq.${id},automation_id.in.${inList}`
+      )
+    } else {
+      query = query.eq("recording_id", id)
+    }
+
+    const { data: log } = await query
     if (Array.isArray(log)) {
       recentAttempts = log.map((r) => ({
         strategy: r.strategy as string,
