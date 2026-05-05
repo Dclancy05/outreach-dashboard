@@ -216,29 +216,55 @@ async function runAgentRepairForStep(args: {
 }): Promise<{ success: boolean; error?: string; selector?: string; costCents?: number }> {
   const { step, platform, actionType, targetUrl, automationId } = args
 
-  // 1. Screenshot capture (Bug #25):
-  // The original design was to write the screenshot to a sibling-readable
-  // path on the VPS so the agent could Read it. But Vercel routes can't
-  // write to the VPS filesystem, AND the agent's Read tool can't read
-  // data URLs. So screenshot pass-through is BROKEN as designed.
+  // 1. Screenshot capture (Bug #25 fix):
+  // Capture via CDP, upload PNG bytes to a private Supabase storage bucket
+  // (`automation-screenshots`, see migration 20260505_automation_screenshots_bucket.sql),
+  // then mint a 5-minute signed URL we hand to the subagent. The subagent
+  // `curl`s the URL into /tmp/ and Reads it from there.
   //
-  // For now, pass null so the agent skill knows there's no screenshot and
-  // works from the failed-selector + step-description text only. The agent
-  // skill's "insufficient screenshot" branch handles this case explicitly.
+  // `screenshotPath` stays null forever (kept in the call for backward
+  // compatibility with the RepairInput interface). `screenshotUrl` is the
+  // new vehicle.
   //
-  // Future: write the screenshot to Supabase storage and pass a signed URL
-  // the agent can fetch. Tracked as a follow-up.
+  // All steps are best-effort: any failure (CDP, upload, sign) leaves us
+  // back at the legacy "no screenshot" path with `screenshotUrl: null`,
+  // which the agent skill handles explicitly.
   const screenshotPath: string | null = null
-  // Capture the bytes anyway so Sentry can include them when we later add
-  // observability for failed self-tests. Cheap on a passing run because we
-  // never reach the agent_repair branch.
+  let screenshotUrl: string | null = null
   try {
-    await runCDPCommand("Page.captureScreenshot", {
+    const shotResult = (await runCDPCommand("Page.captureScreenshot", {
       format: "png",
       captureBeyondViewport: false,
-    })
+    })) as { result?: { data?: string }; data?: string }
+    // CDP returns either {result:{data:...}} or {data:...} depending on
+    // gateway shape; normalize.
+    const b64Data: string | undefined =
+      shotResult?.result?.data || shotResult?.data
+    if (b64Data) {
+      const buf = Buffer.from(b64Data, "base64")
+      // Use automationId (or a synthetic id when no row owns this run) as
+      // the run namespace, plus a millisecond timestamp as the per-step
+      // discriminator. Path is opaque — only the signed URL is shared.
+      const runId = automationId || "no-automation"
+      const stepIdx = Date.now()
+      const path = `${runId}/${stepIdx}.png`
+      const upload = await supabase.storage
+        .from("automation-screenshots")
+        .upload(path, buf, {
+          contentType: "image/png",
+          upsert: true,
+        })
+      if (!upload.error) {
+        const { data: signed } = await supabase.storage
+          .from("automation-screenshots")
+          .createSignedUrl(path, 300)
+        screenshotUrl = signed?.signedUrl || null
+      }
+    }
   } catch {
-    // Screenshot capture is best-effort; nothing else depends on it.
+    // Screenshot capture / upload / signing is best-effort; if any step
+    // fails the agent gets called with screenshotUrl: null and degrades
+    // to text-only reasoning.
   }
 
   // 2. Ask the agent. Helper never throws; bad output → empty selectors.
@@ -250,7 +276,10 @@ async function runAgentRepairForStep(args: {
     targetText: step.fallback_text ?? null,
     attemptedSelectors: step.selectors || [],
     targetUrl,
+    // Legacy field, always null now — kept for backward compat.
     screenshotPath,
+    // Bug #25 fix: signed URL the subagent can curl + Read.
+    screenshotUrl,
     platform,
     actionType,
   })
