@@ -97,8 +97,16 @@ async function postHandler(req: Request) {
 
   // Resolve target URL: explicit override → per-(platform, action) record
   // URL → undefined (skip pre-navigation entirely).
+  // Bug #22 — validate target_url is http(s) before honoring it. Without
+  // this, a client could pass `target_url: "javascript:..."` or
+  // `file:///etc/passwd` and the VPS Chrome would dutifully navigate
+  // there. The PLATFORM_ACTION_TARGETS map is hard-coded so the fallback
+  // path is always safe; only the override needs hardening.
+  const overrideUrl = asString(body.target_url)
+  const safeOverride =
+    overrideUrl && /^https?:\/\//i.test(overrideUrl) ? overrideUrl : undefined
   const targetUrl =
-    body.target_url ||
+    safeOverride ||
     (platform && actionType ? getRecordUrl(platform, actionType) : undefined)
 
   let VPS_URL: string
