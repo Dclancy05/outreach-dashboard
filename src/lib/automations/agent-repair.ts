@@ -22,12 +22,23 @@
  *   - a short "reasoning" string for the audit log
  *   - a confidence 0..1
  *
- * Cost cap: each call is metered; per-automation aggregate cap of
- * ~$2 is enforced by the caller (self-test) so a busted automation
- * can't drain the subscription budget on infinite repair loops.
+ * Cost cap (Phase E-2): each call is metered. Per-automation aggregate
+ * cap of $2 is enforced before invoking the runner — a busted automation
+ * can't drain the subscription budget by re-triggering repair on every
+ * test cycle. The cap reads from automation_test_log.cost_cents
+ * (migration 20260506_repair_cost_tracking.sql).
  */
 
+import { createClient } from "@supabase/supabase-js"
 import { getSecret } from "@/lib/secrets"
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
+
+const PER_AUTOMATION_COST_CAP_CENTS = 200 // $2.00
 
 export interface RepairInput {
   /** uuid of the automation row being repaired (for audit log + per-automation cost cap) */
@@ -118,9 +129,41 @@ RULES:
 }
 
 /**
+ * Best-effort sum of cost_cents in automation_test_log for this automation
+ * (only repaired_by_ai rows). Returns 0 when the column doesn't exist
+ * (pre-migration), so the cap is implicitly disabled until the migration
+ * applies — the runner will still get called once per attempt then.
+ */
+async function sumRepairCostCentsForAutomation(
+  automationId: string | null | undefined
+): Promise<number> {
+  if (!automationId) return 0
+  try {
+    const { data, error } = await supabase
+      .from("automation_test_log")
+      .select("cost_cents")
+      .eq("automation_id", automationId)
+      .eq("repaired_by_ai", true)
+    if (error) return 0
+    return (data || []).reduce(
+      (sum, r) => sum + (typeof r.cost_cents === "number" ? r.cost_cents : 0),
+      0
+    )
+  } catch {
+    return 0
+  }
+}
+
+/**
  * Calls the agent-runner. Returns ok:false with a structured error when
  * the runner isn't configured, times out, or crashes — never throws so
  * the self-test loop can treat it as just another failed strategy.
+ *
+ * Phase E-2: enforces a per-automation $2 (200¢) aggregate cost cap
+ * BEFORE invoking the runner. If prior repair attempts on this
+ * automation already total ≥ cap, returns `ok:false` with
+ * `error: "per_automation_cost_cap"` so the operator sees a clear signal
+ * that the automation is too far gone to keep paying for AI fixes.
  */
 export async function repairFailedStep(
   input: RepairInput
@@ -137,6 +180,20 @@ export async function repairFailedStep(
       costUsd: 0,
     }
   }
+
+  // Phase E-2 — cost cap pre-check.
+  const priorCents = await sumRepairCostCentsForAutomation(input.automationId)
+  if (priorCents >= PER_AUTOMATION_COST_CAP_CENTS) {
+    return {
+      ok: false,
+      error: "per_automation_cost_cap",
+      selectors: [],
+      reasoning: `This automation has already used $${(priorCents / 100).toFixed(2)} of AI repair budget (cap: $${(PER_AUTOMATION_COST_CAP_CENTS / 100).toFixed(2)}). Re-record manually or raise PER_AUTOMATION_COST_CAP_CENTS.`,
+      confidence: 0,
+      costUsd: 0,
+    }
+  }
+
   const runnerToken = await getRunnerToken()
   const prompt = buildPrompt(input)
 

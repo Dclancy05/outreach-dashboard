@@ -211,8 +211,10 @@ async function runAgentRepairForStep(args: {
   platform: string
   actionType: string
   targetUrl: string
-}): Promise<{ success: boolean; error?: string; selector?: string }> {
-  const { step, platform, actionType, targetUrl } = args
+  /** automation_id for the per-automation cost cap (Phase E-2) */
+  automationId?: string | null
+}): Promise<{ success: boolean; error?: string; selector?: string; costCents?: number }> {
+  const { step, platform, actionType, targetUrl, automationId } = args
 
   // 1. Try to capture a screenshot. The agent reads it via the screenshot
   //    path (best-effort — the VPS Chrome may not support this CDP method).
@@ -234,8 +236,10 @@ async function runAgentRepairForStep(args: {
   }
 
   // 2. Ask the agent. Helper never throws; bad output → empty selectors.
+  // Phase E-2: pass automationId so the per-automation cost cap is checked
+  // before the runner is invoked.
   const repair = await repairFailedStep({
-    automationId: null, // populated by caller for the audit log; agent doesn't need it
+    automationId: automationId ?? null,
     stepDescription: step.description,
     targetText: step.fallback_text ?? null,
     attemptedSelectors: step.selectors || [],
@@ -244,14 +248,16 @@ async function runAgentRepairForStep(args: {
     platform,
     actionType,
   })
+  // Convert costUsd (decimal) → cost cents (int) for the test_log column.
+  const costCents = Math.round((repair.costUsd || 0) * 100)
   if (!repair.ok) {
-    return { success: false, error: repair.error || "agent unreachable" }
+    return { success: false, error: repair.error || "agent unreachable", costCents }
   }
   if (
     (!repair.selectors || repair.selectors.length === 0) &&
     !repair.coordinates
   ) {
-    return { success: false, error: "agent returned no usable hint" }
+    return { success: false, error: "agent returned no usable hint", costCents }
   }
 
   // 3. Try each suggested selector in order via Runtime.evaluate.
@@ -265,7 +271,7 @@ async function runAgentRepairForStep(args: {
       })
       const v = r?.result?.value
       if (v?.found) {
-        return { success: true, selector: sel }
+        return { success: true, selector: sel, costCents }
       }
     } catch {
       // try next
@@ -288,13 +294,13 @@ async function runAgentRepairForStep(args: {
         y: repair.coordinates.y,
         button: "left",
       })
-      return { success: true, selector: `coords(${repair.coordinates.x},${repair.coordinates.y})` }
+      return { success: true, selector: `coords(${repair.coordinates.x},${repair.coordinates.y})`, costCents }
     } catch (e) {
-      return { success: false, error: `coordinate click failed: ${String(e)}` }
+      return { success: false, error: `coordinate click failed: ${String(e)}`, costCents }
     }
   }
 
-  return { success: false, error: "all agent suggestions missed" }
+  return { success: false, error: "all agent suggestions missed", costCents }
 }
 
 async function runTestWithStrategy(
@@ -307,9 +313,14 @@ async function runTestWithStrategy(
   }>,
   platform: string,
   actionType: string,
-  testTarget: { url: string; name: string; skipSend?: boolean }
-): Promise<{ success: boolean; error?: string; stepsCompleted: number }> {
+  testTarget: { url: string; name: string; skipSend?: boolean },
+  /** Phase E-2 — automation_id for the per-automation cost cap. */
+  automationId?: string | null
+): Promise<{ success: boolean; error?: string; stepsCompleted: number; costCents?: number }> {
   let stepsCompleted = 0
+  // Phase E-2: aggregate cost across all agent_repair invocations within
+  // a single runTestWithStrategy call. Stays 0 for deterministic strategies.
+  let costCentsAccrued = 0
 
   for (const step of script) {
     try {
@@ -410,7 +421,13 @@ async function runTestWithStrategy(
             platform,
             actionType,
             targetUrl: testTarget.url,
+            automationId: automationId ?? null,
           })
+          // Phase E-2: tally cost cents whether or not the call succeeded —
+          // we still pay the runner for unsuccessful attempts.
+          if (typeof repaired.costCents === "number") {
+            costCentsAccrued += repaired.costCents
+          }
           if (!repaired.success) {
             throw new Error(
               `agent_repair: ${repaired.error || "no fix produced"}`
@@ -449,11 +466,12 @@ async function runTestWithStrategy(
         success: false,
         error: `Step ${step.step} (${step.description}): ${String(e)}`,
         stepsCompleted,
+        costCents: costCentsAccrued,
       }
     }
   }
 
-  return { success: true, stepsCompleted }
+  return { success: true, stepsCompleted, costCents: costCentsAccrued }
 }
 
 export async function POST(req: Request) {
@@ -585,7 +603,14 @@ export async function POST(req: Request) {
       const startTime = Date.now()
 
       try {
-        const result = await runTestWithStrategy(strategy, script, platform, action_type, testTarget)
+        const result = await runTestWithStrategy(
+          strategy,
+          script,
+          platform,
+          action_type,
+          testTarget,
+          isAutomationsTable ? recordId : null
+        )
         const duration = Date.now() - startTime
 
         // Log the attempt — automation_test_log only has script_id today;
@@ -600,6 +625,9 @@ export async function POST(req: Request) {
           // Phase E migration 20260506_repair_attribution.sql adds this so
           // the Maintenance "Repaired by AI" badge can detect AI-fixed rows.
           repaired_by_ai: strategy === "agent_repair",
+          // Phase E-2 migration 20260506_repair_cost_tracking.sql — feeds the
+          // per-automation $2 cost cap enforced by repairFailedStep().
+          cost_cents: typeof result.costCents === "number" ? result.costCents : null,
           attempt_number: attemptNum,
           strategy,
           test_target: testTarget.url,
