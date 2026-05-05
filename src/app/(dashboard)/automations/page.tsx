@@ -2564,13 +2564,25 @@ function MaintenanceTab() {
   const [dryRunOpen, setDryRunOpen] = useState(false)
   const [dryRunLoading, setDryRunLoading] = useState(false)
   const [dryRunResult, setDryRunResult] = useState<DryRunResultPayload | null>(null)
+  // Phase F-2 — AI-repair attribution. Map of automation_id → last repair info.
+  // Empty when the migration hasn't been applied (the API degrades cleanly).
+  const [repairs, setRepairs] = useState<Record<string, { last_repair_at: string; success: boolean | null; error: string | null }>>({})
 
   const load = useCallback(async () => {
     try {
       // Unified list so Maintenance surfaces extension-recorded automations too
-      const res = await fetch("/api/automations/list")
-      const data = await res.json()
+      const [listRes, repairRes] = await Promise.all([
+        fetch("/api/automations/list"),
+        fetch("/api/automations/repair-status"),
+      ])
+      const data = await listRes.json()
       setItems(data.data || [])
+      try {
+        const repairData = await repairRes.json()
+        if (repairData?.repairs) setRepairs(repairData.repairs)
+      } catch {
+        /* repair-status is best-effort — UI shows no badges if it fails */
+      }
     } catch {} finally { setLoading(false) }
   }, [])
 
@@ -2699,7 +2711,24 @@ function MaintenanceTab() {
                 const canDryRun = a.source !== "extension"
                 return (
                   <tr key={a.id} className="border-t border-border/20 hover:bg-muted/10 transition-colors">
-                    <td className="px-4 py-3 font-medium">{a.name}</td>
+                    <td className="px-4 py-3 font-medium">
+                      <div className="flex items-center gap-2">
+                        <span>{a.name}</span>
+                        {/* Phase F-2 — "Repaired by AI" badge.
+                            Only renders when the v_automation_last_repair view
+                            has a row for this automation (i.e., self-test
+                            successfully used the agent_repair strategy at least
+                            once). Hover for the timestamp. */}
+                        {repairs[a.id] && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full bg-violet-500/15 border border-violet-500/30 px-1.5 py-0.5 text-[9px] font-semibold text-violet-300"
+                            title={`Last AI repair: ${new Date(repairs[a.id].last_repair_at).toLocaleString()}${repairs[a.id].error ? ` (error: ${(repairs[a.id].error || "").slice(0, 100)})` : ""}`}
+                          >
+                            🤖 Fixed by George
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="inline-flex items-center gap-1.5 text-xs">
                         {PlatformIcon && <PlatformIcon className="h-4 w-4" />}
