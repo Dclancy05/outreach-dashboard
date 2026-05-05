@@ -27,9 +27,15 @@ export const dynamic = "force-dynamic"
  */
 export async function GET(_req: NextRequest) {
   // 1. Find the single dummy group.
+  // Bug #26 fix — DO NOT include `username`/`password` columns. These are
+  // proxy auth credentials. The previous query returned them to ANY
+  // authenticated dashboard user, leaking proxy creds via the GET. The
+  // UI only needs identity fields (id/name/ip/port/location) to render
+  // the dummy-group selector banner; auth happens server-side via the
+  // VPS having its own copy of proxy credentials.
   const { data: group, error: groupErr } = await supabase
     .from("proxy_groups")
-    .select("id, name, ip, port, username, password, location_city, location_country, is_dummy")
+    .select("id, name, ip, port, location_city, location_country, is_dummy")
     .eq("is_dummy", true)
     .maybeSingle()
 
