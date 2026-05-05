@@ -75,19 +75,44 @@ const CHAOS_VARIANTS = [
 ]
 
 // Run a single subprocess and wait for it to finish.
+// Bug #12 fix: includes child.on("error") so spawn failures resolve
+// instead of hanging the sweep, plus a 10min hard timeout per stage.
 function runCommand(label, args, env = {}) {
   return new Promise((resolve) => {
     console.log(`\n━━━ ${label} ━━━`)
     console.log(`> node ${args.join(" ")}`)
     const startedAt = Date.now()
+    let resolved = false
+    const safeResolve = (r) => {
+      if (resolved) return
+      resolved = true
+      resolve(r)
+    }
     const child = spawn("node", args, {
       stdio: "inherit",
       env: { ...process.env, ...env },
     })
+    child.on("error", (err) => {
+      const took = Date.now() - startedAt
+      console.log(`━━━ ${label} spawn FAILED in ${(took / 1000).toFixed(1)}s — ${err.message}`)
+      safeResolve({ label, code: -1, took, error: err.message })
+    })
+    // 10min per-stage timeout — chaos/memory/a11y individual scenarios
+    // run ≤ 30s typically, but matrix can be much longer. The outer
+    // matrix.mjs has its own per-run timeouts; this is the belt-and-
+    // suspenders kill.
+    const STAGE_TIMEOUT_MS = 60 * 60 * 1000 // 60 min
+    const killTimer = setTimeout(() => {
+      try { child.kill("SIGKILL") } catch {}
+      const took = Date.now() - startedAt
+      console.log(`━━━ ${label} KILLED after ${(took / 60_000).toFixed(1)}min`)
+      safeResolve({ label, code: -2, took, error: "stage timeout" })
+    }, STAGE_TIMEOUT_MS)
     child.on("exit", (code) => {
+      clearTimeout(killTimer)
       const took = Date.now() - startedAt
       console.log(`━━━ ${label} done in ${(took / 1000).toFixed(1)}s — exit ${code}`)
-      resolve({ label, code, took })
+      safeResolve({ label, code, took })
     })
   })
 }
