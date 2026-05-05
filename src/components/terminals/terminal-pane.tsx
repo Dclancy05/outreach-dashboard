@@ -621,6 +621,36 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     }
   }, [terminalReady])
 
+  // Refocus when the page becomes visible (user switched tabs and came back)
+  // and when the window regains focus. Without this, returning to the tab
+  // leaves keystrokes going to body — the user has to re-click the pane.
+  useEffect(() => {
+    if (!terminalReady) return
+    const refocusIfStateAllows = () => {
+      if (stateRef.current !== "connected") return
+      const active = document.activeElement
+      const inAnotherInput =
+        active && active !== document.body &&
+        (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || (active as HTMLElement).isContentEditable) &&
+        active !== containerRef.current?.querySelector(".xterm-helper-textarea")
+      if (inAnotherInput) return
+      try {
+        xtermRef.current?.focus()
+        containerRef.current
+          ?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
+          ?.focus({ preventScroll: true })
+      } catch { /* */ }
+    }
+    const onVisibility = () => { if (!document.hidden) refocusIfStateAllows() }
+    const onWinFocus = () => refocusIfStateAllows()
+    document.addEventListener("visibilitychange", onVisibility)
+    window.addEventListener("focus", onWinFocus)
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility)
+      window.removeEventListener("focus", onWinFocus)
+    }
+  }, [terminalReady])
+
   const overlayContent = useMemo(() => {
     if (state === "connecting" || state === "idle") {
       return (
