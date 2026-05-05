@@ -31,7 +31,7 @@ async function postHandler(req: NextRequest) {
   }
   try {
     const body = await req.json()
-    const { sessionId, name, platform, action_type, tags } = body
+    const { sessionId, name, platform, action_type, tags, discard } = body
     const VPS_URL =
       (await getSecret("VPS_URL")) ||
       (await getSecret("RECORDING_SERVER_URL")) ||
@@ -47,6 +47,14 @@ async function postHandler(req: NextRequest) {
     const vpsData = await res.json()
 
     if (!res.ok) return NextResponse.json(vpsData, { status: res.status })
+
+    // Bug #17 — discard path. The user clicked "Discard" mid-recording on
+    // the partial-save confirm dialog; release VPS resources but skip the
+    // DB row + async pipeline. The VPS already stopped its recording when
+    // we hit /stop above; we just don't persist or post-process anything.
+    if (discard === true) {
+      return NextResponse.json({ success: true, discarded: true })
+    }
 
     // Insert into Supabase
     const { data, error } = await supabase.from("recordings").insert({

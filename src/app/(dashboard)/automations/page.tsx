@@ -1799,7 +1799,25 @@ function RecordingModal({
                 Save what we have
               </button>
               <button
-                onClick={() => { setShowCloseConfirm(false); setIsRecording(false); onClose() }}
+                onClick={() => {
+                  // Bug #17 fix — Discard previously left the VPS Chrome session
+                  // running indefinitely (only flipped local state). Fire-and-
+                  // forget POST to /api/recordings/stop with discard:true so the
+                  // VPS releases the session even though we're skipping the DB
+                  // save. Errors are swallowed because the user already decided
+                  // to discard; we just don't want to leak a Chrome.
+                  if (sessionId) {
+                    fetch("/api/recordings/stop", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ sessionId, discard: true }),
+                      keepalive: true,
+                    }).catch(() => {})
+                  }
+                  setShowCloseConfirm(false)
+                  setIsRecording(false)
+                  onClose()
+                }}
                 className="px-4 py-2.5 rounded-xl bg-red-500/80 hover:bg-red-500 text-white text-sm font-semibold transition-colors"
               >
                 Discard
