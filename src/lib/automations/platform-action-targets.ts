@@ -249,6 +249,9 @@ export function getActionTarget(
 export function getRecordUrl(platform: string, action: string): string {
   const target = getActionTarget(platform, action)
   if (target) return target.recordUrl
+  // Bug #15 fix — handle undefined/non-string platform without
+  // throwing. Previous version called .toLowerCase() unguarded.
+  const p = typeof platform === "string" ? platform.toLowerCase() : ""
   // Fallback chain: known login URL → platform homepage → about:blank
   const loginUrls: Record<string, string> = {
     ig: "https://www.instagram.com/",
@@ -261,7 +264,7 @@ export function getRecordUrl(platform: string, action: string): string {
     snapchat: "https://web.snapchat.com/",
     pinterest: "https://www.pinterest.com/",
   }
-  return loginUrls[platform.toLowerCase()] || "about:blank"
+  return loginUrls[p] || "about:blank"
 }
 
 /**
