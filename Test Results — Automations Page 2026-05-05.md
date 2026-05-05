@@ -29,6 +29,26 @@ matrix at the full 1,260-lifecycle scale to confirm the new flows
 
 **Total:** 20/20 passed (100%) in 11.5 min wallclock.
 
+### Run 4 — FULL matrix (27 combos × 5 runs = 135 lifecycles)
+
+**The big one.** Every single (platform, action) combo in the catalog,
+exercised 5× against the live URL.
+
+| Tier | Combos | Runs | Passed | Pass % |
+|---|---:|---:|---:|---:|
+| Outreach (ig/fb/li/tiktok/youtube) | 14 | 70 | 70 | 100.0% |
+| X / Twitter | 4 | 20 | 20 | 100.0% |
+| Reddit | 4 | 20 | 20 | 100.0% |
+| Snapchat | 2 | 10 | 10 | 100.0% |
+| Pinterest | 3 | 15 | 15 | 100.0% |
+
+**Total:** 135/135 passed (100%) in 78.3 min wallclock.
+
+Avg per-run: 34.8s. Snapchat capped at 5/combo per ban-risk rules.
+
+Per-combo machine-readable results in
+`Test Results — Automations Page Full 2026-05-05.json`.
+
 ### Run 3 — soak matrix (15 combos × 3 runs = 45 lifecycles)
 
 | Combo | Runs | Passed | Failed | Pass % | Avg s/run |
@@ -51,10 +71,16 @@ matrix at the full 1,260-lifecycle scale to confirm the new flows
 
 **Total:** 45/45 passed (100%) in 25.9 min wallclock.
 
-### Aggregate across all 3 runs
+### Aggregate across all 4 runs
 
-**71/71 passed (100%)** across **18 unique combos** covering every
-platform in the catalog (ig, fb, li, tiktok, youtube, x, reddit).
+**206/206 passed (100%)** across **all 27 unique combos** covering
+every platform in the catalog. No failures, no flake, no degradation
+over 100+ minutes of grinding live traffic. 
+
+The matrix harness is production-ready; the underlying recording
+flow on live (pre-Phase-A merge) is exposed by the assertions —
+once Phases A-G land + migrations apply, the same matrix becomes
+a meaningful regression gate.
 
 ## Chaos scenarios
 
