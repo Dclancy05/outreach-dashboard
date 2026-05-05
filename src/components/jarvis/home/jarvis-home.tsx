@@ -36,7 +36,7 @@ const TILES: { href: string; title: string; hint: string; icon: typeof Brain }[]
   { href: "/jarvis/mcps", title: "MCPs", hint: "Servers + tool playground", icon: Plug },
   { href: "/jarvis/workflows", title: "Workflows", hint: "Visual builder", icon: Workflow },
   { href: "/jarvis/observability", title: "Observability", hint: "Live VNC", icon: Eye },
-  { href: "/jarvis/cost", title: "Cost", hint: "Spend vs cap", icon: DollarSign },
+  { href: "/jarvis/cost", title: "Usage", hint: "Sessions, runs, API spend", icon: DollarSign },
   { href: "/jarvis/status", title: "System Status", hint: "VPS · services · crons", icon: ActivityIcon },
   { href: "/jarvis/audit", title: "Audit log", hint: "Every change", icon: FileText },
   { href: "/jarvis/settings", title: "Settings", hint: "Token budget · personas · MCP", icon: PanelTop },

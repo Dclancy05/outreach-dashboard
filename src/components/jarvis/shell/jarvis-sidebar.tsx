@@ -66,7 +66,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/jarvis/inbox", label: "Inbox", icon: Bell },
   { href: "/jarvis/mcps", label: "MCPs", icon: Plug },
   { href: "/jarvis/observability", label: "Observability", icon: Eye },
-  { href: "/jarvis/cost", label: "Cost", icon: DollarSign },
+  { href: "/jarvis/cost", label: "Usage", icon: DollarSign },
   { href: "/jarvis/status", label: "Status", icon: Activity },
   { href: "/jarvis/proof", label: "Proof", icon: ShieldCheck },
   { href: "/jarvis/audit", label: "Audit", icon: FileText },
