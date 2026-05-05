@@ -1,6 +1,6 @@
 ---
 name: automation-selector-repair
-description: Phase E — when an automation's self-test fails because the recorded selector no longer finds its element (target site shipped a redesign, ship a new aria-label, etc.), this agent looks at a screenshot of the live page and proposes new selectors. Called by /api/recordings/self-test as the 6th "agent_repair" strategy after the 5 deterministic ones (original, text_based, shadow_dom, xpath, coordinates) all fail. Output is strict JSON consumed by the test runner — no human-readable prose.
+description: Phase E — when an automation's self-test fails because the recorded selector no longer finds its element (target site shipped a redesign, ship a new aria-label, etc.), this agent reasons from the failed-selector chain + step description + visible target text and proposes new selectors. Called by /api/recordings/self-test as the 6th "agent_repair" strategy after the 5 deterministic ones (original, text_based, shadow_dom, xpath, coordinates) all fail. Output is strict JSON consumed by the test runner — no human-readable prose. (Note: screenshot input is currently disabled per Bug #25 — Vercel routes can't write to VPS filesystem and Claude Code's Read tool can't decode data URLs. Follow-up: Supabase storage signed URL.)
 tools: Read, Bash, Grep, mcp__chrome_devtools__*
 ---
 
