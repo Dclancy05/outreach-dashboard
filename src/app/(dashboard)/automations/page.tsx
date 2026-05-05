@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Wand2, Play, Square, Trash2, X, CheckCircle, AlertTriangle,
@@ -989,8 +989,12 @@ function RecordingModal({
   const vncWsUrl = useMemo(() => buildWsUrlForSession("main"), [])
   // Stable per-open telemetry session id so the VncViewer's `/api/observability/vnc`
   // POSTs and our /api/recordings/start audit row tie together as one session.
+  // crypto.randomUUID() instead of Math.random() — CodeQL rule
+  // "insecure randomness in a security context" treats Math.random as
+  // unsafe even for correlation-only ids; the Web Crypto API satisfies
+  // it cleanly. Supported in all browsers + Node 19+.
   const recordingSessionId = useMemo(
-    () => `rec_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`,
+    () => `rec_${crypto.randomUUID().slice(0, 12)}`,
     [isOpen] // eslint-disable-line react-hooks/exhaustive-deps -- intentional: new id per open
   )
 
@@ -1774,9 +1778,11 @@ function LiveViewTab() {
   // accounts page). Phase B will compute this from `group?.id` so each dummy
   // group gets its own Chrome profile.
   const vncWsUrl = useMemo(() => buildWsUrlForSession("main"), [])
-  // Stable telemetry session id per page mount.
+  // Stable telemetry session id per page mount. crypto.randomUUID() —
+  // see RecordingModal recordingSessionId for the full reasoning
+  // (CodeQL "insecure randomness" rule).
   const telemetrySessionId = useMemo(
-    () => `liveview_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`,
+    () => `liveview_${crypto.randomUUID().slice(0, 12)}`,
     []
   )
 
