@@ -202,24 +202,24 @@ export function TerminalPane({ sessionId, wsUrl, onResize, onOpenFile }: Props) 
     term.loadAddon(search)
     term.loadAddon(links)
 
-    // Custom wheel handler. On the normal buffer (a plain shell), defer to
-    // xterm so native scrollback works. On the alt buffer (Claude Code, vim,
-    // less, htop), swallow the wheel completely — DO NOT translate it into
-    // Up/Down arrow keys. The previous implementation did, and the running
-    // app's readline interpreted those arrows as history navigation, pulling
-    // prior commands back into the prompt every time the user scrolled. A
-    // normal terminal sends nothing on a wheel scroll inside a TUI unless the
-    // app explicitly opts into mouse-wheel tracking. (Note: the dot/border
-    // pollution Dylan reported has a SEPARATE root cause — the PTY size
-    // drifting away from xterm's actual cols/rows. That is fixed by the
-    // forced onResize push in ws.onopen below.)
-    term.attachCustomWheelEventHandler((ev) => {
-      if (term.buffer.active.type !== "alternate") {
-        return true
-      }
-      ev.preventDefault()
-      return false
-    })
+    // Wheel handler: defer to xterm's native behavior in all cases.
+    //
+    // History of this code:
+    //   • The first version translated wheel → arrow keys, which the host's
+    //     readline interpreted as shell-history navigation (pulled prior
+    //     commands back into the prompt). Bug.
+    //   • The next version swallowed wheel entirely on the alt buffer. That
+    //     killed scroll-to-read-old-messages too. Also bug.
+    //   • This version: do nothing. Native xterm.js behavior handles both
+    //     buffers correctly — normal buffer scrolls scrollback, alt buffer
+    //     with mouse-tracking enabled (Claude Code, htop, etc.) sends
+    //     standard SGR wheel events (button 64/65) that the running TUI
+    //     interprets as "scroll my own UI." The dot/border cascade that
+    //     used to plague this surface had a SEPARATE root cause (PTY size
+    //     mismatch — fixed by the cols/rows query in the WS URL plus the
+    //     on-open resize POST in ws.onopen).
+    //
+    // No `attachCustomWheelEventHandler` call here on purpose.
 
     term.open(container)
     // Use xterm's default DOM renderer. The WebGL/Canvas addon ladder was
