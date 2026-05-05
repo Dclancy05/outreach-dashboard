@@ -10,8 +10,8 @@
 
 ## TL;DR
 
-- **27 bugs found and fixed.** 5 critical, 9 high-severity, 11 medium, 2 low/docs.
-- **1,121+ live recording-flow lifecycles validated** at 100% pass rate over 11 sweep cycles + 5 standalone matrix runs.
+- **28 bugs found and fixed.** 5 critical, 9 high-severity, 12 medium, 2 low/docs.
+- **1,337+ live recording-flow lifecycles validated** at 100% pass rate over 13 sweep cycles + 5 standalone matrix runs.
 - **PR #154** stacks all the fixes on top of the 14-PR Phase A→C-2 + G-4 stack.
 - **Sacred constraint preserved.** Zero edits to `accounts/page.tsx`, `platform-login-modal.tsx`, `vnc-viewer.tsx`, `accounts/**`, `api/accounts/**`, `api/platforms/**`, `api/proxies/**`.
 
