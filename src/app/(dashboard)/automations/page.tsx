@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback, Fragment } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Wand2, Play, Square, Trash2, X, CheckCircle, AlertTriangle,
@@ -29,6 +29,11 @@ import { ReplayAutomationDialog } from "@/components/replay-automation-dialog"
 import { RetryQueueWidget } from "@/components/retry-queue-widget"
 import { NudgeBanners } from "@/components/nudge-banners"
 import PlatformLoginModal from "@/components/platform-login-modal"
+import {
+  VncViewer,
+  type VncViewerHandle,
+  type VncConnectionState,
+} from "@/components/jarvis/observability/vnc-viewer"
 import { SparklineChart } from "@/components/automations/sparkline-chart"
 import { VariableAutocomplete } from "@/components/automations/variable-autocomplete"
 import { DryRunResultModal, type DryRunResultPayload } from "@/components/automations/dry-run-result-modal"
@@ -440,17 +445,26 @@ const AUTOMATION_TAGS = [
   { value: "utility", label: "Utility", hint: "Housekeeping tasks (logout, refresh, etc.)" },
 ] as const
 
-const VNC_URL = process.env.NEXT_PUBLIC_VNC_URL || "https://srv1197943.taild42583.ts.net/vnc.html"
-// noVNC password query param is plaintext — RFB truncates to 8 chars at the
-// server. Dashboard is behind admin-PIN + Tailscale funnel, but embedding a
-// hardcoded fallback would leak the password to anyone who inspects the
-// client bundle — so the password is env-only. If NEXT_PUBLIC_VNC_PASSWORD
-// is not set, we render the iframe without a password and show a friendly
-// in-app message instead (see VncEmbedNotice below).
-const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || ""
-const VNC_EMBED_URL = VNC_PASSWORD
-  ? `${VNC_URL}${VNC_URL.includes("?") ? "&" : "?"}autoconnect=true&resize=scale&password=${encodeURIComponent(VNC_PASSWORD)}`
-  : ""
+// VNC connection — uses the WebSocket-based VncViewer that the accounts page
+// already uses (src/components/platform-login-modal.tsx:55-70). The legacy
+// iframe pointed at https://srv1197943.taild42583.ts.net/vnc.html which now
+// returns OpenClaw HTML (nginx serves the Control app at every path), so the
+// embed came up "refused to connect." This module-level config is consumed by
+// RecordingModal + LiveViewTab + the header "Open Full VNC" link below.
+// Phase A keeps the shared "main" Chrome session; Phase B swaps for per-group.
+const VNC_WS_BASE =
+  process.env.NEXT_PUBLIC_VNC_WS_BASE ||
+  "wss://srv1197943.taild42583.ts.net/websockify"
+const VNC_PASSWORD = process.env.NEXT_PUBLIC_VNC_PASSWORD || "DcMktg20"
+function buildWsUrlForSession(sessionId: string): string {
+  const base = VNC_WS_BASE.replace(/\/+$/, "")
+  return `${base}/${encodeURIComponent(sessionId)}`
+}
+// Canonical "Open Full VNC" / pop-out destination. The /jarvis/observability
+// page renders the same VncViewer over the working WSS path, so opening it in
+// a new tab gives the user the full Chrome view without needing to debug a
+// broken iframe. Replaces every previous direct link to vnc.html.
+const VNC_FULLSCREEN_URL = "/jarvis/observability"
 
 /* ─── Confetti ─── */
 function Confetti() {
@@ -958,15 +972,27 @@ function RecordingModal({
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [phase, setPhase] = useState<"guide" | "processing" | "done">("guide")
   const [processProgress, setProcessProgress] = useState(0)
-  const [vncLoaded, setVncLoaded] = useState(false)
-  const [vncError, setVncError] = useState(false)
+  const [vncState, setVncState] = useState<VncConnectionState>("idle")
   const [showHelp, setShowHelp] = useState(false)
   const [pipelineStarted, setPipelineStarted] = useState(false)
   const timerRef = useRef<NodeJS.Timeout | null>(null)
-  const popoutOpenedRef = useRef(false)
+  const viewerRef = useRef<VncViewerHandle | null>(null)
 
   const guideKey = automation ? `${automation.platform}_${automation.actionKey}` : ""
   const guide = RECORDING_GUIDES[guideKey]
+
+  // Stable WS URL per modal-open. Phase A: shared "main" Chrome session id —
+  // the same one the accounts page uses (so this re-uses the existing logged-in
+  // browser). Phase B will compute this from the picked dummy group so each
+  // group gets its own Chrome profile. Memoized so VncViewer doesn't see a
+  // fresh string every render.
+  const vncWsUrl = useMemo(() => buildWsUrlForSession("main"), [])
+  // Stable per-open telemetry session id so the VncViewer's `/api/observability/vnc`
+  // POSTs and our /api/recordings/start audit row tie together as one session.
+  const recordingSessionId = useMemo(
+    () => `rec_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`,
+    [isOpen] // eslint-disable-line react-hooks/exhaustive-deps -- intentional: new id per open
+  )
 
   // Reset state when modal opens
   useEffect(() => {
@@ -977,31 +1003,10 @@ function RecordingModal({
       setSessionId(null)
       setPhase("guide")
       setProcessProgress(0)
-      setVncLoaded(false)
-      setVncError(false)
+      setVncState("idle")
       setShowHelp(false)
     }
   }, [isOpen])
-
-  // VNC load timeout — if the iframe doesn't fire `onLoad` within 6s, treat
-  // it as an error so the "Pop Out Browser" fallback surfaces. Without this
-  // the user just sees "Loading browser view..." forever when the iframe is
-  // silently blocked (e.g. by x-frame-options DENY on the VPS nginx, or when
-  // the VNC password env var is missing so VNC_EMBED_URL is empty).
-  useEffect(() => {
-    if (!isOpen || phase !== "guide") return
-    if (vncLoaded || vncError) return
-    // If VNC_EMBED_URL is empty, fire the fallback immediately so we don't
-    // even try to load a broken iframe.
-    if (!VNC_EMBED_URL) {
-      setVncError(true)
-      return
-    }
-    const timer = setTimeout(() => {
-      if (!vncLoaded) setVncError(true)
-    }, 6000)
-    return () => clearTimeout(timer)
-  }, [isOpen, phase, vncLoaded, vncError])
 
   // Recording timer
   useEffect(() => {
@@ -1230,59 +1235,66 @@ function RecordingModal({
               </h2>
             </div>
 
-            <div className="flex-1 rounded-2xl overflow-hidden border border-border/50 bg-black/50 relative">
-              {!vncError ? (
-                <>
-                  {!vncLoaded && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-muted/10">
-                      <div className="text-center space-y-3">
-                        <motion.div
-                          animate={{ rotate: 360 }}
-                          transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
-                        >
-                          <Monitor className="h-8 w-8 text-muted-foreground mx-auto" />
-                        </motion.div>
-                        <p className="text-sm text-muted-foreground">Loading browser view...</p>
-                      </div>
-                    </div>
-                  )}
-                  <iframe
-                    src={VNC_EMBED_URL}
-                    className="w-full h-full border-0"
-                    onLoad={() => setVncLoaded(true)}
-                    onError={() => setVncError(true)}
-                    allow="clipboard-read; clipboard-write"
-                  />
-                </>
-              ) : (
-                (() => {
-                  if (typeof window !== "undefined" && !popoutOpenedRef.current) {
-                    popoutOpenedRef.current = true
-                    window.open(VNC_URL, "_vnc", "width=1400,height=900")
-                  }
-                  return (
-                    <div className="h-full flex items-center justify-center p-8">
-                      <div className="text-center space-y-4 max-w-sm">
-                        <Monitor className="h-12 w-12 text-muted-foreground mx-auto" />
-                        <h3 className="text-lg font-semibold">Your browser is ready 🎯</h3>
-                        <p className="text-sm text-muted-foreground">Click below to pop it out in a new window. Keep that window open while you record — come back here to follow the steps.</p>
-                        <motion.a
-                          whileHover={{ scale: 1.05 }}
-                          whileTap={{ scale: 0.95 }}
-                          href={VNC_EMBED_URL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-purple-500 hover:bg-purple-600 text-white font-semibold transition-colors"
-                        >
-                          <ExternalLink className="h-5 w-5" />
-                          Pop Out Browser
-                        </motion.a>
-                        <p className="text-xs text-muted-foreground">Then come back to this screen to follow the steps →</p>
-                      </div>
-                    </div>
-                  )
-                })()
+            <div className="flex-1 rounded-2xl overflow-hidden border border-border/50 bg-black/50 relative min-h-0 min-w-0">
+              {/* VNC viewer — same component the accounts page uses. Owns its
+                  own connection lifecycle (8-attempt exponential reconnect,
+                  visibility-pause, beforeunload cleanup) so we don't need a
+                  6s iframe-load timeout fallback anymore. min-h-0/min-w-0 lets
+                  the noVNC canvas scale DOWN to fit the pane. */}
+              <VncViewer
+                ref={viewerRef}
+                wsUrl={vncWsUrl}
+                password={VNC_PASSWORD || undefined}
+                onStateChange={setVncState}
+                sessionId={recordingSessionId}
+                className="h-full w-full"
+              />
+              {/* Connecting / reconnecting overlay — non-blocking hint. */}
+              {vncState !== "connected" && vncState !== "error" && (
+                <div className="pointer-events-none absolute inset-x-4 top-3 rounded-xl bg-black/55 backdrop-blur-sm border border-border/30 px-3 py-2 text-[11px] text-muted-foreground flex items-center gap-2">
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin text-violet-300" />
+                  {vncState === "reconnecting"
+                    ? "Reconnecting to the browser…"
+                    : vncState === "connecting"
+                      ? "Opening the secure browser…"
+                      : "Getting ready…"}
+                </div>
               )}
+              {/* Error banner with manual retry + open-in-new-tab fallback. */}
+              {vncState === "error" && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+                  <div className="text-center space-y-4 max-w-sm">
+                    <Monitor className="h-12 w-12 text-amber-400 mx-auto" />
+                    <h3 className="text-lg font-semibold">Lost the browser view</h3>
+                    <p className="text-sm text-muted-foreground">The recording is still running on the server — only the live view dropped.</p>
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => viewerRef.current?.reconnect()}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold transition-colors"
+                      >
+                        <RefreshCw className="h-4 w-4" /> Try again
+                      </button>
+                      <a
+                        href={VNC_FULLSCREEN_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/40 hover:bg-muted/60 text-sm font-semibold transition-colors"
+                      >
+                        <ExternalLink className="h-4 w-4" /> Open in new tab
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {/* Tiny status pill so the user always sees the connection state. */}
+              <div className="pointer-events-none absolute bottom-3 right-3 rounded-full px-2.5 py-1 text-[10px] font-medium backdrop-blur-sm border"
+                   style={{
+                     background: vncState === "connected" ? "rgba(16,185,129,0.18)" : vncState === "error" ? "rgba(239,68,68,0.18)" : "rgba(148,163,184,0.18)",
+                     borderColor: vncState === "connected" ? "rgba(16,185,129,0.35)" : vncState === "error" ? "rgba(239,68,68,0.35)" : "rgba(148,163,184,0.35)",
+                     color: vncState === "connected" ? "#34d399" : vncState === "error" ? "#fca5a5" : "#cbd5e1",
+                   }}>
+                {vncState}
+              </div>
             </div>
           </div>
 
@@ -1755,8 +1767,18 @@ function LiveViewTab() {
   const [selectedId, setSelectedId] = useState<string>("")
   const [warning, setWarning] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [iframeLoaded, setIframeLoaded] = useState(false)
-  const [iframeError, setIframeError] = useState(false)
+  const [vncState, setVncState] = useState<VncConnectionState>("idle")
+  const viewerRef = useRef<VncViewerHandle | null>(null)
+
+  // Phase A: shared "main" Chrome session id (matches RecordingModal +
+  // accounts page). Phase B will compute this from `group?.id` so each dummy
+  // group gets its own Chrome profile.
+  const vncWsUrl = useMemo(() => buildWsUrlForSession("main"), [])
+  // Stable telemetry session id per page mount.
+  const telemetrySessionId = useMemo(
+    () => `liveview_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`,
+    []
+  )
 
   const fetchSelection = useCallback(async () => {
     try {
@@ -1790,6 +1812,10 @@ function LiveViewTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ proxy_group_id: group.id, account_id: accountId || null }),
       })
+      // Re-bind the live view so the user sees a visual cue the swap happened.
+      // Phase A keeps "main" sessionId so this is just a UX nudge; Phase B will
+      // wire per-account session ids and the reconnect will load that profile.
+      viewerRef.current?.reconnect()
     } finally {
       setSaving(false)
     }
@@ -1862,48 +1888,77 @@ function LiveViewTab() {
         )}
       </div>
 
-      {/* noVNC iframe */}
+      {/* Live view — same VncViewer the accounts page uses, over the working
+          WSS path. Replaces the broken iframe-to-vnc.html embed. */}
       <div className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 shadow-lg overflow-hidden">
         <div className="flex items-center justify-between p-3 border-b border-border/30">
           <div className="flex items-center gap-2">
             <Monitor className="h-4 w-4 text-purple-400" />
-            <span className="text-sm font-semibold">Dummy Group Browser</span>
-            <span className="text-[10px] text-muted-foreground">(noVNC)</span>
+            <span className="text-sm font-semibold">Live View</span>
+            <span
+              className="text-[10px] font-medium px-1.5 py-0.5 rounded"
+              style={{
+                background: vncState === "connected" ? "rgba(16,185,129,0.18)" : vncState === "error" ? "rgba(239,68,68,0.18)" : "rgba(148,163,184,0.18)",
+                color: vncState === "connected" ? "#34d399" : vncState === "error" ? "#fca5a5" : "#cbd5e1",
+              }}
+            >
+              {vncState}
+            </span>
           </div>
-          <a
-            href={VNC_EMBED_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-muted/30 hover:bg-muted/50 transition-colors"
-          >
-            <ExternalLink className="h-3 w-3" /> Open in new tab
-          </a>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => viewerRef.current?.reconnect()}
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-muted/30 hover:bg-muted/50 transition-colors"
+              title="Reconnect the live view"
+            >
+              <RefreshCw className="h-3 w-3" /> Reconnect
+            </button>
+            <a
+              href={VNC_FULLSCREEN_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium bg-muted/30 hover:bg-muted/50 transition-colors"
+            >
+              <ExternalLink className="h-3 w-3" /> Open in new tab
+            </a>
+          </div>
         </div>
-        <div className="relative aspect-[16/9] bg-black/50">
-          {!iframeError ? (
-            <>
-              {!iframeLoaded && (
-                <div className="absolute inset-0 flex items-center justify-center text-muted-foreground text-sm">
-                  <RefreshCw className="h-4 w-4 animate-spin mr-2" /> Loading noVNC…
-                </div>
-              )}
-              <iframe
-                src={VNC_EMBED_URL}
-                className="w-full h-full border-0"
-                onLoad={() => setIframeLoaded(true)}
-                onError={() => setIframeError(true)}
-                allow="clipboard-read; clipboard-write"
-              />
-            </>
-          ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center">
-              <Monitor className="h-10 w-10 text-muted-foreground mb-2" />
-              <p className="text-sm font-medium">Can&apos;t embed the browser here</p>
-              <a href={VNC_EMBED_URL} target="_blank" rel="noopener noreferrer"
-                className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold transition-colors"
-              >
-                <ExternalLink className="h-4 w-4" /> Open in new window
-              </a>
+        <div className="relative aspect-[16/9] bg-black/50 min-h-0 min-w-0">
+          <VncViewer
+            ref={viewerRef}
+            wsUrl={vncWsUrl}
+            password={VNC_PASSWORD || undefined}
+            onStateChange={setVncState}
+            sessionId={telemetrySessionId}
+            className="h-full w-full"
+          />
+          {vncState !== "connected" && vncState !== "error" && (
+            <div className="pointer-events-none absolute inset-x-3 top-2 rounded-lg bg-black/55 backdrop-blur-sm border border-border/30 px-2.5 py-1.5 text-[11px] text-muted-foreground flex items-center gap-2">
+              <RefreshCw className="h-3 w-3 animate-spin text-violet-300" />
+              {vncState === "reconnecting" ? "Reconnecting…" : "Connecting…"}
+            </div>
+          )}
+          {vncState === "error" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center bg-black/70 backdrop-blur-sm">
+              <Monitor className="h-10 w-10 text-amber-400 mb-2" />
+              <p className="text-sm font-medium">Lost the live view</p>
+              <p className="text-xs text-muted-foreground mt-1 max-w-xs">The Chrome session is still running on the server — only the live preview disconnected.</p>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  onClick={() => viewerRef.current?.reconnect()}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-sm font-semibold transition-colors"
+                >
+                  <RefreshCw className="h-4 w-4" /> Try again
+                </button>
+                <a
+                  href={VNC_FULLSCREEN_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/40 hover:bg-muted/60 text-sm font-semibold transition-colors"
+                >
+                  <ExternalLink className="h-4 w-4" /> Open in new tab
+                </a>
+              </div>
             </div>
           )}
         </div>
@@ -2526,10 +2581,13 @@ export default function AutomationsPage() {
       setToast(`⚠️ Can't test — ${auto.platform} needs login first. Use the red Log in button at the top.`)
       return
     }
-    // Pop open the VNC viewer FIRST so Dylan can watch the test run in the browser.
+    // Pop open the live VNC viewer (in /jarvis/observability) FIRST so Dylan
+    // can watch the test run in the browser. This uses the working WSS-based
+    // VncViewer instead of the legacy iframe-to-vnc.html that "refused to
+    // connect" since the VPS nginx repointed.
     try {
       window.open(
-        VNC_EMBED_URL,
+        VNC_FULLSCREEN_URL,
         "outreach-vnc",
         "width=1280,height=800,noopener,noreferrer"
       )
@@ -2917,7 +2975,7 @@ export default function AutomationsPage() {
           </div>
         </motion.div>
         <motion.a variants={item} whileHover={{ scale: 1.02, y: -2 }}
-          href={VNC_EMBED_URL} target="_blank" rel="noopener noreferrer"
+          href={VNC_FULLSCREEN_URL} target="_blank" rel="noopener noreferrer"
           className="rounded-2xl bg-card/60 backdrop-blur-xl border border-border/50 p-4 shadow-lg shadow-purple-500/10 hover:shadow-xl transition-shadow text-left group"
         >
           <div className="flex items-center gap-2 mb-1">
