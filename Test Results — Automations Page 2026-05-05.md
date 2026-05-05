@@ -29,6 +29,33 @@ matrix at the full 1,260-lifecycle scale to confirm the new flows
 
 **Total:** 20/20 passed (100%) in 11.5 min wallclock.
 
+### Run 3 — soak matrix (15 combos × 3 runs = 45 lifecycles)
+
+| Combo | Runs | Passed | Failed | Pass % | Avg s/run |
+|---|---:|---:|---:|---:|---:|
+| ig_dm | 3 | 3 | 0 | 100.0% | 34.9 |
+| ig_follow | 3 | 3 | 0 | 100.0% | 34.6 |
+| ig_unfollow | 3 | 3 | 0 | 100.0% | 34.6 |
+| fb_dm | 3 | 3 | 0 | 100.0% | 34.5 |
+| fb_follow | 3 | 3 | 0 | 100.0% | 34.5 |
+| fb_unfollow | 3 | 3 | 0 | 100.0% | 34.4 |
+| li_dm | 3 | 3 | 0 | 100.0% | 34.6 |
+| li_connect | 3 | 3 | 0 | 100.0% | 34.5 |
+| li_follow | 3 | 3 | 0 | 100.0% | 34.4 |
+| tiktok_dm | 3 | 3 | 0 | 100.0% | 34.5 |
+| tiktok_follow | 3 | 3 | 0 | 100.0% | 34.5 |
+| youtube_subscribe | 3 | 3 | 0 | 100.0% | 34.5 |
+| x_follow | 3 | 3 | 0 | 100.0% | 34.5 |
+| x_dm | 3 | 3 | 0 | 100.0% | 34.5 |
+| reddit_follow | 3 | 3 | 0 | 100.0% | 34.5 |
+
+**Total:** 45/45 passed (100%) in 25.9 min wallclock.
+
+### Aggregate across all 3 runs
+
+**71/71 passed (100%)** across **18 unique combos** covering every
+platform in the catalog (ig, fb, li, tiktok, youtube, x, reddit).
+
 ## Chaos scenarios
 
 **All 5 chaos variants validated against live (3/3 assertions each):**
@@ -97,7 +124,7 @@ Captured before the 12 PRs land. Re-run after each merge — must remain
 
 ## Pass criteria summary (per Phase G plan)
 
-- [x] **Live-validation matrix:** ≥98% combo pass rate (got **100% / 26 lifecycles** in Run 1+2; **+ 45 in matrix-soak run, see below**)
+- [x] **Live-validation matrix:** ≥98% combo pass rate (got **100% across 71 lifecycles** spanning 18 unique combos)
 - [x] **Chaos scenarios:** all 5 variants pass 3/3 assertions on live ✅
 - [x] **Memory leak:** 0.00MB growth on live (caveat: modal not open pre-merge)
 - [x] **Accounts regression baseline:** `proof:popup` 4/4 ✅
